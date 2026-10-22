@@ -513,6 +513,20 @@ static void test_anim_move(void) {
   img = anim_show(lv_scr_act());
   sim_run(2000);
   CHECK(anim_at(img, 20, 10));
+  put16(glide + 1, (unsigned) -32768);  // a glide across the whole int16 range
+  put16(glide + 3, 10);
+  put16(glide + 5, 0);
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  put16(glide + 1, 32767);
+  put16(glide + 5, 65535);
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  sim_run(50000);
+  int16_t gx, gy;
+  anim_pos(&gx, &gy);
+  CHECK(gx == 17232 && gy == 10);
+  sim_run(15550);  // landed
+  anim_pos(&gx, &gy);
+  CHECK(gx == 32767 && gy == 10);
   lv_obj_del(img);
   pic_msg(K_ANIM_CLEAR, NULL, 0);
 }

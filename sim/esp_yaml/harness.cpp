@@ -912,6 +912,11 @@ int main(int argc, char **argv) {
   CHECK(ar >= 0, "panel_move_animation didn't move it: at %d,%d", ax, ay);
   CHECK(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
         panel_animation_status.state.c_str());
+  size_t clamped = log_all.size();
+  panel_move_animation.execute(100, 40, 70000);  // ms only has 16 bits
+  run(3);
+  CHECK(log_all.find("over 70000 ms is out of range, it goes to 100,40 over 65535 ms", clamped) != std::string::npos,
+        "no warning about the glide time");
   panel_drift_animation.execute(-20, 0);
   ar = run_until([] { return panel_animation_status.state == "Shown: ball, drifting" && settled(); }, 100);
   pn_anim_step(100);
@@ -958,6 +963,52 @@ int main(int argc, char **argv) {
             log_all.find("making it at half size", big_at) == std::string::npos,
         "big: %s, half %d, tried at full size first: %d", panel_animation_status.state.c_str(),
         flexit::panel::anim::A.half, log_all.find("making it at half size", big_at) != std::string::npos);
+  {
+    namespace anim = flexit::panel::anim;
+    auto noise = [](int f, int x, int y) -> uint32_t {
+      return 0xFF000000u | ((uint32_t) (f * 4096 + y * 64 + x + 1) * 2654435761u) >> 8;
+    };
+    // flush with the right and bottom edges, half size rounds up, so it moves in
+    anim::add("edge", {62, 45, 8, 100, 258, 195, 1, noise});
+    anim::show("edge");
+    ar = run_until([] { return panel_animation_status.state == "Shown: edge" && settled(); }, 3000);
+    pn_anim_pos(&ax, &ay);
+    CHECK(ar >= 0 && anim::A.half && ax == 256 && ay == 194 && same_anim(0), "edge: %s, half %d, at %d,%d",
+          panel_animation_status.state.c_str(), anim::A.half, ax, ay);
+    // the panel draws 2x at most, so scale 2 can't go to half size
+    anim::add("noise2", {64, 64, 4, 100, 16, 16, 2, noise});
+    anim::show("noise2");
+    ar = run_until([] { return anim::A.failed; }, 100);
+    CHECK(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
+              anim::A.scale == 2,
+          "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::A.scale);
+    anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise});
+    anim::show("scale3");
+    run(1);
+    CHECK(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
+          panel_animation_status.state.c_str());
+    anim::add("left", {8, 8, 1, 100, -4, 0, 1, noise});
+    anim::show("left");
+    run(1);
+    CHECK(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
+          panel_animation_status.state.c_str());
+    size_t slow_at = log_all.size();
+    anim::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise});
+    CHECK(anim::sources["slow"].frame_ms == 2550 &&
+              log_all.find("frame_ms 5000 is outside 40..2550", slow_at) != std::string::npos,
+          "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
+    // None while it's being made frees its buffers
+    anim::show("edge");
+    anim::start();
+    while (anim::A.phase == anim::COUNT)
+      anim::count();
+    anim::make();
+    CHECK(anim::A.phase == anim::MAKE && anim::A.prev.capacity(), "edge isn't being made");
+    panel_animation.control(0);
+    CHECK(
+        !anim::A.hist.capacity() && !anim::A.frame.capacity() && !anim::A.prev.capacity() && !anim::A.first.capacity(),
+        "None kept the buffers");
+  }
   panel_animation.control(0);
   run(3);
 
@@ -1093,6 +1144,17 @@ int main(int argc, char **argv) {
     int r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
     CHECK(r >= 0 && !lose && same_anim(0), "the animation not sent again: %s", panel_animation_status.state.c_str());
     printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), r);
+    lose = 3;  // gives up after three tries, tries again after a panel restart
+    panel_animation.control(0);
+    run(3);
+    panel_animation.control(1);
+    r = run_until([] { return flexit::panel::anim::A.failed; }, 3000);
+    CHECK(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
+          panel_animation_status.state.c_str());
+    pn_restart();
+    r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
+    CHECK(r >= 0 && pn_anim_ready() && same_anim(0), "not tried again after a panel restart: %s",
+          panel_animation_status.state.c_str());
     h = real;
   }
 

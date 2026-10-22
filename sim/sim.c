@@ -687,8 +687,10 @@ int main(int argc, char **argv) {
   sim_esp_move_animation(ANIM_DRIFT, -60, 0, 0);
   settle();
   int16_t ax, ay;
+  int stale = 0;  // pixels a step missed, against a full redraw
   for (int i = 0; i < 200; i++) {
     run(50);
+    stale += sim_stale();
     anim_pos(&ax, &ay);
     if (ax > 250 && ax <= 296)
       break;
@@ -696,6 +698,13 @@ int main(int argc, char **argv) {
   check(ax > 250 && ax <= 296 && ay == 20, "the animation didn't drift round the left edge");
   check(ball_at(316, 20) && ball_at(4, 20) && !ball_at(160, 20), "the ball isn't drawn at both edges while wrapping");
   shot("58d_saver_animation_wrap");
+  sim_esp_move_animation(ANIM_DRIFT, 0, -60, 0);  // round the top edge too, so it shows in all four corners
+  settle();
+  for (int i = 0; i < 80; i++) {
+    run(50);
+    stale += sim_stale();
+  }
+  check(!stale, "the part wrapped round an edge isn't redrawn as it moves");
   // a glide lands on the target, the frames keep playing
   sim_esp_move_animation(ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
   settle();

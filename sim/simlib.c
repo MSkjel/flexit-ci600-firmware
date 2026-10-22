@@ -52,6 +52,20 @@ uint32_t sim_pixel(int x, int y) {
   return rgb888(fb[y * W + x]);
 }
 
+int sim_stale(void) {
+  static lv_color_t was[W * H];
+  unsigned long px = sim_px;
+  lv_refr_now(NULL);
+  memcpy(was, fb, sizeof fb);
+  lv_obj_invalidate(lv_scr_act());
+  lv_refr_now(NULL);
+  sim_px = px;
+  int n = 0;
+  for (int i = 0; i < W * H; i++)
+    n += was[i].full != fb[i].full;
+  return n;
+}
+
 bool sim_shot(const char *dir, const char *name) {
   sim_run(50);
   lv_refr_now(NULL);

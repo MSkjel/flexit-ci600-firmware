@@ -60,16 +60,30 @@ static void ghosts(void) {
     }
 }
 
+// LVGL redraws a moved image but not its children
+static void ghosts_redraw(void) {
+  for (int i = 0; i < 3; i++)
+    if (A.ghost[i])
+      lv_obj_invalidate(A.ghost[i]);
+}
+
 // Puts it at fx, fy (1/1000 px), and the image if it's shown. The old and new areas are redrawn.
 static void place(int32_t fx, int32_t fy) {
+  int16_t x = A.x, y = A.y;
   A.fx = fx;
   A.fy = fy;
   A.x = (int16_t) ((fx >= 0 ? fx : fx - 999) / 1000);
   A.y = (int16_t) ((fy >= 0 ? fy : fy - 999) / 1000);
-  if (A.img) {
-    lv_obj_set_pos(A.img, A.x, A.y);
-    ghosts();
-  }
+  if (!A.img)
+    return;
+  bool moved = A.x != x || A.y != y;
+  if (moved)
+    ghosts_redraw();  // where they were
+  lv_obj_set_pos(A.img, A.x, A.y);
+  lv_obj_update_layout(A.img);
+  ghosts();
+  if (moved)
+    ghosts_redraw();
 }
 
 void anim_clear(void) {
@@ -180,8 +194,8 @@ static void move_step(lv_timer_t *t) {
     return;
   if (A.glide.ms) {
     A.glide.t = A.glide.ms - A.glide.t > MOVE_MS ? (uint16_t) (A.glide.t + MOVE_MS) : A.glide.ms;
-    int32_t x = A.glide.x0 + (A.glide.x1 - A.glide.x0) * A.glide.t / A.glide.ms,
-            y = A.glide.y0 + (A.glide.y1 - A.glide.y0) * A.glide.t / A.glide.ms;
+    int32_t x = A.glide.x0 + (int32_t) ((int64_t) (A.glide.x1 - A.glide.x0) * A.glide.t / A.glide.ms),
+            y = A.glide.y0 + (int32_t) ((int64_t) (A.glide.y1 - A.glide.y0) * A.glide.t / A.glide.ms);
     place(x * 1000, y * 1000);
     if (A.glide.t == A.glide.ms)
       stop();

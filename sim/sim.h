@@ -14,6 +14,7 @@ void sim_run(int ms);                              // advance LVGL's tick and ru
 extern unsigned long sim_px;                       // pixels drawn so far
 bool sim_shot(const char *dir, const char *name);  // save the screen as DIR/NAME.ppm, false if LVGL's heap ran low
 uint32_t sim_pixel(int x, int y);                  // on the screen as drawn now, 0xRRGGBB
+int sim_stale(void);                               // redraw the whole screen and count the pixels that changed
 
 // ppm.c, doesn't need LVGL
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error
