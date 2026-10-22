@@ -13,6 +13,7 @@ void sim_display_init(void);                       // lv_init() and a 320x240 di
 void sim_run(int ms);                              // advance LVGL's tick and run its timers, in 5 ms steps
 extern unsigned long sim_px;                       // pixels drawn so far
 bool sim_shot(const char *dir, const char *name);  // save the screen as DIR/NAME.ppm, false if LVGL's heap ran low
+uint32_t sim_pixel(int x, int y);                  // on the screen as drawn now, 0xRRGGBB
 
 // ppm.c, doesn't need LVGL
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error
@@ -50,6 +51,7 @@ unsigned sim_esp_send_photo(int *quality);  // a photo-like picture, as a JPEG a
 unsigned sim_esp_send_moon(int *y, int *count);
 void sim_esp_send_dawn(void);
 unsigned sim_esp_send_animation(int x, int y);
+void sim_esp_move_animation(int mode, int a, int b, int ms);  // K_ANIM_MOVE: a, b are x, y or vx, vy
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1
 void sim_esp_report(const char *what);
 extern unsigned long sim_cycles;

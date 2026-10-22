@@ -68,7 +68,7 @@ FILES = [
     ),
     ("packages/panel/picture.yaml", {"name": "dusk", "file": "x.png"}),
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
-    ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64"}),
+    ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64", "drift_x": -10}),
 ]
 
 

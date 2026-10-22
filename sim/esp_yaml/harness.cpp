@@ -30,6 +30,7 @@ int pn_pic_line(int y, uint16_t *out);
 int pn_anim_line(int y, uint8_t *out);
 void pn_anim_step(int ms);
 int pn_anim_ready(void);
+void pn_anim_pos(int *x, int *y);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_shot(const char *dir, const char *name);
@@ -860,6 +861,31 @@ int main(int argc, char **argv) {
     CHECK(same_anim(f % 8), "frame %d isn't the ESP's", f % 8);
   }
   pn_shot(outdir, "esp_animation");
+  // moving it: the actions reach the panel, a step of the panel's motion timer per pn_anim_step
+  int ax, ay;
+  pn_anim_pos(&ax, &ay);
+  CHECK(ax == 250 && ay == 20, "ball at %d,%d, not where the yaml put it", ax, ay);
+  panel_move_animation.execute(100, 40, 0);
+  ar = run_until(
+      [&] {
+        pn_anim_pos(&ax, &ay);
+        return ax == 100 && ay == 40 && settled();
+      },
+      100);
+  CHECK(ar >= 0, "panel_move_animation didn't move it: at %d,%d", ax, ay);
+  CHECK(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
+        panel_animation_status.state.c_str());
+  panel_drift_animation.execute(-20, 0);
+  ar = run_until([] { return panel_animation_status.state == "Shown: ball, drifting" && settled(); }, 100);
+  pn_anim_step(100);
+  pn_anim_pos(&ax, &ay);
+  CHECK(ar >= 0 && ax == 99 && ay == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
+        panel_animation_status.state.c_str(), ax, ay);
+  panel_drift_animation.execute(0, 0);
+  ar = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 100);
+  pn_anim_step(100);
+  pn_anim_pos(&ax, &ay);
+  CHECK(ar >= 0 && ax == 99, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), ax);
   panel_animation.control(0);
   run(3);
   CHECK(!pn_anim_ready(), "the animation is still there after None");
@@ -867,11 +893,22 @@ int main(int argc, char **argv) {
   ar = run_until(shown, 3000);
   CHECK(ar >= 0 && flexit::panel::anim::A.half && flexit::panel::anim::A.scale == 2 && same_anim(0),
         "noise not shown at half size: %s", panel_animation_status.state.c_str());
+  // its drift_x from the yaml, 10 px/s left: half a pixel a step
+  pn_anim_step(100);
+  pn_anim_pos(&ax, &ay);
+  CHECK(panel_animation_status.state == "Shown: noise, drifting" && ax == 15 && ay == 16,
+        "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), ax, ay);
   CHECK(flexit::panel::anim::A.data.capacity() == flexit::panel::anim::A.data.size(), "%u bytes kept for %u",
         (unsigned) flexit::panel::anim::A.data.capacity(), (unsigned) flexit::panel::anim::A.data.size());
   pn_restart();
   ar = run_until([&] { return pn_anim_ready() && shown(); }, 3000);
   CHECK(ar >= 0 && same_anim(0), "the animation not sent again after a panel restart");
+  pn_anim_pos(&ax, &ay);
+  pn_anim_step(100);
+  CHECK(ax == 16 && ay == 16 && panel_animation_status.state == "Shown: noise, drifting",
+        "after the restart: at %d,%d, status '%s'", ax, ay, panel_animation_status.state.c_str());
+  pn_anim_pos(&ax, &ay);
+  CHECK(ax == 15, "the drift wasn't sent again after a panel restart: at %d", ax);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
   // a frame alone is over ANIM_POOL at full size, so it's made at half size right away
   flexit::panel::anim::add("big", {128, 100, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {

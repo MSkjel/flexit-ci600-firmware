@@ -354,6 +354,9 @@ int32_t pic_msg(uint16_t key, const uint8_t *b, int n) {
         pic_reset();
       anim_clear();
       return -1;
+    case K_ANIM_MOVE:
+      anim_move(b, n);
+      return -1;
     case K_PIC_CLEAR:
       pic_reset();
       clear();

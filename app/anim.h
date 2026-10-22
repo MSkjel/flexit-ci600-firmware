@@ -12,4 +12,6 @@ void anim_bytes(uint32_t at, const uint8_t *b, unsigned n);  // record bytes at 
 bool anim_close(void);                                       // all bytes are in. false if the records are bad
 void anim_clear(void);
 bool anim_ready(void);
-lv_obj_t *anim_show(lv_obj_t *parent);  // creates the image, which plays while it exists. NULL if no animation
+void anim_move(const uint8_t *b, int n);  // K_ANIM_MOVE
+void anim_pos(int16_t *x, int16_t *y);    // where it is now
+lv_obj_t *anim_show(lv_obj_t *parent);    // creates the image, which plays while it exists. NULL if no animation

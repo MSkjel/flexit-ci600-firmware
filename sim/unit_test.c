@@ -403,6 +403,119 @@ static void test_anim(void) {
   CHECK(!anim_ready() && shows());
 }
 
+static bool anim_at(lv_obj_t *img, int x, int y) {
+  int16_t ax, ay;
+  anim_pos(&ax, &ay);
+  lv_obj_update_layout(img);
+  return ax == x && ay == y && lv_obj_get_x(img) == x && lv_obj_get_y(img) == y;
+}
+
+// whether the ghost images drawing the part over the right edge, the bottom one, and the corner are shown
+static bool ghosts_shown(lv_obj_t *img, bool right, bool below) {
+  bool on[3] = {right, below, right && below};
+  for (int i = 0; i < 3; i++)
+    if (lv_obj_has_flag(lv_obj_get_child(img, i), LV_OBJ_FLAG_HIDDEN) == on[i])
+      return false;
+  return true;
+}
+
+// K_ANIM_MOVE: glides land on the target, drifts wrap round the screen, bad messages are ignored
+static void test_anim_move(void) {
+  uint8_t d[512];
+  uint32_t n = 0;
+  for (int f = 0; f <= 4; f++)
+    n += plink_anim_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, 5, d + n);
+  uint8_t stop[1] = {ANIM_STOP}, glide[7] = {ANIM_GLIDE}, drift[5] = {ANIM_DRIFT}, bad[7] = {3};
+  put16(glide + 1, 100);
+  put16(glide + 3, 50);
+  put16(drift + 1, (unsigned) -40);           // 40 px/s left, 2 px a step
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // no animation yet
+  CHECK(status(anim_send(AW, 10, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  lv_obj_t *img = anim_show(lv_scr_act());
+  CHECK(img && anim_at(img, 10, 10) && ghosts_shown(img, false, false));  // 16x8 at the header's x, 10
+  pic_msg(K_ANIM_MOVE, glide, 5);                                         // the wrong length for the mode
+  pic_msg(K_ANIM_MOVE, drift, 7);
+  pic_msg(K_ANIM_MOVE, stop, 2);
+  pic_msg(K_ANIM_MOVE, bad, 7);
+  pic_msg(K_ANIM_MOVE, NULL, 0);
+  sim_run(200);
+  CHECK(anim_at(img, 10, 10));
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // ms = 0 is a jump
+  CHECK(anim_at(img, 100, 50));
+  put16(glide + 1, 310);  // partly off the right edge: that's where it is, no wrapping until it drifts
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  CHECK(anim_at(img, 310, 50) && ghosts_shown(img, false, false));
+  put16(drift + 3, 0);
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  sim_run(50);
+  CHECK(anim_at(img, 308, 50) && ghosts_shown(img, true, false));
+  put16(glide + 1, (unsigned) -20);  // a glide can end partly off the screen
+  put16(glide + 3, 60);
+  put16(glide + 5, 1000);
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  sim_run(500);
+  int16_t x, y;
+  anim_pos(&x, &y);
+  CHECK(x == 144 && y == 55);  // halfway from 308, 50
+  sim_run(500);
+  CHECK(anim_at(img, -20, 60));  // landed exactly
+  sim_run(500);
+  CHECK(anim_at(img, -20, 60));               // and stays
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);  // a drift puts it on the screen again, from the right
+  sim_run(50);
+  CHECK(anim_at(img, 298, 60) && ghosts_shown(img, false, false));
+  sim_run(50 * 149);
+  CHECK(anim_at(img, 0, 60));  // 2 px a step
+  sim_run(50);
+  CHECK(anim_at(img, 318, 60) && ghosts_shown(img, true, false));  // over the right edge, the ghost draws the rest
+  sim_run(50 * 159);
+  CHECK(anim_at(img, 0, 60) && ghosts_shown(img, false, false));
+  put16(drift + 1, 0);
+  put16(drift + 3, 100);  // 5 px a step down
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  sim_run(50 * 35);
+  CHECK(anim_at(img, 0, 235) && ghosts_shown(img, false, true));
+  sim_run(50);
+  CHECK(anim_at(img, 0, 0) && ghosts_shown(img, false, false));
+  sim_run(50);
+  CHECK(anim_at(img, 0, 5));
+  put16(drift + 1, (unsigned) -1);  // the sub-pixel part adds up
+  put16(drift + 3, 0);
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  sim_run(50);
+  CHECK(anim_at(img, 319, 5) && ghosts_shown(img, true, false));
+  sim_run(50 * 19);
+  CHECK(anim_at(img, 319, 5));
+  sim_run(50);
+  CHECK(anim_at(img, 318, 5));
+  pic_msg(K_ANIM_MOVE, stop, 1);
+  sim_run(1000);
+  CHECK(anim_at(img, 318, 5));
+  // the animation outlives its image, and the motion with it
+  lv_obj_del(img);
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  sim_run(2000);  // nothing moves without an image
+  img = anim_show(lv_scr_act());
+  CHECK(img && anim_at(img, 318, 5) && ghosts_shown(img, true, false));
+  sim_run(1000);
+  CHECK(anim_at(img, 317, 5));
+  lv_obj_del(img);
+  // a new animation starts where its header says, still
+  CHECK(status(anim_send(AW, 20, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  img = anim_show(lv_scr_act());
+  sim_run(1000);
+  CHECK(img && anim_at(img, 20, 10));
+  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  pic_msg(K_ANIM_CLEAR, NULL, 0);  // clearing stops it
+  CHECK(status(anim_send(AW, 20, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  lv_obj_del(img);
+  img = anim_show(lv_scr_act());
+  sim_run(2000);
+  CHECK(anim_at(img, 20, 10));
+  lv_obj_del(img);
+  pic_msg(K_ANIM_CLEAR, NULL, 0);
+}
+
 // ---------------------------------------------------------------- deflate
 static void test_deflate(void) {
   // zlib's output inflates, a dynamic block, a fixed one and a stored one
@@ -1226,6 +1339,7 @@ int main(void) {
   test_jpeg();
   test_deflate();
   test_anim();
+  test_anim_move();
   test_formats();
   test_values();
   test_items();

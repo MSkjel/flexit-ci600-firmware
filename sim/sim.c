@@ -105,6 +105,22 @@ static void set_theme(int t) {
   ui_rebuild();
 }
 
+// Whether the bouncing ball of sim_esp_send_animation is in column x of the 48 rows from y0: its orange as RGB565
+static bool ball_at(int x, int y0) {
+  for (int y = y0; y < y0 + 48; y++)
+    if (sim_pixel(x, y) == 0xF78221)
+      return true;
+  return false;
+}
+
+// The ball is somewhere in the sprite's box at x0, y0, whatever frame it's on
+static bool ball_in(int x0, int y0) {
+  for (int x = x0; x < x0 + 48; x++)
+    if (ball_at(x, y0))
+      return true;
+  return false;
+}
+
 static void check(bool ok, const char *what) {
   if (!ok) {
     printf("%s\n", what);
@@ -667,7 +683,56 @@ int main(int argc, char **argv) {
   shot("58b_saver_animation");
   sim_run(300);  // three frames later
   shot("58c_saver_animation_later");
+  // drifting left at 60 px/s, it goes round the edge like on a torus: half of it on each side for a while
+  sim_esp_move_animation(ANIM_DRIFT, -60, 0, 0);
+  settle();
+  int16_t ax, ay;
+  for (int i = 0; i < 200; i++) {
+    run(50);
+    anim_pos(&ax, &ay);
+    if (ax > 250 && ax <= 296)
+      break;
+  }
+  check(ax > 250 && ax <= 296 && ay == 20, "the animation didn't drift round the left edge");
+  check(ball_at(316, 20) && ball_at(4, 20) && !ball_at(160, 20), "the ball isn't drawn at both edges while wrapping");
+  shot("58d_saver_animation_wrap");
+  // a glide lands on the target, the frames keep playing
+  sim_esp_move_animation(ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
+  settle();
+  run(500);
+  anim_pos(&ax, &ay);
+  check(ax > 100 && ay < 100, "the animation isn't on its way");
+  run(600);
+  anim_pos(&ax, &ay);
+  check(ax == 100 && ay == 100 && ball_in(100, 100), "the glide didn't land on 100,100");
+  unsigned long px = sim_px;
+  run(300);
+  anim_pos(&ax, &ay);
+  check(ax == 100 && sim_px > px, "the frames stopped after the glide");
+  // the motion pauses with the backlight: idle at night with the night idle brightness 0
+  sim_esp_move_animation(ANIM_DRIFT, 60, 0, 0);
+  settle();
   ui_pop();
+  int idle_after = M.idle_after;
+  bool go_home = M.go_home;
+  M.idle_after = 0;  // 15 s
+  M.go_home = false;
+  M.night = true;
+  M.night_from = 0;
+  M.night_to = 23;
+  run(16000);  // idle, the screensaver comes up by itself, dark
+  anim_pos(&ax, &ay);
+  int16_t bx;
+  run(1000);
+  anim_pos(&bx, &ay);
+  check(bx == ax, "the animation drifts while the backlight is off");
+  M.night = false;
+  run(1000);
+  anim_pos(&bx, &ay);
+  check(bx == ax + 60, "the animation didn't drift on when the backlight came back");
+  key(KEY_OK);
+  M.idle_after = (uint8_t) idle_after;
+  M.go_home = go_home;
   sim_esp_set(K_ANIM_CLEAR, 0);
   settle();
   ui_go_home();

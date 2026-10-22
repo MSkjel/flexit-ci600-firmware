@@ -271,6 +271,14 @@ unsigned sim_esp_send_animation(int x, int y) {
   return comp_len;
 }
 
+void sim_esp_move_animation(int mode, int a, int b, int ms) {
+  uint8_t m[7] = {(uint8_t) mode};
+  put16(m + 1, (unsigned) a);
+  put16(m + 3, (unsigned) b);
+  put16(m + 5, (unsigned) ms);
+  send(K_ANIM_MOVE, m, mode == ANIM_GLIDE ? 7 : mode == ANIM_DRIFT ? 5 : 1);
+}
+
 static void esp_pump(void) {
   while (pic_sending && pbulk_esp_room(&FL) > 128) {
     if (comp_pos >= comp_len) {

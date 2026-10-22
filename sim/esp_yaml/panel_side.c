@@ -123,6 +123,12 @@ void pn_anim_step(int ms) {
 }
 
 int pn_anim_ready(void) { return anim_ready(); }
+void pn_anim_pos(int *x, int *y) {
+  int16_t ax, ay;
+  anim_pos(&ax, &ay);
+  *x = ax;
+  *y = ay;
+}
 
 // Screenshot of the picture screensaver as DIR/NAME.ppm.
 void pn_shot(const char *dir, const char *name) {

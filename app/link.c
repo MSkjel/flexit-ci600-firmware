@@ -150,6 +150,7 @@ static void got(void *u, uint16_t key, const uint8_t *b, int n) {
     case K_PIC_CLEAR:
     case K_ANIM_BEGIN:
     case K_ANIM_CLEAR:
+    case K_ANIM_MOVE:
       pic_answer(key, pic_msg(key, b, n));
       return;
     case K_NOTIFY:

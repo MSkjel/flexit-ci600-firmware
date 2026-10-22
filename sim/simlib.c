@@ -40,16 +40,24 @@ void sim_run(int ms) {
   }
 }
 
+// RGB565 to RGB888, low bits filled from the high ones
+static uint32_t rgb888(lv_color_t px) {
+  uint16_t c = px.full;
+  uint32_t r = (c >> 11) << 3 | c >> 13, g = ((c >> 5) & 63) << 2 | ((c >> 9) & 3), b = (c & 31) << 3 | ((c >> 2) & 7);
+  return r << 16 | g << 8 | b;
+}
+
+uint32_t sim_pixel(int x, int y) {
+  lv_refr_now(NULL);
+  return rgb888(fb[y * W + x]);
+}
+
 bool sim_shot(const char *dir, const char *name) {
   sim_run(50);
   lv_refr_now(NULL);
   static uint32_t rgb[W * H];
-  for (int i = 0; i < W * H; i++) {  // RGB565 to RGB888, low bits filled from the high ones
-    uint16_t c = fb[i].full;
-    uint32_t r = (c >> 11) << 3 | c >> 13, g = ((c >> 5) & 63) << 2 | ((c >> 9) & 3),
-             b = (c & 31) << 3 | ((c >> 2) & 7);
-    rgb[i] = r << 16 | g << 8 | b;
-  }
+  for (int i = 0; i < W * H; i++)
+    rgb[i] = rgb888(fb[i]);
   char path[256];
   snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
   sim_ppm(path, W, H, rgb);
