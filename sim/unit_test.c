@@ -604,6 +604,9 @@ static void test_formats(void) {
   CHECK(step_value(1425, 1, 15, 0, 1435) == 1435 && step_value(1435, -1, 15, 0, 1435) == 1425);
   CHECK(step_value(0, -1, 15, 0, 1435) == 0 && step_value(960, 1, 15, 5, 1440) == 975);
   CHECK(step_value(-10, 3, 5, -90, 90) == 5 && step_value(-88, -1, 5, -90, 90) == -90);
+  // no space before % or °, but µg/m³ starts with the same byte as °
+  CHECK(!strcmp(add_unit(strcpy(b, "5"), "%"), "5%") && !strcmp(add_unit(strcpy(b, "21"), "\xC2\xB0"), "21\xC2\xB0"));
+  CHECK(!strcmp(add_unit(strcpy(b, "12"), "\xC2\xB5g/m\xC2\xB3"), "12 \xC2\xB5g/m\xC2\xB3"));
 }
 
 // ---------------------------------------------------------------- values
@@ -1371,6 +1374,10 @@ static void test_unit(void) {
   cu60(0x0C2, 166);
   unit_poll();
   CHECK(M.supply_min == 160 && M.setpoint_now == 190);
+
+  cu60(0x114, 7);  // anything but 0 is supply air to the CU60
+  unit_poll();
+  CHECK(M.regulation == REG_SUPPLY);
 
   // not the master, the ESP writes the setpoint, or we do while it's offline
   cu60(0x00F, 1);

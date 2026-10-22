@@ -175,7 +175,7 @@ const screen_t SCR_INFO = {.title = S_ABOUT, .build = info_build, .update = info
 #define NOTICE_LABELS 16       // enough for a screen of the shortest lines
 #define NOTICE_W (SCR_W - 24)  // wider lines wrap
 
-enum { N_TITLE, N_VERSION, N_GAP, N_HEAD, N_NAME, N_TEXT, N_MORE, N_LINK };
+enum { N_TITLE, N_VERSION, N_GAP, N_HEAD, N_NAME, N_TEXT, N_MORE, N_LINK, N_LAST };
 
 typedef struct {
   uint8_t kind;   // N_*
@@ -208,6 +208,7 @@ static const notice_t NOTICES[] = {
     {N_MORE, S_NOTICE_CU60, NULL},
     {N_TEXT, S_NOTICE_SINCE, NULL},
     {N_LINK, S_NONE, REPO},
+    {N_LAST, S_NOTICE_OK, NULL},
 };
 #undef AUTHOR
 
@@ -229,7 +230,7 @@ static const struct {
 } STYLES[] = {
     [N_TITLE] = {&font_f28, &T.accent, 0}, [N_VERSION] = {&font_f14, &T.dim, 2}, [N_GAP] = {NULL, NULL, 20},
     [N_HEAD] = {&font_f14, &T.dim, 22},    [N_NAME] = {&font_f16, &T.text, 2},   [N_TEXT] = {&font_f14, &T.text, 22},
-    [N_MORE] = {&font_f14, &T.text, 2},    [N_LINK] = {&font_f14, &T.dim, 22},
+    [N_MORE] = {&font_f14, &T.text, 2},    [N_LINK] = {&font_f14, &T.dim, 22},   [N_LAST] = {&font_f16, &T.accent, 40},
 };
 
 // Places lines on free labels until the screen is full below
@@ -328,6 +329,10 @@ static void notices_build(lv_obj_t *b, intptr_t arg) {
   mk_timer(notices->l[0], notices_step, NOTICE_MS);
 }
 
-static bool notices_key(int k) { return k != KEY_BACK; }
+static bool notices_key(int k) {
+  if (k == KEY_OK)
+    ui_replace(&SCR_KEYTEST, 0);
+  return k != KEY_BACK;
+}
 
 const screen_t SCR_NOTICES = {.flags = SF_NOBARS, .build = notices_build, .key = notices_key, .ok_led = notices_led};

@@ -405,6 +405,89 @@ static void checks(void) {
   ui_layout_changed();
   run(150);
   check(ui_top() != &SCR_EDIT, "the editor stayed open on an item the ESP forgot");
+
+  // with the ESP away, its menus and the smart home view say so and an open editor closes
+  fresh();
+  key(KEY_OK);
+  open(S_COMFORT);
+  go_text(sim_item_label("fireplace_minutes"));
+  key(KEY_OK);
+  M.esp_online = false;
+  ui_layout_changed();
+  run(150);
+  check(ui_top() == &SCR_LIST && shows(lv_scr_act(), tr(S_ESP_NOT_CONNECTED)),
+        "an ESP item's editor or values stay with the ESP away");
+  fresh();
+  M.esp_online = false;
+  sim_item(SIM_N_COMFORT, &M.items[SIM_N_COMFORT]);  // living room
+  ui_replace(&SCR_HOME, VIEW_SMART);
+  check(shows(lv_scr_act(), tr(S_ESP_NOT_CONNECTED)), "the smart home view shows values with the ESP away");
+
+  // an ESP number steps from its min: 1, 3, 5 for a step of 2
+  fresh();
+  M.items[3].step = 2;  // fireplace time, 1..240
+  M.items[3].value = 1;
+  key(KEY_OK);
+  open(S_COMFORT);
+  go_text(sim_item_label("fireplace_minutes"));
+  key(KEY_OK);
+  key(KEY_UP);
+  key(KEY_OK);
+  check(M.items[3].value == 3, "an ESP number didn't step from its min");
+
+  // the main menu and a list that get shorter while scrolled to the end don't scroll past it
+  fresh();
+  key(KEY_OK);
+  go(S_SYSTEM);
+  open(S_SYSTEM);
+  key(KEY_BACK);
+  M.features &= ~FBIT(FEAT_ESP);  // two tiles fewer
+  ui_layout_changed();
+  run(30);
+  check(ui_frame()->top == 1, "the main menu kept a scroll position past its end");
+  M.features |= FBIT(FEAT_ESP);
+  ui_layout_changed();
+  run(30);
+  open(S_COMFORT);
+  key(KEY_UP);  // wraps to the last row
+  for (int i = 4; i < SIM_N_COMFORT; i++)
+    M.items[i].flags &= (uint8_t) ~ITEMF_MENU;
+  ui_layout_changed();
+  run(30);
+  check(ui_frame()->top == 0, "a shorter list kept its scroll position");
+
+  // the Comfort tile only counts what its menu lists
+  fresh();
+  for (int i = 0; i < SIM_N_COMFORT; i++)
+    M.items[i].flags &= (uint8_t) ~ITEMF_MENU;
+  sim_item(SIM_N_COMFORT, &M.items[SIM_N_COMFORT]);  // so Smart home isn't empty too
+  key(KEY_OK);
+  check(shows(lv_scr_act(), tr(S_NOTHING_YET)), "the Comfort tile counts items its menu doesn't list");
+
+  // night mode's hours on a 12 hour clock, and idle brightness 0 is Off in the editor
+  fresh();
+  M.clock_24h = false;
+  key(KEY_OK);
+  open(S_DISPLAY);
+  open(S_NIGHT_MODE);
+  check(shows(lv_scr_act(), "10:00 pm") && shows(lv_scr_act(), "7:00 am"), "night mode's hours aren't 12 hour times");
+  edit(S_IDLE_BRIGHTNESS);
+  check(M.night_idle_brightness == 0 && shows(lv_layer_top(), tr(S_OFF)) && !shows(lv_layer_top(), "%"),
+        "0 isn't Off in the editor");
+  key(KEY_BACK);
+
+  // the trend axis goes down to -5° for a coldest -5.0°
+  fresh();
+  for (int i = 0; i < TREND_LEN; i++)
+    M.trend[TR_OUTDOOR][i] = trend_code(TR_OUTDOOR, -50);
+  ui_replace(&SCR_HOME, VIEW_TREND);
+  check(shows(lv_scr_act(), "-5\xC2\xB0") && !shows(lv_scr_act(), "-10\xC2\xB0"), "the trend axis is 5° too low");
+
+  // a comfort gauge's long label is cut to one line
+  fresh();
+  strcpy(M.items[1].label, "Living room humidit");
+  ui_replace(&SCR_HOME, VIEW_COMFORT);
+  check(!shows(lv_scr_act(), "Living room humidit"), "a long gauge label isn't cut");
 }
 
 // Samples the lights for ms and writes the OK light's blinks to out as Morse: . and - for on, a space between
@@ -489,6 +572,129 @@ static void notices(void) {
   check(ok_light(seen, sizeof seen, 2000) && !seen[0] && l[2], "the OK light isn't back on after the notices");
 }
 
+// The key test's labels, by their order on the screen: the fan, the score and the message
+static lv_obj_t *kt_label(int i) {
+  lv_obj_t *body = lv_obj_get_child(lv_scr_act(), 0);  // ui_init() makes it first
+  for (uint32_t c = 0; c < lv_obj_get_child_cnt(body); c++) {
+    lv_obj_t *o = lv_obj_get_child(body, c);
+    if (lv_obj_check_type(o, &lv_label_class) && !strcmp(lv_label_get_text(o), IC_FAN))
+      return lv_obj_get_child(body, (int32_t) c + i);
+  }
+  return NULL;
+}
+
+static bool kt_over(void) { return strstr(lv_label_get_text(kt_label(2)), tr(S_KEYTEST_AGAIN)) != NULL; }
+
+static int kt_score(void) { return atoi(lv_label_get_text(kt_label(1))); }
+
+// The gap of the first duct the fan hasn't passed yet, top and bottom on the screen. True if a duct is at the fan.
+static bool kt_gap(int *top, int *bottom) {
+  lv_obj_t *fan = kt_label(0), *body = lv_obj_get_parent(fan);
+  lv_area_t f, a, b;
+  lv_obj_get_coords(fan, &f);
+  int best = SCR_W * 2;
+  bool at = false;
+  for (uint32_t c = 0; c + 1 < lv_obj_get_child_cnt(body); c++) {
+    lv_obj_t *o = lv_obj_get_child(body, c);
+    if (!lv_obj_check_type(o, &lv_obj_class))
+      continue;
+    lv_obj_get_coords(o, &a);  // the top half, the bottom half follows it
+    lv_obj_get_coords(lv_obj_get_child(body, c + 1), &b);
+    c++;
+    at |= a.x1 <= f.x2 && a.x2 >= f.x1;
+    if (a.x2 >= f.x1 && a.x1 < best) {
+      best = a.x1;
+      *top = a.y2 + 1;
+      *bottom = b.y1;
+    }
+  }
+  return at;
+}
+
+// Runs for steps or until the fan hits something, pressing UP with ui_key() so input.c doesn't see a key. Keeps
+// the fan around aim px below the middle of the next gap. Returns the score, 0 once it hit.
+static int kt_steer(int steps, int aim) {
+  lv_area_t f;
+  int before = 0;
+  for (int i = 0; i < steps && !kt_over(); i++) {
+    int top, bottom;
+    kt_gap(&top, &bottom);
+    lv_obj_get_coords(kt_label(0), &f);
+    int y = (f.y1 + f.y2) / 2;
+    if (y > (top + bottom) / 2 + aim + 4 && y >= before)
+      ui_key(KEY_UP);
+    before = y;
+    run(40);
+  }
+  return kt_score();
+}
+
+// The key test from the notices: ready, running, over, five ducts at every fan speed, BACK to About, and the
+// screensaver only when nobody presses UP
+static void keytest(void) {
+  fresh();
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(S_ABOUT);
+  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  run(500);
+  key(KEY_OK);
+  check(ui_top() == &SCR_KEYTEST, "OK on the notices didn't open the key test");
+  bool l[3];
+  panel_leds(l, now);
+  check(l[2], "the OK light didn't go back on with the key test");
+  check_shot("92_keytest_ready");
+  key(KEY_UP);
+  check(kt_steer(150, 0) >= 1, "the score didn't go up");
+  check_shot("92b_keytest_running");
+  // no real key, but a running key test keeps the screensaver away
+  M.idle_after = 0;  // 15 s
+  kt_steer(400, 0);
+  check(ui_top() == &SCR_KEYTEST && !kt_over(), "the run stopped");
+  // a pop-up pauses it, UP after it carries on
+  M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
+  M.n_alarms = 1;
+  ui_push(&SCR_ALARM_POPUP, 9);
+  run(80);
+  lv_area_t a, b;
+  lv_obj_get_coords(kt_label(0), &a);
+  run(500);
+  lv_obj_get_coords(kt_label(0), &b);
+  check(a.y1 == b.y1, "the fan moved under a pop-up");
+  ui_pop();
+  M.n_alarms = 0;
+  ui_refresh();
+  key(KEY_UP);
+  kt_steer(400, 50);  // into the bottom half of a duct
+  int top, bottom;
+  check(kt_over() && kt_gap(&top, &bottom), "the fan went through a duct");
+  check_shot("92c_keytest_over");
+
+  // five ducts at every fan speed
+  for (int level = MODE_STOP; level <= MODE_COUNT; level++) {
+    M.mode_now = (uint8_t) (level < MODE_COUNT ? level : MODE_MAX);
+    M.boost_on = level == MODE_COUNT;
+    ui_replace(&SCR_KEYTEST, 0);
+    key(KEY_UP);
+    char what[64];
+    snprintf(what, sizeof what, "the fan hit a duct early at fan speed %d", level);
+    check(kt_steer(700, 0) >= 5, what);
+  }
+  M.boost_on = false;
+  M.mode_now = MODE_NORMAL;
+  kt_steer(400, 50);
+  run(16000);
+  check(ui_top() == &SCR_SAVER, "no screensaver once the fan hit");
+  key(KEY_OK);
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(S_ABOUT);
+  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  key(KEY_OK);
+  key(KEY_BACK);
+  check(ui_top() == &SCR_INFO && !strcmp(ui_title(), tr(S_ABOUT)), "BACK didn't leave the key test for About");
+}
+
 // For --perf. Repainted pixels are what cost time on the panel.
 static void measure(const char *what, int k) {
   run(200);
@@ -525,6 +731,9 @@ static void perf(void) {
   measure("idle second, day", 0);
   ui_push(&SCR_NOTICES, 0);
   measure("notices going up, 200 ms", 0);
+  ui_replace(&SCR_KEYTEST, 0);
+  tap(KEY_UP);
+  measure("key test running, 200 ms", KEY_UP);
 }
 
 int main(int argc, char **argv) {
@@ -1118,6 +1327,7 @@ int main(int argc, char **argv) {
 
   checks();
   notices();
+  keytest();
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

@@ -132,7 +132,7 @@ const char *fmt_temp(char *buf, int16_t t, bool unit);
 const char *fmt_target(char *buf, int16_t t);  // setpoint, always with one decimal whatever Temperatures says
 const char *fmt_dec(char *buf, int32_t v, uint8_t dec);
 const char *fmt_hm(char *buf, int minutes);   // minutes since midnight up to 24:00, 12 or 24 h as the clock is set
-char *add_unit(char *buf, const char *unit);  // no space before %, : or °
+char *add_unit(char *buf, const char *unit);  // no space before % or °
 void label_fit(lv_obj_t *l, const char *txt, int w);  // txt in font_f20 if it fits in w, else font_f14
 int ui_backlight_preview(void);                       // brightness an open editor is previewing, -1 if none
 
@@ -153,7 +153,7 @@ const alarm_t *alarm_find(intptr_t code);  // the active alarm with this code, N
 enum { ALARMS_NOW, ALARMS_HISTORY };       // arg for SCR_ALARMS
 enum { INFO_ABOUT, INFO_BUS, INFO_DIAG };  // arg for SCR_INFO
 extern const screen_t SCR_HOME, SCR_MENU, SCR_LIST, SCR_EDIT, SCR_ALARMS, SCR_ALARM_POPUP, SCR_SCHEDULE, SCR_INFO,
-    SCR_NOTICES, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
+    SCR_NOTICES, SCR_KEYTEST, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
 // A home screen view. BACK cycles through them in VIEW_* order.
 typedef struct {
   void (*build)(lv_obj_t *body);

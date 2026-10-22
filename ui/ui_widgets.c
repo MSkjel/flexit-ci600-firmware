@@ -262,7 +262,7 @@ void label_fit(lv_obj_t *l, const char *txt, int w) {
 
 char *add_unit(char *buf, const char *unit) {
   if (unit && unit[0]) {
-    strcat(buf, strchr("%:\xC2", unit[0]) ? "" : " ");  // no space before %, : or °
+    strcat(buf, unit[0] == '%' || !strncmp(unit, "\xC2\xB0", 2) ? "" : " ");  // no space before % or °
     strcat(buf, unit);
   }
   return buf;

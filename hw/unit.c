@@ -48,6 +48,7 @@
 #define R_DS1_ELECTRIC 0x10F
 #define R_DS4_FAN_AC 0x112
 #define R_CFG2_FIRST 0x113  // 0x113..0x14B, more settings
+#define R_CFG_REGULATION 0x114
 #define R_CMD_FILTER 0x116
 #define R_WEEK_EN 0x118  // schedule period enables, 7 days x 4
 #define R_WEEK_EN_END 0x133
@@ -222,6 +223,9 @@ static void reg_changed(uint16_t r) {
   switch (r) {
     case R_CFG_MODE:
       val_set_bus(V_MODE, v & 3);
+      break;
+    case R_CFG_REGULATION:
+      v = v != 0;  // the CU60 takes anything but 0 as supply air
       break;
     case R_ST_MODE:
       M.mode_now = (uint8_t) (v & 3);

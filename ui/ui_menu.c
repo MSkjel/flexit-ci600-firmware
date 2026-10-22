@@ -18,11 +18,12 @@ typedef enum {
 
 // mitem_t flags
 enum {
-  MF_TIME = 1,        // minutes since midnight, shown as a time
-  MF_ZERO_OFF = 2,    // 0 is shown as Off
-  MF_BACKLIGHT = 4,   // a brightness, shown on the backlight while it's being edited
-  MF_DANGER = 8,      // can't be undone, so OK has to be held
-  MF_POP_PARENT = 16  // the action removes what the list is about, so close the list too
+  MF_TIME = 1,         // minutes since midnight, shown as a time
+  MF_ZERO_OFF = 2,     // 0 is shown as Off
+  MF_BACKLIGHT = 4,    // a brightness, shown on the backlight while it's being edited
+  MF_DANGER = 8,       // can't be undone, so OK has to be held
+  MF_POP_PARENT = 16,  // the action removes what the list is about, so close the list too
+  MF_HOUR = 32         // an hour of the day, shown as a time
 };
 
 typedef struct menu menu_t;
@@ -196,8 +197,8 @@ MENU(m_stats, S_STATISTICS, INFO(IC_COUNTER, S_TOTAL, i_h_total, S_TOTAL_HOURS_H
 
 #define LIGHT(ic, t, v, h, fl) NUM(ic, t, v, h, .step = 5, .unit = S_UNIT_PCT, .flags = MF_BACKLIGHT | (fl))
 MENU(m_night, S_NIGHT_MODE, TOG(IC_NIGHT, S_NIGHT_MODE, V_NIGHT, S_NIGHT_MODE_HELP),
-     NUM(IC_CLOCK, S_FROM, V_NIGHT_FROM, S_NIGHT_FROM_HELP, .unit = S_UNIT_OCLOCK),
-     NUM(IC_CLOCK, S_TO, V_NIGHT_TO, S_NIGHT_TO_HELP, .unit = S_UNIT_OCLOCK),
+     NUM(IC_CLOCK, S_FROM, V_NIGHT_FROM, S_NIGHT_FROM_HELP, .flags = MF_HOUR),
+     NUM(IC_CLOCK, S_TO, V_NIGHT_TO, S_NIGHT_TO_HELP, .flags = MF_HOUR),
      LIGHT(IC_BRIGHTNESS, S_BRIGHTNESS, V_NIGHT_BRIGHTNESS, S_NIGHT_BRIGHTNESS_HELP, 0),
      LIGHT(IC_BRIGHTNESS, S_IDLE_BRIGHTNESS, V_NIGHT_IDLE_BRIGHTNESS, S_NIGHT_IDLE_BRIGHTNESS_HELP, MF_ZERO_OFF),
      ENUM(IC_PALETTE, S_THEME_AT_NIGHT, V_NIGHT_THEME, S_THEME_AT_NIGHT_HELP, OPTS(O_NIGHT_THEME)));
@@ -308,8 +309,9 @@ static void s_page(char *b, bool comfort) {
   b[0] = 0;
   for (int i = 0; i < N_ITEMS; i++) {
     const item_t *it = &M.items[i];
-    if (!it->type || !(it->flags & (ITEMF_VIEW | ITEMF_MENU)) || !(it->flags & ITEMF_COMFORT) != !comfort)
-      continue;  // dashboard-only items don't count
+    mitem_t m;
+    if (!item_row(i, &m, comfort))
+      continue;  // only what the menu lists
     n++;
     if (it->type == ITEM_SENSOR && shown < 2) {
       char v[24];
@@ -401,9 +403,12 @@ static void menu_build(lv_obj_t *b, intptr_t arg) {
   for (unsigned i = 0; i < m_main.n; i++)
     if (ui_has(m_main.items[i].need))
       grid->tile[grid->n++] = &m_main.items[i];
-  frame_t *f = ui_frame();
+  frame_t *f = ui_frame();  // tiles may have gone since
+  int rows = (grid->n + 1) / 2, last_top = rows > TILE_ROWS ? rows - TILE_ROWS : 0;
   if (f->sel >= grid->n)
     f->sel = grid->n - 1;
+  if (f->top > last_top)
+    f->top = (int16_t) last_top;
   for (int k = 0; k < TILE_SLOTS && k < grid->n; k++) {
     lv_obj_t *t =
         mk_box(b, 8 + (k % 2) * (TILE_W + TILE_GAP), 4 + (k / 2) * (TILE_H + TILE_GAP), TILE_W, TILE_H, T.surface, 10);
@@ -536,29 +541,26 @@ static int row_type(int r) {
   return row(r, &b)->type;
 }
 
-// The number without its unit, formatted as shown
+static bool shown_off(const mitem_t *it, int32_t v) { return (it->flags & MF_ZERO_OFF) && v == 0; }
+
+// The number without its unit, formatted as shown, or Off
 static const char *number_only(const mitem_t *it, int32_t v, char *buf) {
-  if (it->flags & MF_TIME)
-    return fmt_hm(buf, v);
+  if (shown_off(it, v))
+    return strcpy(buf, _(S_OFF));
+  if (it->flags & (MF_TIME | MF_HOUR))
+    return fmt_hm(buf, it->flags & MF_HOUR ? v * 60 : v);
   return fmt_dec(buf, v, it->dec);
 }
 
 // The number with its unit, or Off
 static void number_text(const mitem_t *it, int32_t v, char *buf) {
-  if ((it->flags & MF_ZERO_OFF) && v == 0) {
-    strcpy(buf, _(S_OFF));
-    return;
-  }
   if (v == ITEM_UNKNOWN && item_of(it->val)) {
     strcpy(buf, "\xE2\x80\x93");  // en dash, an item with no value
     return;
   }
   number_only(it, v, buf);
-  const char *unit = item_unit(it);
-  if (unit[0]) {
-    strcat(buf, strchr("%:\xC2", unit[0]) ? "" : " ");  // no space before %, : or °
-    strcat(buf, unit);
-  }
+  if (!shown_off(it, v))
+    add_unit(buf, item_unit(it));
 }
 
 // Option actually used for o. A fallback when o needs the ESP and there isn't one
@@ -692,15 +694,24 @@ static void list_build(lv_obj_t *b, intptr_t arg) {
   if (list->m->prepare)
     list->m->prepare();
   ui_set_title(list->m->title_text ? list->m->title_text : tr(list->m->title));
+  if (list->m->row && !M.esp_online) {  // an ESP menu, stale while the ESP is away
+    mk_empty(b, T.faint, IC_WIFI_OFF, _(S_ESP_NOT_CONNECTED),
+             list->m == &m_comfort ? _(S_COMFORT_NEEDS_ESP) : _(S_SMART_NEEDS_ESP));
+    ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
+    return;
+  }
   list_rows();
   if (!list->n) {  // an ESP menu with no items yet
     mk_empty(b, T.faint, IC_HASS, _(S_NOTHING_HERE_YET), _(S_SMART_MENU_EMPTY));
     ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
     return;
   }
-  frame_t *f = ui_frame();
+  frame_t *f = ui_frame();  // the list may have got shorter since
+  int last_top = list->n > ROWS ? list->n - ROWS : 0;
   if (f->sel >= list->n)
     f->sel = (int16_t) (list->n - 1);
+  if (f->top > last_top)
+    f->top = (int16_t) last_top;
   while (f->sel < list->n - 1 && !selectable(f->sel))
     f->sel++;
 
@@ -882,7 +893,7 @@ static void offer_options(const mitem_t *it, bool rebuild) {
 
 static void edit_number(lv_obj_t *card, const mitem_t *it) {
   ed.val = mk_label(card, &font_n40, T.accent, "");
-  ed.unit = mk_label(card, &font_f16, T.dim, item_unit(it));
+  ed.unit = mk_label(card, &font_f16, T.dim, "");
   ed.bar = mk_bar(card, 18, 104, EDIT_TEXT_W - 8, 6, 0, ed.max - ed.min, T.accent);
   char a[16];
   lv_obj_set_pos(mk_label(card, &font_f12, T.faint, number_only(it, ed.min, a)), 18, 116);
@@ -923,8 +934,8 @@ static void edit_build(lv_obj_t *b, intptr_t arg) {
     ed.v = it->type == MI_ACTION ? 0 : val_get(it->val);
   }
   ed.it = it;
-  if (rebuild && !val_known(it->val))
-    ui_close_after(0);  // the ESP restarted and forgot the item being edited
+  if (rebuild && (!val_known(it->val) || (item_of(it->val) && !M.esp_online)))
+    ui_close_after(0);  // the ESP went away, or restarted and forgot the item being edited
   ed.min = val_def(it->val).min;
   ed.max = val_def(it->val).max;
   if (ed.v == ITEM_UNKNOWN && item_of(it->val))
@@ -961,10 +972,14 @@ static void edit_update(void) {
   const mitem_t *it = ed.it;
   char a[16];
   if (it->type == MI_NUM) {
-    number_only(it, ed.v, a);
-    lv_label_set_text(ed.val, a);
-    lv_obj_align(ed.val, LV_ALIGN_TOP_MID,
-                 -lv_txt_get_width(item_unit(it), strlen(item_unit(it)), &font_f16, 0, 0) / 2 - 2, 38);
+    bool off = shown_off(it, ed.v);  // Off in a text font, the number font has no letters
+    const lv_font_t *f = off ? &font_f28 : &font_n40;
+    const char *unit = off ? "" : item_unit(it);
+    lv_obj_set_style_text_font(ed.val, f, 0);
+    lv_label_set_text(ed.val, number_only(it, ed.v, a));
+    label_text(ed.unit, unit);
+    int y = 38 + (font_n40.line_height - font_n40.base_line) - (f->line_height - f->base_line);  // same baseline
+    lv_obj_align(ed.val, LV_ALIGN_TOP_MID, -lv_txt_get_width(unit, strlen(unit), &font_f16, 0, 0) / 2 - 2, y);
     lv_obj_align_to(ed.unit, ed.val, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -3 - font_n40.base_line);  // near its baseline
     lv_bar_set_value(ed.bar, ed.v - ed.min, LV_ANIM_OFF);
   } else if (it->type == MI_ENUM) {
@@ -997,7 +1012,8 @@ static bool edit_key(int k) {
       ed.v = ed.offer[ed.pos];
     } else {
       int step = it->step ? it->step : 1, mul = input_hold_ms > 4000 ? 10 : input_hold_ms > 1500 ? 5 : 1;
-      ed.v = step_value(ed.v, d * mul, step, ed.min, ed.max);
+      int32_t base = item_of(it->val) ? ed.min : 0;  // an ESP number's steps count from its min
+      ed.v = base + step_value(ed.v - base, d * mul, step, ed.min - base, ed.max - base);
     }
     edit_update();
     return true;

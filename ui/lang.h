@@ -59,6 +59,7 @@
   X(AXIS_NOW, "now") \
   X(ESP_NOT_CONNECTED, "ESP not connected") \
   X(COMFORT_NEEDS_ESP, "Comfort features need an ESP at address 1.") \
+  X(SMART_NEEDS_ESP, "Smart home needs an ESP at address 1.") \
   X(DASHBOARD_VIEW_HELP, "The main screen. UP and DOWN change the fan speed, and going past MAX starts a boost. BACK " \
                          "shows the other views. Set the tiles under Display > Home screen > Dashboard tiles.") \
   X(AIRFLOW_VIEW_HELP, "How air moves through the unit. Outdoor air is filtered, warmed by the rotor and the heater, " \
@@ -369,7 +370,6 @@
   X(DONE, "Done") \
   X(SAVED, "Saved") \
   X(UNIT_PCT, "%") \
-  X(UNIT_OCLOCK, ":00") \
   X(UNIT_C, "\xC2\xB0" \
             "C") \
   X(EQUIP_ESP, "ESP on the bus") \
@@ -440,7 +440,7 @@
   X(ALARM_LIST_HELP, "Active alarms. Fix the cause, then use Reset alarms.") \
   X(PROGRAM_OFF, "Program off") \
   X(WEEK_HELP, "Fan speed through the week. Outside the coloured periods, the unit runs at the speed you've set. The " \
-               "line shows the time now. Edit the days under Schedule.") \
+               "line shows the time now. Edit the days under Week program.") \
   X(ADD_PERIOD, "+  Add period") \
   X(DAY_SCREEN_HELP, "Up to four periods a day, each with its own fan speed and temperature. Outside them, the unit " \
                      "runs at the speed you've set.") \
@@ -513,6 +513,14 @@
   X(NOTICE_HARMED, "No ventilation units were harmed") \
   X(NOTICE_CU60, "One CU60 was a bit confused") \
   X(NOTICE_SINCE, "Fresh air since 2026") \
+  X(NOTICE_OK, "OK: Flappy Fan") \
+  X(KEYTEST, "Flappy Fan") \
+  X(KEYTEST_START, "Up to flap") \
+  X(KEYTEST_SCORE, "Score %d") \
+  X(KEYTEST_BEST, "Best %d") \
+  X(KEYTEST_AGAIN, "OK: again") \
+  X(KEYTEST_HELP, "UP or OK flaps the fan. Get it through the gaps in the ducts, each one is a point. The ducts " \
+                  "move as fast as the unit's fans run.") \
   X(HELP, "Help") \
   X(NO_HELP, "Nothing to explain here.") \
   X(HELP_FOOTER, "BACK goes up one level, hold it to go home. Hold ? for 3 s to lock the keys.") \

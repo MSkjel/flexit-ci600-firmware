@@ -184,8 +184,8 @@ static void trend_update(void) {
     lo = 0;
     hi = 300;
   }
-  lo = (lo / 50 - (lo < 0 ? 1 : 0)) * 50;  // round out to 5 degrees
-  hi = (hi / 50 + 1) * 50;
+  lo = (lo < 0 ? lo - 49 : lo) / 50 * 50;  // round out to 5 degrees
+  hi = (hi < 0 ? hi - 49 : hi) / 50 * 50 + 50;
   if ((hi - lo) % 150)
     hi = lo + ((hi - lo) / 150 + 1) * 150;  // 3 equal steps of whole degrees
   lv_chart_set_range(trend->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
@@ -357,7 +357,7 @@ static void gauge(lv_obj_t *b, int x, const item_t *it, lv_obj_t **arc, lv_obj_t
   lv_obj_align_to(*val, *arc, LV_ALIGN_CENTER, 0, -6);
   lv_obj_align_to(mk_label(b, &font_f12, T.dim, it->unit), *arc, LV_ALIGN_CENTER, 0, 20);
   lv_obj_t *cap = mk_label(b, &font_f12, T.dim, it->label);
-  lv_obj_set_width(cap, 100);
+  lv_obj_set_size(cap, 100, lv_font_get_line_height(&font_f12));  // one line, so a long label gets dots
   lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
   label_dots(cap);
   lv_obj_align_to(cap, *arc, LV_ALIGN_BOTTOM_MID, 0, 4);
@@ -468,6 +468,10 @@ static bool smart_next_page(void) {
 
 static void smart_build(lv_obj_t *b) {
   memset(smart, 0, sizeof *smart);
+  if (!M.esp_online) {  // its values would be stale
+    mk_empty(b, T.faint, IC_WIFI_OFF, _(S_ESP_NOT_CONNECTED), _(S_SMART_NEEDS_ESP));
+    return;
+  }
   if (smart_page * SMART_MAX >= smart_count())
     smart_page = 0;  // some have gone
   for (int i = 0, seen = 0; i < N_ITEMS && smart->n < SMART_MAX; i++)
@@ -511,7 +515,7 @@ static void smart_update(void) {
   }
 }
 
-// smart_avail hides it when there are no items, so no empty state
+// smart_avail hides it when there are no items
 const view_t SMART_VIEW = {.build = smart_build,
                            .update = smart_update,
                            .help = S_SMART_VIEW_HELP,
