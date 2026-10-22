@@ -276,7 +276,14 @@ def main(argv):
 
     if not a.no_reset:
         print("Resetting into the new firmware...")
-        bus.send(frame(BL_ADDR, SUB_RESET))
+        for _ in range(3):  # the loader can miss it, so check it's gone
+            bus.send(frame(BL_ADDR, SUB_RESET))
+            time.sleep(0.5)
+            st = status(bus, tries=1)
+            if st is None or st[0] == 0:
+                break
+        else:
+            sys.exit("The panel didn't restart. Power it off and on, the new firmware is in")
     print("Done.")
     return 0
 
