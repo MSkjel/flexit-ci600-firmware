@@ -42,13 +42,27 @@ static void forget_helps(int i) {
     help_asked = -1;
 }
 
+// A CU60 value from an answer the ESP ignored before our HELLO. The sync skips those, so it goes again.
+static void again(void *u, uint16_t key, const uint8_t *b, int n) {
+  (void) u;
+  val_t v = val_by_key(key);
+  for (int i = 0; i < L.qn; i++)
+    if (L.q[i].key == key)
+      return;  // a newer one is waiting
+  if (v != V_NONE && (val_def(v).flags & VF_CU60))
+    plink_send(&L, key, plink_number(b, n));
+}
+
 // ESP restarted or answered our HELLO. link_poll() sends our state next, unless it's another link version.
 static void got_hello(uint32_t v) {
   M.esp_version = (uint16_t) (v >> 16);
-  plink_drop_events(&L);  // queued events are about things it no longer has
+  plink_forget(&L);  // events and item values are about things it no longer has
   pic_ack = -1;
-  if (v & HELLO_ASK)
-    plink_send(&L, K_HELLO, (uint32_t) PLINK_VERSION << 16);
+  if (v & HELLO_ASK) {
+    plink_send(&L, K_HELLO, (uint32_t) PLINK_VERSION << 16);  // goes ahead of the waiting values
+    if (B.out_full)
+      pbulk_parse(B.out, B.out_n, again, NULL);
+  }
   pic_reset();
   val_forget_esp();  // its items may have changed, it sends them all again
   forget_helps(-1);
@@ -207,7 +221,7 @@ int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, 
     return 0;
   uint8_t say;
   uint32_t left = pbus_panel_window(&W, idle_us, now_ms, &say);
-  return pbulk_panel_frame(&B, f, n, left, say, answer);
+  return pbulk_panel_frame(&B, M.bus_addr, f, n, left, say, answer);
 }
 
 const pbulk_panel_t *link_bulk_state(void) { return &B; }
@@ -261,9 +275,7 @@ void link_poll(void) {
 void link_second(void) {
   static uint8_t room_s;
   static uint32_t frames_seen;
-  if (!HAS(FEAT_ESP))
-    return;
-  if (++room_s >= 60) {  // once a minute, the panel's own temperature sensor for Home Assistant
+  if (HAS(FEAT_ESP) && ++room_s >= 60) {  // once a minute, the panel's own temperature sensor for Home Assistant
     static int16_t room_sent = T_NONE;
     room_s = 0;
     if (M.t_room != room_sent && M.esp_online) {
@@ -274,7 +286,10 @@ void link_second(void) {
   // The ESP sends a frame every CU60 cycle, so 30 s without one means it's gone. Refused frames don't count,
   // since nothing gets through while we refuse them.
   uint32_t frames = B.frames - B.bad - B.refused;
-  if (frames != frames_seen) {
+  if (!HAS(FEAT_ESP)) {
+    frames_seen = frames;
+    quiet_s = 30;  // switched off, offline until it's heard again
+  } else if (frames != frames_seen) {
     frames_seen = frames;
     quiet_s = 0;
   } else if (quiet_s < 30) {
@@ -309,9 +324,7 @@ const char *link_item_help(int i) {
   for (int k = 0; k < HELP_SLOTS; k++)
     if (helps[k].of == i)
       return helps[k].text;
-  if (help_asked != i && link_compatible()) {
+  if (help_asked != i && M.esp_online && plink_send(&L, K_ITEM_HELP, (uint32_t) i))
     help_asked = (int8_t) i;
-    plink_send(&L, K_ITEM_HELP, (uint32_t) i);
-  }
   return NULL;
 }

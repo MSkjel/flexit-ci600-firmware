@@ -1534,6 +1534,7 @@ int main(int argc, char **argv) {
   run(20);
   flexit::panel::language = 0;  // what the ESP has after a restart
   flexit::panel::restore_language();
+  flexit::panel::changed.reset();
   flexit::panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);  // what panel::setup() sends
   int english = 0;  // cycles the panel showed an item in English
   for (int k = 0; k < 100; k++) {
@@ -1543,11 +1544,40 @@ int main(int argc, char **argv) {
   CHECK(!english && !strcmp(pitem("fireplace").label, "Peis"), "in English for %d cycles after the hello, then '%s'",
         english, pitem("fireplace").label);
   CHECK(pn_get(K_SUPPLY_MIN) == 160, "the ESP's hello put its old supply min %d on the panel", pn_get(K_SUPPLY_MIN));
-  pn_restart();  // the panel asks, and has nothing newer
+  pn_restart();  // the panel asks, and keeps its copy over the ESP's flash one
   c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
   run(20);
-  CHECK(c >= 0 && pn_get(K_SUPPLY_MIN) == 150, "the panel restarted and has supply min %d, the ESP's is 150",
+  CHECK(c >= 0 && pn_get(K_SUPPLY_MIN) == 160, "the panel restarted and took the ESP's old supply min %d",
         pn_get(K_SUPPLY_MIN));
+  int supply_max = pn_get(K_SUPPLY_MAX) + 10;
+  server->setting(0x00E, (uint16_t) supply_max);  // changed on another panel while this one restarts
+  pn_restart();
+  c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
+  run(20);
+  CHECK(c >= 0 && pn_get(K_SUPPLY_MAX) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
+        pn_get(K_SUPPLY_MAX), supply_max);
+
+  step("notes while the panel is away or restarting");
+  pn_note(&icon, &level, &fresh);
+  link_lost_frames = 1000;  // gone
+  run(300);
+  CHECK(!flexit::panel::link::connected, "the panel's still connected");
+  flexit::panel::notify("Door open", "door", "warning");
+  run(10);
+  CHECK(!flexit::panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
+  link_lost_frames = 0;
+  pn_restart();
+  run_until([] { return pn_online() && settled(); }, 2000);
+  run(5);
+  const char *away = pn_note(&icon, &level, &fresh);
+  CHECK(fresh && !strcmp(away, "Door open") && flexit::panel::note.empty(), "note while away: '%s', fresh %d", away,
+        fresh);
+  flexit::panel::notify("Washer done", "washer", "info");
+  pn_restart();  // before it went out
+  run_until([] { return pn_online() && settled(); }, 2000);
+  run(5);
+  const char *restart = pn_note(&icon, &level, &fresh);
+  CHECK(fresh && !strcmp(restart, "Washer done"), "note during a restart: '%s', fresh %d", restart, fresh);
 
   printf("\n%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;

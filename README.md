@@ -127,7 +127,8 @@ what the bootloader is up to.
 unit.
 
 **ESP stuff doesn't show up.** Look at System > Bus > ESP link.
-- *waiting*: the ESP isn't answering. Is it online, with `packages/panel.yaml`?
+- *waiting*: the ESP isn't answering. Is it online, with `packages/panel.yaml`? It only talks to the panel at
+  its `panel_address`, 3 by default.
 - *v1, the ESP v2* or similar: panel firmware and ESP packages are from different releases. Update the old one.
 - *too short* under Pause after status: the CU60 leaves too little room on the bus, so the link backs off for a
   bit and tries again.

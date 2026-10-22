@@ -340,7 +340,7 @@ void sim_esp_init(void) {
   fin(STATUS, PBUS_STATUS_LEN);
   memcpy(POLL, (const uint8_t[]) {3, 0x01, 0x00, 0x00, 0x00, 0x40}, 6);
   fin(POLL, 8);
-  pbulk_esp_init(&FL, 0x2B);
+  pbulk_esp_init(&FL, 0x2B, 3);
   link_init();
   send_number(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);
 }

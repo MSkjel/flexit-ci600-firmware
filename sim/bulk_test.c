@@ -411,7 +411,7 @@ static void panel_burst(burst_t *b) {
     bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS_END_US);
     uint8_t say;
     uint32_t left = pbus_panel_window(&PBUS, idle_us, ms, &say);
-    int n = pbulk_panel_frame(&PRX, b->b, b->n, left, say, panel_answer);
+    int n = pbulk_panel_frame(&PRX, 3, b->b, b->n, left, say, panel_answer);
     if (n) {  // wait for the ESP's driver to let go, like hw/rs485.c
       panel_answer_n = n;
       panel_answer_at = idle + between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US);
@@ -849,7 +849,7 @@ int main(int argc, char **argv) {
   C.ht_c = 100;
   C.next_tick = between(0, MS);
   C.ctl_ns = (ns_t) (ctl_ms * MS);
-  pbulk_esp_init(&ETX, 0x5A);
+  pbulk_esp_init(&ETX, 0x5A, 3);
   uint8_t too_long[PBULK_MSG_MAX + 1] = {0};
   bool refused_long = !pbulk_esp_send(&ETX, K_ITEM_HELP, too_long, sizeof too_long, false);
   pbus_panel_init(&PBUS);

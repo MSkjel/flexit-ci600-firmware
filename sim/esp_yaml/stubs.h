@@ -358,7 +358,7 @@ struct HaAction {
 inline std::vector<HaAction> ha_actions;
 
 namespace flexit_modbus_server {
-enum HoldingRegisterIndex : uint16_t { REG_CMD_TEMPERATURE_SETPOINT = 0x0C };
+enum HoldingRegisterIndex : uint16_t {};
 }
 
 // The ESP's Modbus server, with the registers, coils and hooks the panel's link uses.
@@ -366,9 +366,17 @@ struct Server {
   uint16_t hold[0x200] = {};
   bool coil[0x200] = {};
   std::vector<std::pair<uint16_t, uint16_t>> cmds;  // every send_cmd() to a CU60 register
+  std::vector<std::function<void(uint16_t, uint16_t)>> setting_cbs;
   uint16_t read_holding_register(flexit_modbus_server::HoldingRegisterIndex r) { return hold[r]; }
-  void send_cmd(flexit_modbus_server::HoldingRegisterIndex r, uint16_t v) {
+  void add_on_setting_callback(std::function<void(uint16_t, uint16_t)> &&f) { setting_cbs.push_back(std::move(f)); }
+  void setting(uint16_t r, uint16_t v) {  // a setting changed for good, from us or a panel via the CU60
+    if (hold[r] != v)
+      for (auto &f : setting_cbs)
+        f(r, v);
     hold[r] = v;
+  }
+  void send_cmd(flexit_modbus_server::HoldingRegisterIndex r, uint16_t v) {
+    setting(r, v);
     coil[r] = true;
     cmds.push_back({(uint16_t) r, v});
   }

@@ -1283,7 +1283,7 @@ static uint16_t esp_num;  // number of the ESP's next message
 // ack the ESP has all of the panel's messages, else it hasn't heard its answers.
 static void from_esp(uint16_t key, const uint8_t *b, int n, bool ack) {
   const pbulk_panel_t *p = link_bulk_state();
-  uint8_t f[PBULK_FRAME_MAX] = {PBULK_ADDR, PBULK_FC_SEND, (uint8_t) (3 + n)}, a[PBULK_ANSWER_FRAME_MAX];
+  uint8_t f[PBULK_FRAME_MAX] = {PBULK_ADDR, PBULK_FC_SEND, (uint8_t) (3 + n), M.bus_addr}, a[PBULK_ANSWER_FRAME_MAX];
   put16(f + PBULK_ESESS, 0xE5);
   put16(f + PBULK_NUM, esp_num++);
   put16(f + PBULK_PSESS, ack ? p->psess : 0);
@@ -1505,6 +1505,58 @@ static void test_link(void) {
   from_esp(0, &bad, 0, true);  // now it has, there's room
   link_poll();
   CHECK(queued(K_PIC_ACK, ack));
+
+  // Item help: not asked while the ESP is away, only the latest waits, asked again if it didn't fit
+  link_init();
+  M.esp_version = PLINK_VERSION;
+  M.esp_online = false;
+  CHECK(!link_item_help(1) && !queued(K_ITEM_HELP, 1));
+  M.esp_online = true;
+  link_item_help(1);
+  link_item_help(2);
+  CHECK(queued(K_ITEM_HELP, 2) && !queued(K_ITEM_HELP, 1));
+  link_init();
+  M.esp_version = PLINK_VERSION;
+  while (plink_room(link_queue()))
+    link_action(A_NONE);
+  link_item_help(3);
+  CHECK(!queued(K_ITEM_HELP, 3));
+  link_poll();  // some go out
+  link_item_help(3);
+  CHECK(queued(K_ITEM_HELP, 3));
+
+  // ESP restart: our HELLO goes ahead of the waiting values, even with a full queue
+  link_init();
+  M.esp_version = PLINK_VERSION;
+  link_poll();  // our own HELLO is in the answer
+  for (uint16_t k = 0x100; plink_room(link_queue()); k++)
+    link_send(k, 1);
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
+  CHECK(link_queue()->q[0].key == K_HELLO && link_queue()->q[0].value == (uint32_t) PLINK_VERSION << 16);
+  CHECK(queued(0x100, 1) && link_queue()->qn == PLINK_QUEUE);
+  // A CU60 value in the ignored answer goes again unless a newer one waits. Item values don't.
+  link_init();
+  M.esp_version = PLINK_VERSION;
+  link_send(K_SETPOINT, 215);
+  link_send(K_FAN_NORM_SUP, 50);
+  link_send(K_ITEM_VALUE + 1, 7);
+  link_poll();  // they're in the answer
+  link_send(K_FAN_NORM_SUP, 60);
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
+  CHECK(link_queue()->q[0].key == K_HELLO && queued(K_SETPOINT, 215) && queued(K_FAN_NORM_SUP, 60));
+  CHECK(!queued(K_FAN_NORM_SUP, 50) && !queued(K_ITEM_VALUE + 1, 7));
+
+  // ESP switched off: offline at once, and until it's heard again
+  M.esp_online = true;
+  M.features &= ~FBIT(FEAT_ESP);
+  link_second();
+  CHECK(!M.esp_online);
+  M.features |= FBIT(FEAT_ESP);
+  link_second();
+  CHECK(!M.esp_online);
+  from_esp(0, &bad, 0, false);
+  link_second();
+  CHECK(M.esp_online);
 }
 
 int main(void) {

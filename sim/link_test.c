@@ -49,7 +49,7 @@ static void at_panel(void *u, uint16_t k, const uint8_t *b, int n) {
 }
 
 static void reset(uint16_t esess, uint16_t psess) {
-  pbulk_esp_init(&E, esess);
+  pbulk_esp_init(&E, esess, 3);
   pbulk_panel_init(&P, psess);
   plink_init(&L);
   got_esp = got_panel = wrong = others = 0;
@@ -76,7 +76,7 @@ static void panel_loop(void) {
 static int transact(uint8_t say) {
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
   int n = pbulk_esp_window(&E, 10000, f);  // 10 ms of the quiet left, as the ESP sees it
-  int an = n ? pbulk_panel_frame(&P, f, n, 10000 - (uint32_t) (n + 1) * PBUS_BYTE_US, say, a) : 0;
+  int an = n ? pbulk_panel_frame(&P, 3, f, n, 10000 - (uint32_t) (n + 1) * PBUS_BYTE_US, say, a) : 0;
   if (!an)
     return -1;
   pbulk_esp_answer(&E, a, an, at_esp, NULL);
@@ -113,7 +113,7 @@ static void test_random(void) {
     bool drop_frame = (seed >> 8) % 17 == 0, drop_answer = (seed >> 9) % 13 == 0;
     uint32_t late = (seed >> 10) % 23 == 0 ? 900 : 0;                // the ESP started later than it planned
     uint32_t at = since + late + (uint32_t) (n + 1) * PBUS_BYTE_US;  // when the panel's idle interrupt fires
-    int an = drop_frame ? 0 : pbulk_panel_frame(&P, f, n, at < PBUS_END_US ? PBUS_END_US - at : 0, PB_OK, a);
+    int an = drop_frame ? 0 : pbulk_panel_frame(&P, 3, f, n, at < PBUS_END_US ? PBUS_END_US - at : 0, PB_OK, a);
     if (an) {
       CHECK(at + PBUS_PANEL_US + (uint32_t) an * PBUS_BYTE_US <= PBUS_END_US);  // off the bus in time
       if (!drop_answer)
@@ -154,8 +154,8 @@ static void test_esp_restart(void) {
     plink_send(&L, K_ACTION, (uint32_t) i);
   cycles(10);
   CHECK(got_esp == 6 && !P.out_full);
-  pbulk_esp_init(&E, 0x22);  // the ESP restarts
-  transact(PB_OK);           // first it gets an empty answer
+  pbulk_esp_init(&E, 0x22, 3);  // the ESP restarts
+  transact(PB_OK);              // first it gets an empty answer
   got_esp = 0;
   for (int i = 0; i < 4; i++)
     plink_send(&L, K_ACTION, next_esp + (uint32_t) i);
@@ -190,7 +190,7 @@ static void test_esp_same_session(void) {
     esp_send(K_ACTION, (uint32_t) i);
   cycles(20);
   CHECK(got_panel == 30);
-  pbulk_esp_init(&E, 0x11);  // the ESP restarts with the same session
+  pbulk_esp_init(&E, 0x11, 3);  // the ESP restarts with the same session
   for (int i = 30; i < 35; i++)
     esp_send(K_ACTION, (uint32_t) i);
   cycles(20);
@@ -275,6 +275,41 @@ static void test_drop_unsent(void) {
   CHECK(got_panel == out && !wrong && last_key == K_THEME && last[0] == 2);
 }
 
+// ---------------------------------------------------------------- a HELLO jumps the unsent messages
+static void test_hello_first(void) {
+  reset(0x91, 0x92);
+  esp_send(K_ACTION, 0);
+  uint8_t f[PBULK_FRAME_MAX];
+  pbulk_esp_window(&E, 4000, f);  // a short window, only that one goes out
+  esp_send(K_ACTION, 1);
+  esp_send(PBULK_DATA_KEY, 2);
+  esp_send(K_HELLO, 1);
+  esp_send(K_HELLO, 2);
+  esp_send(PBULK_DATA_KEY, 3);  // appended to the DATA at the end
+  CHECK(E.qn == 4 * 7 + 4 && (E.q[7] | E.q[8] << 8) == K_HELLO && E.q[10] == 2 && pbulk_esp_queued(&E, K_HELLO));
+  E.sent = false;  // that frame never arrived
+  cycles(5);
+  CHECK(got_panel == 4 && !wrong && others == 1 && last_key == K_HELLO && last[0] == 2);
+  CHECK(!pbulk_esp_queued(&E, K_HELLO) && !pbulk_esp_queued(&E, K_ACTION));
+}
+
+// ---------------------------------------------------------------- two panels, only the linked one answers
+static void test_other_panel(void) {
+  reset(0xA1, 0xA2);
+  esp_send(K_ACTION, 0);
+  uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX], a2[PBULK_ANSWER_FRAME_MAX];
+  int n = pbulk_esp_window(&E, 10000, f);
+  pbulk_panel_t other;
+  pbulk_panel_init(&other, 0x55);
+  CHECK(!pbulk_panel_frame(&other, 2, f, n, 10000, PB_OK, a2) && !other.frames && !other.bad);
+  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a);
+  CHECK(an && P.frames == 1 && !P.bad);
+  CHECK(!pbulk_panel_frame(&other, 2, a, an, 10000, PB_OK, a2) && !other.frames && !other.bad);
+  pbulk_esp_answer(&E, a, an, at_esp, NULL);
+  cycles(3);
+  CHECK(got_panel == 1 && !wrong);
+}
+
 // ---------------------------------------------------------------- an answer is lost and the resend has less room,
 // so it splits the DATA in front of messages that went out. They still count as sent, and arrive once.
 static void test_split_resend(void) {
@@ -287,13 +322,13 @@ static void test_split_resend(void) {
   CHECK(pbulk_esp_send(&E, K_ITEM_UNIT + 3, none, 0, false));  // an empty text last
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
   int n = pbulk_esp_window(&E, 10000, f);
-  CHECK(f[PBULK_N] == E.qn && pbulk_panel_frame(&P, f, n, 10000, PB_OK, a));  // all of it arrives, the answer not
+  CHECK(f[PBULK_N] == E.qn && pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a));  // all of it arrives, not the answer
   n = pbulk_esp_window(&E, 3800, f);
   CHECK(f[PBULK_N] < 64);
   uint16_t qn = E.qn;
   pbulk_esp_drop_unsent(&E, keep_values);  // all of it went out, so none is dropped
   CHECK(E.qn == qn);
-  int an = pbulk_panel_frame(&P, f, n, 10000, PB_OK, a);
+  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a);
   pbulk_esp_answer(&E, a, an, at_esp, NULL);
   cycles(5);
   CHECK(got_panel == 17 && !wrong && others == 1 && !E.sessions && !E.qn);
@@ -374,16 +409,22 @@ static void test_plink(void) {
   plink_send(&l, K_THEME, 2);  // a value, the newer one replaces it
   plink_send(&l, K_ACTION, 1);
   plink_send(&l, K_ACTION, 2);  // events, both kept
-  CHECK(l.qn == 3 && l.q[0].value == 2);
-  plink_drop_events(&l);
+  plink_send(&l, K_ITEM_HELP, 3);
+  plink_send(&l, K_ITEM_HELP, 4);  // only the latest help request counts
+  plink_send(&l, K_ITEM_VALUE + 2, 5);
+  CHECK(l.qn == 5 && l.q[0].value == 2 && l.q[3].value == 4);
+  plink_forget(&l);
   CHECK(l.qn == 1 && l.q[0].key == K_THEME);
   uint8_t b[PBULK_ANSWER_MAX];
   int n = plink_pack(&l, b, sizeof b);
   CHECK(n == PLINK_NUMBER_BYTES && b[0] == (K_THEME & 0xFF) && b[2] == 4 && b[3] == 2 && !l.qn);
-  for (int i = 0; i < PLINK_QUEUE; i++)
+  for (int i = 0; i < PLINK_QUEUE - 1; i++)
     plink_send(&l, K_ACTION, (uint32_t) i);
-  CHECK(!plink_send(&l, K_ACTION, 99) && l.dropped == 1);
-  CHECK(plink_pack(&l, b, 20) == 2 * PLINK_NUMBER_BYTES && l.qn == PLINK_QUEUE - 2 && l.q[0].value == 2);
+  CHECK(!plink_room(&l) && !plink_send(&l, K_ACTION, 99) && l.dropped == 1);
+  // a HELLO always fits, goes first and replaces a waiting one
+  CHECK(plink_send(&l, K_HELLO, 7) && l.qn == PLINK_QUEUE && l.q[0].key == K_HELLO && !l.q[1].value);
+  CHECK(plink_send(&l, K_HELLO, 8) && l.qn == PLINK_QUEUE && l.q[0].value == 8 && !l.q[1].value);
+  CHECK(plink_pack(&l, b, 20) == 2 * PLINK_NUMBER_BYTES && l.qn == PLINK_QUEUE - 2 && l.q[0].value == 1);
   CHECK(plink_kind(K_ITEM_DEF + 3) == PLINK_BYTES && plink_kind(K_ITEM_LABEL + N_ITEMS - 1) == PLINK_BYTES &&
         plink_kind(K_ITEM_UNIT + 7) == PLINK_BYTES && plink_kind(K_ITEM_HELP) == PLINK_BYTES &&
         plink_kind(K_ITEM_ON) == PLINK_BYTES && plink_kind(K_ITEM_OFF + N_ITEMS - 1) == PLINK_BYTES &&
@@ -404,6 +445,8 @@ int main(void) {
   test_text();
   test_drop_unsent();
   test_split_resend();
+  test_hello_first();
+  test_other_panel();
   test_rearm();
   test_plink();
   printf(fails ? "link_test: %d failed\n" : "link_test: all passed\n", fails);
