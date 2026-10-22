@@ -1033,6 +1033,11 @@ static void test_runtime(void) {
   settings_load();
   unit_poll();
   CHECK(M.h_stop == 18 && M.h_total == 91 && M.brightness == 33);
+  // the total's high word changed while we were off
+  cu60(0x15D, 9);
+  cu60(0x0CB, 109);
+  unit_poll();
+  CHECK(M.h_total == 109);
   // saved soon: a high word and a relayed week program change, not a relayed fan change
   erases = stub_flash_erases;
   cu60(0x15C, 6);
@@ -1306,7 +1311,8 @@ static void test_unit(void) {
     stub_ms += 1000;
     unit_second();
   }
-  CHECK(!M.heater_enabled);
+  CHECK(!M.heater_enabled && toasts == 1);
+  toasts = 0;
   cu60(0x10E, 1);
   unit_poll();
   CHECK(M.heater_enabled);
@@ -1338,14 +1344,43 @@ static void test_unit(void) {
   unit_poll();
   val_set(V_REGULATION, REG_EXTRACT);
   CHECK(MB.hold[0x114] == REG_EXTRACT && coil(0x114) && MB.hold[0x136] == 1 && coil(0x136));
+  // supply air too cold, 0x0C2 is min + 6
+  cu60(0x00D, 160);
+  cu60(0x0C2, 166);
+  unit_poll();
+  CHECK(M.supply_min == 160 && M.setpoint_now == 190);
 
-  // The CU60's own block changes the week program setting. A stock panel on the bus writes 0x117 as its periods
-  // start and end, and its relays don't.
+  // not the master, the ESP writes the setpoint, or we do while it's offline
+  cu60(0x00F, 1);
+  unit_poll();
+  M.esp_online = true;
+  val_set(V_SETPOINT, 215);
+  CHECK(!coil(0x00C));
+  M.esp_online = false;
+  val_set(V_SETPOINT, 220);
+  CHECK(coil(0x00C) && MB.hold[0x00C] == 220);
+  relay(0x00C, 210);
+  unit_poll();
+  CHECK(M.setpoint == 210);
+
+  // EC fans come from the DIP switches, not the menu
+  cu60(0x112, 0);
+  unit_poll();
+  val_set(V_FEAT_FIRST + FEAT_EC_FANS, 0);
+  CHECK(HAS(FEAT_EC_FANS));
+
+  // the CU60's block and another panel like us change the week program, a stock panel's relays don't
   val_set(V_WEEK_PROGRAM, 1);
   relay(0x117, 1);
   cu60(0x117, 0);
   unit_poll();
   CHECK(!M.week_program);
+  val_set(V_WEEK_PROGRAM, 1);
+  relay(0x117, 1);
+  relay(0x117, 0);
+  unit_poll();
+  CHECK(!M.week_program);
+  cu60(0x099, 0x0712);  // stock 7.18 at address 1
   val_set(V_WEEK_PROGRAM, 1);
   relay(0x117, 1);
   relay(0x117, 0);
@@ -1419,6 +1454,13 @@ static void test_link(void) {
   wakes = 0;
   number_from_esp(K_SHOW_VIEW, VIEW_FLOW, false);
   CHECK(views == 1 && shown_view == VIEW_FLOW && !input_idle() && wakes == 1);
+  // the setpoint goes to the ESP, but not while it's offline
+  M.esp_online = false;
+  val_set(V_SETPOINT, 230);
+  CHECK(!queued(K_SETPOINT, 230));
+  M.esp_online = true;
+  val_set(V_SETPOINT, 235);
+  CHECK(queued(K_SETPOINT, 235));
   // A picture's last ack waits while the queue is full, the ESP hasn't heard the panel's answers
   while (plink_room(link_queue()))
     link_action(A_NONE);

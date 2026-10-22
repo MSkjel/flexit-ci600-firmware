@@ -174,6 +174,7 @@
   X(MAX_SUPPLY_AIR, "Max supply air") \
   X(MAX_SUPPLY_AIR_HELP, "Supply air never goes above this.") \
   X(HEATER_HELP, "Allow the heating element to run.") \
+  X(HEATER_KEPT_OFF, "The unit didn't turn the heater on") \
   X(COOLING, "Cooling") \
   X(COOLING_HELP, "Allow the cooler to run.") \
   X(SENSORS, "Sensors") \
@@ -375,10 +376,12 @@
   X(EQUIP_ESP_HELP, "An ESP at address 1 runs the comfort automations and shares data with this panel. Without one, " \
                     "set the panel address to 1.") \
   X(EQUIP_EC_FANS, "EC fans") \
-  X(EQUIP_EC_FANS_HELP, "Variable-speed fans, so each fan speed can be set as a percentage.") \
+  X(EQUIP_EC_FANS_HELP, "Variable-speed fans, so each fan speed can be set as a percentage. Set by a DIP switch in " \
+                        "the unit.") \
   X(EQUIP_WATER_HEATER, "Water heater") \
   X(EQUIP_WATER_HEATER_HELP, \
-    "A water heating coil instead of an electric heater. Adds the return water sensor and frost protection.") \
+    "A water heating coil instead of an electric heater. Adds the return water sensor and frost protection. Set " \
+    "by a DIP switch in the unit.") \
   X(EQUIP_COOLING_HELP, "A cooler is connected to the unit.") \
   X(VENTILATION_HELP, "Fan speed, boost, and how fast the fans run at each speed.") \
   X(TEMPERATURE_HELP, "The setpoint, heating and cooling, and what the sensors measure.") \

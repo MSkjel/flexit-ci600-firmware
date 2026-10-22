@@ -21,6 +21,8 @@
 #define R_CLOCK_HI 0x094
 #define R_CLOCK_LO 0x095
 #define R_CU60_VERSION 0x097
+#define R_PANEL1_VERSION 0x099  // input register 3 of each panel at discovery, 0x099/0x09B/0x09D. Stock is 7.x
+#define R_PANEL3_VERSION 0x09D
 #define R_SPARE_FIRST 0x09E  // the old link mailbox and the stock panel's language
 #define R_SPARE_LAST 0x0A4
 #define R_SETTINGS_LAST 0x0BD  // 0x000..0x0BD are the settings the CU60 sends when it starts
@@ -174,15 +176,20 @@ void plat_period_set(void) {
 static void read_runtime(void) {
   // The CU60 only sends the word that changed, the high words only come when it starts. Until then the
   // counters are the copy kept in flash, see unit_cached().
-  if (!mb_written(R_RT_STOP) || !mb_written(R_RT_TOTAL))
+  uint16_t h16 = U(R_ST_TOTAL_H);  // 16-bit hours, used until the seconds counter is there
+  if (!mb_written(R_RT_STOP) || !mb_written(R_RT_TOTAL)) {
+    M.h_total = h16;
     return;
+  }
   M.h_stop = U32(R_RT_STOP) / 3600;
   M.h_min = U32(R_RT_MIN) / 3600;
   M.h_normal = U32(R_RT_NORMAL) / 3600;
   M.h_max = U32(R_RT_MAX) / 3600;
   M.h_rotor = U32(R_RT_ROTOR) / 3600;
   M.h_heater = U32(R_RT_HEATER) / 3600;
-  M.h_total = U32(R_RT_TOTAL) / 3600;
+  // A high word that changed while we weren't listening is lost, the CU60's 16-bit hours correct the total.
+  uint32_t h = U32(R_RT_TOTAL) / 3600;
+  M.h_total = mb_written(R_ST_TOTAL_H) ? h + (uint32_t) (int16_t) (h16 - (uint16_t) h) : h;
 }
 
 static void fan_outputs(void) { M.fan_ext = M.mode_now >= MODE_MIN ? M.fan_pct[M.mode_now - 1][1] : 0; }
@@ -200,6 +207,15 @@ static uint8_t clock_keys_s;   // seconds left of CLOCK_UNDONE_S after the clock
 // The CU60 starts a week program period once its clock is past the start, not at it. Minutes count from :01
 // and go out then, as the stock panel's every-second writes do.
 static uint32_t minute_of(uint32_t t) { return (t - 1) / 60; }
+
+// A stock panel on the bus, the CU60 keeps what each one said at discovery
+_Static_assert(FW_MAJOR != 7, "we'd pass for a stock panel");
+static bool stock_panel(void) {
+  for (uint16_t r = R_PANEL1_VERSION; r <= R_PANEL3_VERSION; r += 2)
+    if (U(r) >> 8 == 7)
+      return true;
+  return false;
+}
 
 static void reg_changed(uint16_t r) {
   int16_t v = MB.hold[r];
@@ -249,14 +265,15 @@ static void reg_changed(uint16_t r) {
         M.setpoint = v;  // a starting value for the editor until the real setpoint arrives
       break;
     case R_ST_SETPOINT_NOW:
-      M.setpoint_now = v;
+      // In extract regulation it's min + 6 or max - 6 while the supply air is out of bounds, not a target
+      if (M.regulation != REG_EXTRACT || (v != M.supply_min + 6 && v != M.supply_max - 6))
+        M.setpoint_now = v;
       break;
     case R_ST_HEATER:
       val_set_bus(V_HEATER, v != 0);  // what the unit made of the panels' flags, see plat_value_changed()
       break;
     case R_ST_TOTAL_H:
-      if (!mb_written(R_RT_TOTAL))  // 16-bit hours, used until the seconds counter is there
-        M.h_total = (uint16_t) v;
+      read_runtime();
       break;
     case R_CU60_VERSION:
       M.cu60_version = (uint16_t) v;
@@ -293,8 +310,8 @@ static void reg_changed(uint16_t r) {
   // settings kept in the CU60 like the fan % and setpoint, see values.h
   val_t id = val_by_cu60(r);
   // Our heater flag is one vote of three, R_ST_HEATER has the result. A stock panel writes 0x117 as each of its
-  // periods starts and ends, so a relay of it is another panel's and not a change of our setting.
-  if (id == V_HEATER || (id == V_WEEK_PROGRAM && mb_relayed(r)))
+  // periods starts and ends, so with one on the bus a relay of it isn't a change of our setting.
+  if (id == V_HEATER || (id == V_WEEK_PROGRAM && mb_relayed(r) && stock_panel()))
     id = V_NONE;
   if (id != V_NONE) {
     val_set_bus(id, v / val_def(id).scale);
@@ -393,6 +410,7 @@ static uint16_t boost_seen;  // R_ST_BOOST_S a second ago
 static uint8_t boost_stuck_s;
 #define HEATER_SETTLE_MS 2000  // for the CU60 to pick our flag up and say what it made of it
 static uint32_t heater_ms;     // when the heater was last switched on the panel
+static bool heater_asked;      // switched on there, and the unit hasn't said yet
 
 void unit_second(void) {
   static uint32_t frames_seen;
@@ -418,8 +436,12 @@ void unit_second(void) {
     boost_stuck_s = 0;
   boost_seen = U(R_ST_BOOST_S);
   // Our heater flag may make no difference, the unit has no heater say. The toggle shows what it decided.
-  if (mb_written(R_ST_HEATER) && board_ms() - heater_ms > HEATER_SETTLE_MS)
+  if (mb_written(R_ST_HEATER) && board_ms() - heater_ms > HEATER_SETTLE_MS) {
+    if (heater_asked && !U(R_ST_HEATER))
+      ui_toast(IC_FIRE, S_HEATER_KEPT_OFF);
+    heater_asked = false;
     val_set_bus(V_HEATER, U(R_ST_HEATER) != 0);
+  }
   // Each new minute, whatever our address. The ESP never writes the clock and there may be no stock panel.
   uint32_t t = clock_to_unix();
   if (t > SECS_1970_TO_2000 && minute_of(t) != clock_minute)
@@ -449,6 +471,7 @@ void plat_value_changed(val_t v) {
   if (v == V_HEATER) {
     // The CU60 ORs the flags of the panels present, so off has to clear every panel's
     heater_ms = board_ms();
+    heater_asked = M.heater_enabled;
     if (M.heater_enabled)
       bus_write(val_cu60_reg(v), 1);
     else
@@ -456,8 +479,9 @@ void plat_value_changed(val_t v) {
         bus_write(r, 0);
     return;
   }
-  // We're not the master, so the CU60 would just undo it. The ESP is, and gets the change over the link.
-  if ((d.flags & VF_MASTER) && !is_master() && HAS(FEAT_ESP))
+  // We're not the master, so the CU60 would just undo it. The ESP is, and gets the change over the link. While
+  // it's offline we write it anyway, and the CU60's relay puts the value back on screen.
+  if ((d.flags & VF_MASTER) && !is_master() && HAS(FEAT_ESP) && M.esp_online)
     return;
   bus_write(val_cu60_reg(v), (int16_t) (val_get(v) * d.scale));
   if (v >= V_FAN_MIN_SUP && v <= V_FAN_MAX_EXT)

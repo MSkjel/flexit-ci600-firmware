@@ -28,8 +28,12 @@ val_def_t val_def(val_t v) {
   }
   if (v > V_NONE && v < V_FEAT_FIRST)
     return DEFS[v];
-  if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST)
-    return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = VF_PANEL | VF_LAYOUT, .scale = 1};
+  if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST) {
+    // the unit's DIP switches say which fans and heater it has, see unit.c
+    bool dip = v == V_FEAT_FIRST + FEAT_EC_FANS || v == V_FEAT_FIRST + FEAT_WATER_HEATER;
+    uint16_t fl = VF_PANEL | VF_LAYOUT | (dip ? VF_RO : 0);
+    return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = fl, .scale = 1};
+  }
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST) {
     const item_t *it = &M.items[v - V_ITEM_FIRST];
     bool ro = it->type == ITEM_SENSOR || it->type == ITEM_TEXT || (it->flags & ITEMF_RO);

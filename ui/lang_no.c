@@ -172,6 +172,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_MAX_SUPPLY_AIR] = "Maks tilluft",
     [S_MAX_SUPPLY_AIR_HELP] = "Tilluften går aldri over dette.",
     [S_HEATER_HELP] = "La varmeelementet gå.",
+    [S_HEATER_KEPT_OFF] = "Aggregatet slo ikke på varmen",
     [S_COOLING] = "Kjøling",
     [S_COOLING_HELP] = "La kjøleren gå.",
     [S_SENSORS] = "Følere",
@@ -371,9 +372,11 @@ const char *const LANG_NO[S_COUNT] = {
     [S_EQUIP_ESP_HELP] = "En ESP på adresse 1 kjører komfortautomatiseringene og deler data med dette panelet. Uten "
                          "en, sett paneladressen til 1.",
     [S_EQUIP_EC_FANS] = "EC-vifter",
-    [S_EQUIP_EC_FANS_HELP] = "Vifter med trinnløs hastighet, så hvert trinn kan settes i prosent.",
+    [S_EQUIP_EC_FANS_HELP] =
+        "Vifter med trinnløs hastighet, så hvert trinn kan settes i prosent. Settes med en DIP-bryter i aggregatet.",
     [S_EQUIP_WATER_HEATER] = "Vannbatteri",
-    [S_EQUIP_WATER_HEATER_HELP] = "Vannbatteri i stedet for elektrisk varme. Gir returvannsføler og frostsikring.",
+    [S_EQUIP_WATER_HEATER_HELP] = "Vannbatteri i stedet for elektrisk varme. Gir returvannsføler og frostsikring. "
+                                  "Settes med en DIP-bryter i aggregatet.",
     [S_EQUIP_COOLING_HELP] = "Aggregatet har kjøling koblet til.",
     [S_VENTILATION_HELP] = "Viftehastighet, forsering og hvor fort viftene går på hvert trinn.",
     [S_TEMPERATURE_HELP] = "Ønsket temperatur, varme og kjøling, og hva følerne måler.",

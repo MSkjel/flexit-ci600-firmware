@@ -87,7 +87,8 @@ OK on the home screen opens the menu.
 - **System > Panel address:** 1 without an ESP, 3 if the ESP is at 1. The CU60 only runs the week program and
   the boost timer if something answers at 1, and only takes the setpoint and NORMAL fan speeds from the lowest
   address. Restart the unit after changing it.
-- **System > Equipment:** make it match your unit (ESP, EC fans, water heater, cooling).
+- **System > Equipment:** make it match your unit (ESP, cooling). EC fans and water heater come from the unit's
+  DIP switches.
 - **Display:** language and theme.
 - **Date and time,** unless the ESP sets it.
 

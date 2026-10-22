@@ -285,7 +285,8 @@ void link_second(void) {
 }
 
 // User changed v. Of the CU60 values we only send VF_MASTER ones. The CU60 takes those from the lowest panel
-// address only, so the ESP may have to write them for us. It sees the other CU60 writes on the bus.
+// address only, so the ESP may have to write them for us. It sees the other CU60 writes on the bus. Not while
+// it's offline, it would write them late.
 void link_value_changed(val_t v) {
   val_def_t d = val_def(v);
   if (v == V_FEAT_FIRST + FEAT_ESP && HAS(FEAT_ESP)) {
@@ -294,7 +295,7 @@ void link_value_changed(val_t v) {
   }
   if (!(d.flags & VF_LINK_R))
     return;
-  if ((d.flags & VF_CU60) && !(d.flags & VF_MASTER))
+  if ((d.flags & VF_CU60) && (!(d.flags & VF_MASTER) || !M.esp_online))
     return;
   link_send(d.key, (uint32_t) val_get(v));
 }
