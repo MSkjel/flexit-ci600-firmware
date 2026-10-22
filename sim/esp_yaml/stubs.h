@@ -263,6 +263,11 @@ struct Time {
   ESPTime now() { return t; }
 };
 
+namespace network {
+inline bool up = true;  // WiFi connected
+inline bool is_connected() { return up; }
+}  // namespace network
+
 struct Color {
   uint8_t r, g, b, w = 255;  // w: alpha
 };

@@ -931,10 +931,14 @@ int main(int argc, char **argv) {
     std::stringstream body;
     body << in.rdbuf();
     flexit_panel_time.t.timestamp = 1792409400;  // 2026-10-19 11:30 UTC, half an hour into the first forecast hour
+    tz_offset_s = 7200;                          // Oslo in summer time
     met::setup(59.9139, 10.7522, "weather", "auto", "auto");
     CHECK(!strcmp(met::url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
               met::modified.empty() && met::due(),
           "first request: %s, If-Modified-Since '%s'", met::url, met::modified.c_str());
+    network::up = false;
+    CHECK(!met::due(), "asks MET Norway while offline");
+    network::up = true;
     std::string status;
     met::on_status = [&](const std::string &s) { status = s; };
     met::unreachable();  // right after boot the network may not be up: try again at the next check
@@ -996,6 +1000,20 @@ int main(int argc, char **argv) {
     CHECK(met::http_date("Fri, 31 Dec 1999 23:59:59 GMT") == 946684799 && !met::http_date("soon") &&
               !met::http_date("Mon, 19 Foo 2026 11:34:38 GMT"),
           "HTTP dates");
+    // UTC+13, already the 1st of June (summer) at noon UTC on the 31st of May
+    ESPTime was = flexit_panel_time.t;
+    flexit_panel_time.t = {2026, 6, 1, 1, 0, 0};
+    flexit_panel_time.t.timestamp = 1780228800;  // 2026-05-31 12:00 UTC
+    tz_offset_s = 13 * 3600;
+    met::redraw();
+    static met::Scene want;
+    met::build(want, met::weather, met::lat, met::lon, 1780228800, false, 13 * 3600, met::options);
+    CHECK(!memcmp(&want, &met::scene, sizeof want), "UTC+13 drawn for the day before");
+    flexit_panel_time.t = was;
+    tz_offset_s = 7200;
+    met::redraw();
+    CHECK(picture("weather, back in Oslo", 3000) >= 0, "weather picture not shown again");
+    tz_offset_s = 0;
   }
 
   step("clearing the picture while an animation is on its way");
