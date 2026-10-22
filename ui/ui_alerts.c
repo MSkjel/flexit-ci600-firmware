@@ -36,6 +36,13 @@ static int alarm_code(uint8_t code) { return code < LEN(ALARM_TXT) ? code : 0; }
 
 const char *alarm_text(uint8_t code) { return tr(ALARM_TXT[alarm_code(code)]); }
 
+const alarm_t *alarm_find(intptr_t code) {
+  for (int i = 0; i < M.n_alarms; i++)
+    if (M.alarms[i].code == code)
+      return &M.alarms[i];
+  return NULL;
+}
+
 static lv_color_t alarm_color(uint8_t code) { return code == ALARM_FILTER ? T.warn : T.err; }
 
 // Alert card with border and badge in colour c, and the kind of message next to the badge
@@ -47,10 +54,9 @@ static lv_obj_t *alert_card(lv_obj_t *b, int x, int y, int w, int h, lv_color_t 
   return card;
 }
 
-// ---------------------------------------------------------------- alarm pop-up
+// ---------------------------------------------------------------- alarm pop-up (arg = alarm code)
 static void popup_build(lv_obj_t *b, intptr_t arg) {
-  (void) arg;
-  const alarm_t *a = &M.alarms[0];
+  const alarm_t *a = alarm_find(arg);
   bool filter = a->code == ALARM_FILTER;
   lv_color_t c = alarm_color(a->code);
   lv_obj_t *card = alert_card(b, 12, 10, 296, 176, c, 52, &icons_32, filter ? IC_FILTER : IC_ALERT,
@@ -79,7 +85,7 @@ static void popup_build(lv_obj_t *b, intptr_t arg) {
 static bool popup_key(int k) {
   if (k != KEY_OK)
     return false;
-  bool filter = M.alarms[0].code == ALARM_FILTER;
+  bool filter = ui_frame()->arg == ALARM_FILTER;
   ui_pop();
   if (filter)
     open_filter_menu();

@@ -206,6 +206,31 @@ void ui_replace(const screen_t *s, intptr_t arg) {
   rebuild_visible();
 }
 
+static frame_t *find(const screen_t *s) {  // the frame of s, NULL if it isn't open
+  for (int i = 0; i < depth; i++)
+    if (stack[i].s == s)
+      return &stack[i];
+  return NULL;
+}
+
+// Takes overlay s and any help over it off the stack wherever they are, the rest stay built
+static void remove_overlay(const screen_t *s) {
+  int n = 0;
+  bool gone = false;
+  for (int i = 0; i < depth; i++) {
+    gone = stack[i].s == s || (gone && stack[i].s == &SCR_HELP);
+    if (!gone)
+      stack[n++] = stack[i];
+    else if (stack[i].root)
+      lv_obj_del(stack[i].root);
+  }
+  if (n == depth)
+    return;
+  depth = n;
+  apply_bars();
+  ui_refresh();
+}
+
 void ui_go_home(void) {
   drop_overlays();
   depth = 1;
@@ -395,6 +420,11 @@ void ui_key(int key) {
     ui_push(&SCR_HELP, top->help);
 }
 
+int ui_ok_led(uint32_t ms) {
+  const screen_t *s = ui_top();
+  return s && s->ok_led ? s->ok_led(ms) : -1;
+}
+
 void ui_refresh(void) {
   if (!ready || rebuild_due)
     return;  // the rebuild refreshes
@@ -414,17 +444,20 @@ void ui_refresh(void) {
 void ui_second(void) {
   if (theme_now() != shown_theme)
     ui_rebuild();  // night mode started or ended and has its own theme
-  if (!M.n_alarms && stack[depth - 1].s == &SCR_ALARM_POPUP)
-    ui_pop();  // its alarms went away
-  if (alarm_new_pops() && stack[depth - 1].s != &SCR_ALARM_POPUP) {
+  int code = alarm_new_pops();
+  if (code) {
+    frame_t *f = find(&SCR_ALARM_POPUP);
+    const alarm_t *shown = f ? alarm_find(f->arg) : NULL;
+    if (shown && shown < alarm_find(code))
+      code = shown->code;              // the one shown is more serious and stays
+    remove_overlay(&SCR_ALARM_POPUP);  // one pop-up, on top, even if it was under the screensaver
     input_activity();
-    ui_push(&SCR_ALARM_POPUP, 0);
+    ui_push(&SCR_ALARM_POPUP, code);
   }
   if (M.note_new) {
     M.note_new = false;
+    remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
     input_activity();
-    if (stack[depth - 1].s == &SCR_NOTE)
-      ui_pop();  // the new message replaces the one shown
     ui_push(&SCR_NOTE, 0);
   }
   ui_refresh();
@@ -445,8 +478,18 @@ void ui_layout_changed(void) {
     rebuild_due = true;
 }
 
-// Rebuilds the alarm list and pop-up in rebuild_check() if they're open, also under a help or a message
+// Rebuilds the alarm list and pop-up in rebuild_check() if they're open, also under a help or a message.
+// A pop-up whose alarm is gone switches to the next alarm that pops up, or closes
 void ui_alarms_changed(void) {
+  frame_t *f = find(&SCR_ALARM_POPUP);
+  if (f && !alarm_find(f->arg)) {
+    f->arg = 0;
+    for (int i = 0; i < M.n_alarms && !f->arg; i++)
+      if (alarm_pops(M.alarms[i].code))
+        f->arg = M.alarms[i].code;
+    if (!f->arg)
+      remove_overlay(&SCR_ALARM_POPUP);
+  }
   for (int i = 0; i < depth; i++)
     if (stack[i].s == &SCR_ALARMS || stack[i].s == &SCR_ALARM_POPUP)
       rebuild_due = true;

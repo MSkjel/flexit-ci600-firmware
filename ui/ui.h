@@ -33,6 +33,8 @@ void ui_idle(void);     // no keys for a while, back to the start view and the s
 void ui_wake(void);     // leaving idle, closes the screensaver
 void ui_refresh(void);  // model changed
 void ui_second(void);   // 1 Hz: night theme, new alarms and messages, redraw
+// The OK light as the top screen wants it, -1 for its usual meaning
+int ui_ok_led(uint32_t ms);
 
 // ---------------------------------------------------------------- UI internals
 // Theme colours. The hex values for each theme are in ui_core.c.
@@ -63,6 +65,7 @@ typedef struct screen {
   void (*update)(void);                         // refreshes the values, on model changes and every second
   bool (*key)(int key);                         // true if it handled the key
   const char *(*selected)(void);                // text of the selected row, for the simulator's checks
+  bool (*ok_led)(uint32_t ms);                  // takes over the OK light while on top
 } screen_t;
 
 // One entry on the screen stack
@@ -143,7 +146,8 @@ extern uint8_t ui_screen_mem[UI_SCREEN_MEM];
 
 bool ui_has(uint32_t need);  // true if all features in the mask are installed
 
-const char *alarm_text(uint8_t code);  // name of a CU60 alarm code
+const char *alarm_text(uint8_t code);      // name of a CU60 alarm code
+const alarm_t *alarm_find(intptr_t code);  // the active alarm with this code, NULL if none
 
 // screens
 enum { ALARMS_NOW, ALARMS_HISTORY };       // arg for SCR_ALARMS

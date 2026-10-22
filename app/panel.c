@@ -1,6 +1,7 @@
 // see panel.h
 #include "panel.h"
 #include "model.h"
+#include "ui.h"
 #include <string.h>
 
 const uint16_t TILE_DEFAULTS[4] = {TILE_OUTDOOR, TILE_SUPPLY, TILE_ROTOR, TILE_FILTER};
@@ -86,14 +87,17 @@ int filter_life(void) {
   return life < 0 ? 0 : life;
 }
 
-bool alarm_new_pops(void) {
+bool alarm_pops(int code) {
+  return M.alarm_popups != POPUPS_OFF && (code != ALARM_FILTER || M.alarm_popups == POPUPS_ALL);
+}
+
+int alarm_new_pops(void) {
   static uint8_t before[LEN(M.alarms)], n_before;
-  bool pop = false;
-  for (int i = 0; i < M.n_alarms; i++) {
+  int pop = 0;
+  for (int i = 0; i < M.n_alarms && !pop; i++) {  // the first is the most serious
     uint8_t c = M.alarms[i].code;
-    bool seen = memchr(before, c, n_before) != NULL;
-    if (!seen && M.alarm_popups != POPUPS_OFF && (c != ALARM_FILTER || M.alarm_popups == POPUPS_ALL))
-      pop = true;
+    if (!memchr(before, c, n_before) && alarm_pops(c))
+      pop = c;
   }
   n_before = M.n_alarms;
   for (int i = 0; i < M.n_alarms; i++)
@@ -125,4 +129,7 @@ void panel_leds(bool out[3], uint32_t ms) {
     }
     out[i] = want[i];
   }
+  int screen = ui_ok_led(ms);
+  if (screen >= 0)
+    out[2] = screen;
 }

@@ -223,6 +223,8 @@ void plat_action(int a) {
     M.n_alarms = 0;
   if (a == A_CLEAR_HISTORY)
     M.n_history = 0;
+  if (a == A_RESET_ALARMS || a == A_CLEAR_HISTORY)
+    ui_alarms_changed();  // as read_alarms() and read_log() do on the unit
   if (a == A_RESET_PANEL)
     panel_defaults();  // the panel restarts after this
 }

@@ -198,6 +198,11 @@ static void checks(void) {
         "the second message isn't shown");
   key(KEY_OK);
   check(ui_top() == &SCR_HOME, "one OK didn't close the message");
+  note("Washing machine done");
+  key(KEY_HELP);
+  note("Front door left open");
+  key(KEY_OK);
+  check(ui_top() == &SCR_HOME, "the first message's help stayed behind");
 
   // keys pressed while locked show one toast at a time
   fresh();
@@ -247,7 +252,7 @@ static void checks(void) {
   fresh();
   M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
   M.n_alarms = 1;
-  ui_push(&SCR_ALARM_POPUP, 0);
+  ui_push(&SCR_ALARM_POPUP, 9);
   M.alarms[0] = (alarm_t) {10, 18, 10, 8, 14, true};
   ui_alarms_changed();
   run(30);
@@ -256,6 +261,83 @@ static void checks(void) {
   ui_alarms_changed();
   ui_second();
   check(ui_top() != &SCR_ALARM_POPUP, "the alarm pop-up stayed after the alarms went");
+
+  // the pop-up shows the new alarm, also under the screensaver, and doesn't come back on wake
+  fresh();
+  ui_second();
+  M.alarms[0] = (alarm_t) {4, 18, 10, 12, 51, true};
+  M.n_alarms = 1;
+  ui_alarms_changed();
+  ui_second();
+  key(KEY_BACK);
+  M.alarms[1] = (alarm_t) {9, 18, 10, 13, 5, true};
+  M.n_alarms = 2;
+  ui_alarms_changed();
+  ui_second();
+  check(shows(lv_layer_top(), alarm_text(9)) && !shows(lv_layer_top(), alarm_text(4)),
+        "the alarm pop-up didn't show the new alarm");
+  M.idle_after = 0;  // 15 s
+  seconds(16);
+  check(ui_top() == &SCR_SAVER, "the screensaver didn't cover the alarm pop-up");
+  M.alarms[2] = M.alarms[1];
+  M.alarms[1] = (alarm_t) {7, 18, 10, 13, 20, true};
+  M.n_alarms = 3;
+  ui_alarms_changed();
+  ui_second();
+  run(30);
+  check(shows(lv_layer_top(), alarm_text(7)) && !shows(lv_layer_top(), alarm_text(9)),
+        "the alarm pop-up didn't show the newer alarm");
+  key(KEY_BACK);
+  check(ui_top() == &SCR_HOME, "a new alarm under the screensaver stacked a second pop-up");
+  M.alarms[3] = (alarm_t) {8, 18, 10, 13, 30, true};
+  M.n_alarms = 4;
+  ui_alarms_changed();
+  ui_second();
+  seconds(16);
+  M.n_alarms = 0;
+  ui_alarms_changed();
+  tap(KEY_OK);  // only wakes it
+  run(30);
+  check(ui_top() == &SCR_HOME && !shows(lv_layer_top(), alarm_text(8)), "the gone alarm's pop-up came back on wake");
+  ui_second();
+
+  // only a more serious alarm takes over the pop-up, or the next one once the shown alarm goes
+  fresh();
+  M.alarms[0] = (alarm_t) {2, 18, 10, 2, 5, true};
+  M.n_alarms = 1;
+  ui_alarms_changed();
+  ui_second();
+  M.alarms[1] = (alarm_t) {9, 18, 10, 2, 10, true};
+  M.alarms[2] = (alarm_t) {ALARM_FILTER, 18, 10, 2, 15, true};
+  M.n_alarms = 3;
+  ui_alarms_changed();
+  ui_second();
+  run(30);
+  check(shows(lv_layer_top(), alarm_text(2)), "a less serious alarm took over the pop-up");
+  key(KEY_HELP);
+  memmove(&M.alarms[1], &M.alarms[0], 3 * sizeof *M.alarms);
+  M.alarms[0] = (alarm_t) {1, 18, 10, 2, 20, true};
+  M.n_alarms = 4;
+  ui_alarms_changed();
+  ui_second();
+  run(30);
+  check(ui_top() == &SCR_ALARM_POPUP && shows(lv_layer_top(), alarm_text(1)),
+        "a more serious alarm didn't take over the pop-up");
+  M.alarms[0] = M.alarms[2];
+  M.alarms[1] = M.alarms[3];
+  M.n_alarms = 2;
+  ui_alarms_changed();
+  run(30);
+  check(ui_top() == &SCR_ALARM_POPUP && shows(lv_layer_top(), alarm_text(9)),
+        "the next alarm didn't take over the pop-up once its own went");
+  M.alarm_popups = POPUPS_NOT_FILTER;
+  M.alarms[0] = M.alarms[1];
+  M.n_alarms = 1;
+  ui_alarms_changed();
+  run(30);
+  check(ui_top() == &SCR_HOME, "the pop-up showed the filter reminder, or a help stayed behind");
+  M.n_alarms = 0;
+  ui_second();
 
   // read-only ESP numbers, buttons and toggles do nothing on OK, and a toggle shows On or Off, not a switch
   fresh();
@@ -301,10 +383,11 @@ static void checks(void) {
   key(KEY_OK);
   M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
   M.n_alarms = 1;
-  ui_push(&SCR_ALARM_POPUP, 0);
+  ui_push(&SCR_ALARM_POPUP, 9);
   ui_idle();
   check(ui_top() == &SCR_ALARM_POPUP, "idle closed an unread alarm pop-up");
   M.n_alarms = 0;
+  ui_alarms_changed();
   M.go_home = false;
 
   // an ESP number with min == max opens, and the editor closes when the ESP restarts and forgets its item
@@ -322,6 +405,34 @@ static void checks(void) {
   ui_layout_changed();
   run(150);
   check(ui_top() != &SCR_EDIT, "the editor stayed open on an item the ESP forgot");
+}
+
+// Samples the lights for ms and writes the OK light's blinks to out as Morse: . and - for on, a space between
+// characters and | for a longer pause. False if the alarm or filter light changed meanwhile.
+static bool ok_light(char *out, size_t n, int ms) {
+  bool l[3], first[3], same = true;
+  panel_leds(first, now);
+  bool was = first[2];
+  int len = 0;  // ms the OK light has been as it is
+  size_t k = 0;
+  out[0] = 0;
+  for (int t = 0; t < ms; t += 5) {
+    panel_leds(l, now);
+    same &= l[0] == first[0] && l[1] == first[1];
+    if (l[2] != was) {
+      int u = (len + 60) / 120;  // dots
+      const char *m = was ? (u == 1 ? "." : u == 3 ? "-" : "?") : u == 1 ? "" : u == 3 ? " " : u >= 7 ? "|" : "?";
+      if (k + strlen(m) < n) {
+        strcpy(out + k, m);
+        k += strlen(m);
+      }
+      was = l[2];
+      len = 0;
+    }
+    len += 5;
+    run(5);
+  }
+  return same;
 }
 
 static void press(const int *k, int n) {
@@ -357,8 +468,25 @@ static void notices(void) {
   check(!on_screen(lv_scr_act(), "CI600"), "the notices didn't go up");
   run(20000);
   check(on_screen(lv_scr_act(), "CI600"), "the notices didn't come round again");
+
+  // the OK light spells the version, the filter light goes on as before
+  M.alarms[0] = (alarm_t) {.code = ALARM_FILTER, .active = true};
+  M.n_alarms = 1;
+  char seen[64];
+  bool l[3];
+  check(ok_light(seen, sizeof seen, 16000), "the notices changed the filter light");
+  check(!strncmp(seen, "----- .-.-.- .---- .-.-.- -----|-", 33), "the OK light doesn't spell 0.1.0");
+  // under an alarm pop-up and after leaving, the OK light is as usual
+  M.alarms[0].code = 9;
+  ui_push(&SCR_ALARM_POPUP, 9);
+  panel_leds(l, now);
+  check(ok_light(seen, sizeof seen, 1000) && !seen[0] && l[0] && !l[2], "the OK light blinks under an alarm pop-up");
+  ui_pop();
+  M.n_alarms = 0;
   key(KEY_BACK);
   check(ui_top() == &SCR_INFO && !strcmp(ui_title(), tr(S_ABOUT)), "BACK didn't leave the notices for About");
+  panel_leds(l, now);
+  check(ok_light(seen, sizeof seen, 2000) && !seen[0] && l[2], "the OK light isn't back on after the notices");
 }
 
 // For --perf. Repainted pixels are what cost time on the panel.

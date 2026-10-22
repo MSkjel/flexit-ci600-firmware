@@ -216,6 +216,8 @@ typedef struct {
   int16_t y[NOTICE_LABELS], h[NOTICE_LABELS];  // h 0 = free
   int16_t next_y;                              // where the space above the next line starts
   uint8_t next;                                // NOTICES[next] comes next
+  bool led_started;
+  uint32_t led_from;  // ms
 } notices_t;
 SCREEN_STATE(notices_t, notices);
 
@@ -287,6 +289,37 @@ static void notices_step(lv_timer_t *t) {
   notices_fill(lv_obj_get_parent(notices->l[0]));
 }
 
+#define DOT_MS 120
+#define MORSE_PAUSE 14  // dots dark after the gap behind the last character, 2 s in all
+
+// Walks v in Morse to dot u, *on if the light is on there. Returns the length in dots.
+static uint32_t morse(const char *v, uint32_t u, bool *on) {
+  static const char *const DIGITS[10] = {"-----", ".----", "..---", "...--", "....-",
+                                         ".....", "-....", "--...", "---..", "----."};
+  uint32_t t = 0;
+  *on = false;
+  for (; *v; v++, t += 2)  // 3 between characters, one of them already after the last element
+    for (const char *m = *v == '.' ? ".-.-.-" : DIGITS[*v - '0']; *m; m++) {
+      uint32_t n = *m == '-' ? 3 : 1;
+      *on |= u >= t && u < t + n;
+      t += n + 1;
+    }
+  return t;
+}
+
+// The version in Morse, over and over from the first call
+static bool notices_led(uint32_t ms) {
+  if (!notices->led_started) {
+    notices->led_started = true;
+    notices->led_from = ms;
+  }
+  char fw[12];
+  bool on;
+  uint32_t len = morse(fw_text(fw), UINT32_MAX, &on) + MORSE_PAUSE;
+  morse(fw, (ms - notices->led_from) / DOT_MS % len, &on);
+  return on;
+}
+
 static void notices_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
   memset(notices, 0, sizeof *notices);
@@ -297,4 +330,4 @@ static void notices_build(lv_obj_t *b, intptr_t arg) {
 
 static bool notices_key(int k) { return k != KEY_BACK; }
 
-const screen_t SCR_NOTICES = {.flags = SF_NOBARS, .build = notices_build, .key = notices_key};
+const screen_t SCR_NOTICES = {.flags = SF_NOBARS, .build = notices_build, .key = notices_key, .ok_led = notices_led};
