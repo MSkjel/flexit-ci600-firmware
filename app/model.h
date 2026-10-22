@@ -10,10 +10,7 @@
 #define T_NONE INT16_MIN      // no sensor / unknown
 #define TREND_NONE INT16_MAX  // no sample yet (LVGL's LV_CHART_POINT_NONE)
 #define TREND_LEN 96          // 24 h at 15 min
-#define ITEM_LABEL 20         // buffer sizes, including the terminating 0
-#define ITEM_UNIT 8
-#define ITEM_STATE 12
-#define N_TRENDS 4  // ESP sensors the panel can keep a 24 h trend of
+#define N_TRENDS 4            // ESP sensors the panel can keep a 24 h trend of
 #define NOTE_LEN (PLINK_TEXT_MAX + 1)
 
 enum { TR_OUTDOOR, TR_SUPPLY, TR_EXTRACT, TR_ROOM, TR_N };        // temperature trend series, M.trend[]

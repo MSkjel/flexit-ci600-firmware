@@ -556,6 +556,26 @@ int main(int argc, char **argv) {
               pn_item_level(item("ppm"), 3) == 12000 && (q.flags & ITEMF_LEVELS),
           "ppm with 2 decimals: %d decimals, value %d, levels %d %d", q.dec, q.value, pn_item_level(item("ppm"), 2),
           pn_item_level(item("ppm"), 3));
+    // the step goes as 16 bits, the value as 32
+    int big = Item("big", ITEM_NUMBER).view(false).menu(false).decimals(2).range(0, 1e8f, 1000).add();
+    flexit::panel::item_value(big, 3e8f);
+    run_until(settled, 200);
+    run(3);
+    PanelItem b = pitem("big");
+    CHECK(b.dec == 1 && b.step == 10000 && b.value == INT32_MAX,
+          "step 1000 with 2 decimals: %d decimals, step %d, 3e8 is %d", b.dec, b.step, b.value);
+    flexit::panel::item_value(big, -3e8f);
+    run(5);
+    CHECK(pitem("big").value == -INT32_MAX, "-3e8 is %d", pitem("big").value);
+    size_t at = log_all.size();
+    Item("long_label", ITEM_SENSOR).view(false).menu(false).label("Living room temperature|Stue").add();
+    run_until(settled, 200);
+    run(3);
+    CHECK(!strcmp(pitem("long_label").label, "Living room tempera") &&
+              log_all.find("'long_label': the panel shows 19 bytes of its label, 'Living room temperature'", at) !=
+                  std::string::npos &&
+              log_all.find("'Stue'", at) == std::string::npos,
+          "a 23 byte label: '%s' on the panel", pitem("long_label").label);
   }
 
   step("their texts in the panel's language");
@@ -566,6 +586,7 @@ int main(int argc, char **argv) {
   CHECK(help && strstr(help, "fireplace draws"), "fireplace help: %s", help ? help : "(none)");
   pn_set(K_LANGUAGE, 1);
   run(20);
+  CHECK(panel_language == 1, "the panel's language not kept for a restart: %d", panel_language);
   CHECK(!strcmp(pitem("inside_humidity").label, "Bad") && !strcmp(pitem("fireplace").label, "Peis") &&
             !strcmp(pitem("temperature").label, "Setpoint"),
         "in Norwegian: '%s', '%s', '%s'", pitem("inside_humidity").label, pitem("fireplace").label,
@@ -582,7 +603,8 @@ int main(int argc, char **argv) {
   CHECK(pn_item_help(hb) && pn_item_help(fp), "the fireplace help wasn't kept after another item's");
   pn_set(K_LANGUAGE, 0);
   run(20);
-  CHECK(!strcmp(pitem("fireplace").label, "Fireplace"), "back in English: '%s'", pitem("fireplace").label);
+  CHECK(!strcmp(pitem("fireplace").label, "Fireplace") && panel_language == 0, "back in English: '%s', kept %d",
+        pitem("fireplace").label, panel_language);
 
   step("Home Assistant changes the panel's settings");
   panel_screensaver.control(1);
@@ -653,6 +675,32 @@ int main(int argc, char **argv) {
   run(10);
   CHECK(!heater_enabled.state, "binary sensor changed from the panel");
 
+  step("a Home Assistant switch");
+  {
+    int dl = item("door_lock");
+    CHECK(pitem(dl).value == ITEM_UNKNOWN, "a lock Home Assistant hasn't told us about shows '%s'", pn_item_text(dl));
+    pn_set(value_key("door_lock"), 1);  // HA isn't there yet
+    run(150);
+    CHECK(pitem(dl).value == ITEM_UNKNOWN, "locked before Home Assistant had a state shows '%s'", pn_item_text(dl));
+    ha_door_lock_state.publish_state("unlocked");
+    run(10);
+    CHECK(pitem(dl).value == 0 && !strcmp(pn_item_text(dl), "Unlocked"), "unlocked shows '%s'", pn_item_text(dl));
+    pn_set(value_key("door_lock"), 1);  // locked on the panel, the lock takes its time
+    run(5);
+    ha_door_lock_state.publish_state("locking");
+    run(60);
+    CHECK(pitem(dl).value == 1, "the panel went back to '%s' while the lock was locking", pn_item_text(dl));
+    ha_door_lock_state.publish_state("locked");
+    run(10);
+    CHECK(pitem(dl).value == 1 && !strcmp(pn_item_text(dl), "Locked"), "locked shows '%s'", pn_item_text(dl));
+    pn_set(value_key("door_lock"), 0);  // the lock never follows
+    run(150);
+    CHECK(pitem(dl).value == 1, "an unlock the lock never did shows '%s'", pn_item_text(dl));
+    ha_door_lock_state.publish_state("unavailable");
+    run(10);
+    CHECK(pitem(dl).value == ITEM_UNKNOWN, "an unavailable lock shows '%s'", pn_item_text(dl));
+  }
+
   step("a text item");
   int wi = item("washer");
   ha_washer.publish_state("Vasker ferdig!\xC3\xA5");  // 16 bytes, the 15th byte is half a character
@@ -682,14 +730,13 @@ int main(int argc, char **argv) {
   CHECK(pitem("hot_water").value == 61 && pitem("front_door").value == 1 && pitem("door_lock").value == 1,
         "hot water %d, front door %d, door lock %d", pitem("hot_water").value, pitem("front_door").value,
         pitem("door_lock").value);
+  ha_actions.clear();
   pn_set(value_key("door_lock"), 0);
   run(20);
   CHECK(ha_actions.size() == 1 && ha_actions[0].action == "lock.unlock" &&
             ha_actions[0].data["entity_id"] == "lock.front_door",
         "unlocking from the panel asked Home Assistant for %s",
         ha_actions.empty() ? "nothing" : ha_actions[0].action.c_str());
-  CHECK(pitem("door_lock").value == 1, "the lock shows %d before Home Assistant says it's unlocked",
-        pitem("door_lock").value);
   ha_door_lock_state.publish_state("unlocked");
   run(10);
   CHECK(pitem("door_lock").value == 0, "the lock shows %d once it's unlocked", pitem("door_lock").value);
@@ -1480,12 +1527,21 @@ int main(int argc, char **argv) {
     temperature.set_action = nullptr;
   }
 
-  step("the ESP restarts while the panel has a newer unit setting");
+  step("the ESP restarts while the panel has a newer unit setting, in Norwegian");
   server->hold[0x00D] = 150;  // the ESP's flash copy of the supply min
   pn_set(K_SUPPLY_MIN, 160);  // changed on the panel while the ESP was down
+  pn_set(K_LANGUAGE, 1);
   run(20);
+  flexit::panel::language = 0;  // what the ESP has after a restart
+  flexit::panel::restore_language();
   flexit::panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);  // what panel::setup() sends
-  run(100);
+  int english = 0;  // cycles the panel showed an item in English
+  for (int k = 0; k < 100; k++) {
+    run(1);
+    english += !strcmp(pitem("fireplace").label, "Fireplace");
+  }
+  CHECK(!english && !strcmp(pitem("fireplace").label, "Peis"), "in English for %d cycles after the hello, then '%s'",
+        english, pitem("fireplace").label);
   CHECK(pn_get(K_SUPPLY_MIN) == 160, "the ESP's hello put its old supply min %d on the panel", pn_get(K_SUPPLY_MIN));
   pn_restart();  // the panel asks, and has nothing newer
   c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
