@@ -1,0 +1,49 @@
+diff --git a/src/core/lv_obj.c b/src/core/lv_obj.c
+index f0f4d55..fc41151 100644
+--- a/src/core/lv_obj.c
++++ b/src/core/lv_obj.c
+@@ -229,6 +229,7 @@ lv_obj_t * lv_obj_create(lv_obj_t * parent)
+ void lv_obj_add_flag(lv_obj_t * obj, lv_obj_flag_t f)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
++    if((obj->flags & f) == f) return;   /*CI600: set already, nothing to repaint*/
+ 
+     bool was_on_layout = lv_obj_is_layout_positioned(obj);
+ 
+@@ -266,6 +267,7 @@ void lv_obj_add_flag(lv_obj_t * obj, lv_obj_flag_t f)
+ void lv_obj_clear_flag(lv_obj_t * obj, lv_obj_flag_t f)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
++    if(!(obj->flags & f)) return;       /*CI600: clear already, nothing to repaint*/
+ 
+     bool was_on_layout = lv_obj_is_layout_positioned(obj);
+     if(f & LV_OBJ_FLAG_SCROLLABLE) {
+diff --git a/src/core/lv_obj_style.c b/src/core/lv_obj_style.c
+index ecffca9..1dbc36a 100644
+--- a/src/core/lv_obj_style.c
++++ b/src/core/lv_obj_style.c
+@@ -271,6 +271,10 @@ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_
+                                  lv_style_selector_t selector)
+ {
+     lv_style_t * style = get_local_style(obj, selector);
++    /*CI600: setting the value it has already doesn't repaint the object. Compares the whole union:
++     *never "same" when it isn't, at worst "different" when it is (unused bytes of a colour)*/
++    lv_style_value_t old;
++    if(lv_style_get_prop(style, prop, &old) == LV_RES_OK && old.num == value.num && old.ptr == value.ptr) return;
+     lv_style_set_prop(style, prop, value);
+     lv_obj_refresh_style(obj, selector, prop);
+ }
+diff --git a/src/widgets/lv_label.c b/src/widgets/lv_label.c
+index f4fbe01..f3b99f2 100644
+--- a/src/widgets/lv_label.c
++++ b/src/widgets/lv_label.c
+@@ -87,6 +87,9 @@ void lv_label_set_text(lv_obj_t * obj, const char * text)
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+     lv_label_t * label = (lv_label_t *)obj;
+ 
++    /*CI600: the same text from another buffer doesn't repaint*/
++    if(text != NULL && label->text != NULL && text != label->text && strcmp(text, label->text) == 0) return;
++
+     lv_obj_invalidate(obj);
+ 
+     /*If text is NULL then just refresh with the current text*/

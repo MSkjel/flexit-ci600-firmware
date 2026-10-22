@@ -1,0 +1,11 @@
+-std=gnu11
+-Iapp
+-Iui
+-Iproto
+-Ihw
+-Ilib/lvgl
+-Ilib
+-DLV_CONF_INCLUDE_SIMPLE
+-DLV_LVGL_H_INCLUDE_SIMPLE
+-DCI600_LV_MEM_KB=21
+-DPIC_POOL=14336

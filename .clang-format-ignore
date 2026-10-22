@@ -1,0 +1,6 @@
+# Not ours, or generated: keep them as their tools write them
+lib/**
+ui/fonts/*.c
+ui/icons.h
+ui/lv_conf.h
+sim/test_picture.h
