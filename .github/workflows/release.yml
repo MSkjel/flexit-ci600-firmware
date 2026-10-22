@@ -4,7 +4,7 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
 
 permissions:
@@ -29,14 +29,14 @@ jobs:
       - run: make -C hw
       - run: |
           pip install cryptography
-          if [ "$GITHUB_REF_TYPE" = tag ]; then ver="--version ${GITHUB_REF_NAME#v}"; fi  # a manual run takes the newest tag
+          if [ "$GITHUB_REF_TYPE" = tag ]; then ver="--version ${GITHUB_REF_NAME#v}"; fi  # a manual run gets config.mk's version
           python3 tools/mkupdate.py $ver hw/build/ci600.bin ci600.fxup
           python3 tools/mkupdate.py --verify ci600.fxup hw/build/ci600.bin
           cp hw/build/ci600.bin ci600.bin
       - name: Changelog, the commits since the last version tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' HEAD^ 2>/dev/null || true)
           git log --no-merges --format='- %s' ${prev:+$prev..}HEAD > notes.md
           cat notes.md
       - if: startsWith(github.ref, 'refs/tags/')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Flash a CI600 panel through its stock bootloader, with a USB-RS485 adapter on the bus. Build the .fxup with
-mkupdate.py.
+mkupdate.py. The bootloader answers at address 1, so nothing else, like the ESP, can be there.
 
     uv run --with pyserial tools/fxupload.py --port /dev/ttyUSB0 ci600.fxup                # panel at 1, as stock
     uv run --with pyserial tools/fxupload.py --port /dev/ttyUSB0 --panel-addr 3 ci600.fxup
@@ -59,6 +59,17 @@ def frame(addr, sub, payload=b""):
     return body + crc16(body)
 
 
+def skip_echo(bus, buf):
+    """What's in buf after our own frame, which some adapters hear first. Our status poll coming back means the
+    adapter echoes. None until the whole echo is in."""
+    at = buf.find(bus.sent)
+    if at >= 0 and bus.sent[2] == SUB_STATUS:
+        bus.echo = True
+    if not bus.echo:
+        return buf
+    return buf[at + len(bus.sent) :] if at >= 0 else None
+
+
 def find_reply(buf):
     """The first bootloader reply in buf, [01 64 sub len data crc] or [01 e4 code crc], or None. The CU60's polls
     to address 1 and the bootloader's exceptions to those have other function codes."""
@@ -85,11 +96,13 @@ class Bus:
 
         self.s = serial.Serial(port, baud, timeout=0.05)
         self.verbose = verbose
+        self.sent, self.echo = b"", False
 
     def send(self, f):
         self.s.reset_input_buffer()
         self.s.write(f)
         self.s.flush()
+        self.sent = f
         if self.verbose:
             print("  > " + f.hex())
 
@@ -100,7 +113,8 @@ class Bus:
             chunk = self.s.read(64)
             if chunk:
                 buf += chunk
-                f = find_reply(buf)
+                rest = skip_echo(self, buf)
+                f = find_reply(rest) if rest is not None else None
                 if f:
                     if self.verbose:
                         print("  < " + f.hex())
@@ -134,16 +148,24 @@ def do(bus, sub, payload=b"", tries=4, timeout=0.4):
     return None, None
 
 
+class Failed(Exception):
+    pass
+
+
 def status(bus, tries=4):
-    """Read the loader status. Returns (state, detail), or None if it doesn't answer."""
+    """Read the loader status. Returns (state, detail), or None if it doesn't answer. Raises Failed if something
+    else at address 1 refuses the poll."""
     f, e = do(bus, SUB_STATUS, tries=tries)
+    if e == 1:
+        raise Failed("Something else answers at address 1, like the ESP. Unplug it or give it another address")
     if f is None or e is not None or len(f) < 8:
         return None
     return f[4], f[5]
 
 
-class Failed(Exception):
-    pass
+def state_text(st):
+    s = "state %d (%s)" % (st[0], STATES.get(st[0], "?"))
+    return s + ": " + DETAILS.get(st[1], "error %d" % st[1]) if st[0] == 5 else s
 
 
 def refused(what, f, e):
@@ -197,7 +219,7 @@ def flash(bus, stream):
     for _ in range(40):  # the loader reports state 0 during its start-up delay
         st = status(bus, tries=1)
         if st is not None and st[0] != 0:
-            print("Bootloader is up: state %d (%s)" % (st[0], STATES.get(st[0], "?")))
+            print("Bootloader is up: " + state_text(st))
             break
         bus.pause(0.3)
     else:
@@ -254,7 +276,13 @@ def main(argv):
     bus = Bus(a.port, a.baud, a.verbose)
 
     if a.status:
-        print("status:", status(bus))
+        try:
+            st = status(bus)
+        except Failed as ex:
+            sys.exit(str(ex))
+        if st is None:
+            sys.exit("No bootloader answered at address 1. A panel running its firmware doesn't answer this")
+        print("Bootloader: " + state_text(st))
         return 0
     if not a.fxup:
         sys.exit("give a .fxup file (or --status)")
@@ -265,11 +293,12 @@ def main(argv):
         sys.exit("%s isn't a firmware stream" % a.fxup)
     print("Firmware stream: %d bytes, %s" % (len(stream), name.decode(errors="replace") if name else "no name"))
 
-    if not a.no_enter:  # the running app reboots into the bootloader on 0x64/2 and doesn't answer
-        print("Entering the bootloader (0x64/2 -> address %d)..." % a.panel_addr)
-        bus.send(frame(a.panel_addr, SUB_ARM))
-        time.sleep(2.0)
     try:
+        if not a.no_enter:  # the running app reboots into the bootloader on 0x64/2 and doesn't answer
+            status(bus, tries=2)  # only a panel already in the bootloader may answer at 1
+            print("Entering the bootloader (0x64/2 -> address %d)..." % a.panel_addr)
+            bus.send(frame(a.panel_addr, SUB_ARM))
+            time.sleep(2.0)
         flash(bus, stream)
     except Failed as ex:
         sys.exit("\n%s. Nothing's broken, just run it again" % ex)

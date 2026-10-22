@@ -5,8 +5,8 @@ uv run --with cryptography tools/mkupdate.py --stock DUMP hw/build/ci600.bin ci6
 uv run --with cryptography tools/mkupdate.py --stock DUMP --verify ci600.fxup hw/build/ci600.bin
 
 The bootloader's key isn't in this repo. --stock reads it from a stock flash dump, or set CI600_FXUP_KEY to it
-(64 hex digits). CI has it as the CI600_FXUP_KEY secret. The stream's name is "ci600 X.Y.Z", the version from the
-newest v* tag unless --version says otherwise. The ESP reads it to tell the file's version from the panel's.
+(64 hex digits). CI has it as the CI600_FXUP_KEY secret. The stream's name is "ci600 X.Y.Z", the version config.mk
+builds in unless --version says otherwise. The ESP reads it to tell the file's version from the panel's.
 """
 
 import hashlib
@@ -70,11 +70,16 @@ def pb_bytes(field, data):
 
 
 def tag_version():
-    """X.Y.Z from the newest v* tag, as config.mk builds it in. 0.0.0 without one."""
+    """X.Y.Z like config.mk: the newest vX.Y.Z tag, the next patch level on a later commit, 0.0.0 without one."""
     tag = subprocess.run(
-        ["git", "-C", ROOT, "describe", "--tags", "--match", "v*", "--abbrev=0"], capture_output=True, text=True
+        ["git", "-C", ROOT, "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*", "--exclude", "v*[!0-9.]*"],
+        capture_output=True,
+        text=True,
     ).stdout.strip()
-    return tag[1:] if tag else "0.0.0"
+    if not tag:
+        return "0.0.0"
+    v = re.split(r"[.-]", tag[1:])
+    return "%s.%s.%d" % (v[0], v[1], int(v[2]) + (len(v) > 3))
 
 
 def name_version(name):

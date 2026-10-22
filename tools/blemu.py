@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Emulate the stock CI600 bootloader and flash a .fxup into it, using the same sequence as fxupload.py.
 
-    uv run --with unicorn --with cryptography tools/blemu.py --stock DUMP [-v] [FXUP | --app BIN]
+    uv run --with unicorn --with cryptography tools/blemu.py --stock DUMP [-v] [--echo] [FXUP | --app BIN]
 
 DUMP is a stock CI600 flash dump (default $FLEXIT_STOCK). Without FXUP the stream is built from BIN
-(default hw/build/ci600.bin). Exits 0 if the flash matches and 1 on any failure. Without a dump the test is
-skipped and exits 0, unless --require is given.
+(default hw/build/ci600.bin). --echo acts like an adapter that hears its own frames. Exits 0 if the flash matches
+and 1 on any failure. Without a dump the test is skipped and exits 0, unless --require is given.
 """
 
 import argparse
@@ -181,25 +181,29 @@ class Boot:
 
 
 class EmuBus:
-    """fxupload.Bus for the emulator. Each frame is fully handled before send() returns."""
+    """fxupload.Bus for the emulator, echoing if asked. Each frame is fully handled before send() returns."""
 
-    def __init__(self, boot, verbose):
-        self.boot, self.verbose = boot, verbose
+    def __init__(self, boot, verbose, echoes=False):
+        self.boot, self.verbose, self.echoes = boot, verbose, echoes
         self.reply = b""
         self.traced = False
+        self.sent, self.echo = b"", False
 
     def send(self, f):
         trace = self.verbose and f[2] == fx.SUB_PIECE and not self.traced
         self.traced |= trace
         if self.verbose:
             print("  > " + f.hex())
-        self.reply = self.boot.deliver(f, trace=trace)
-        e = fx.err_of(fx.find_reply(self.reply))
+        self.sent = f
+        reply = self.boot.deliver(f, trace=trace)
+        e = fx.err_of(fx.find_reply(reply))
         if f[2] == fx.SUB_PIECE and e is not None:  # fxupload never sends a piece the loader should refuse
             raise fx.Failed("a piece was refused: error %d (%s)" % (e, fx.ERRORS.get(e, "?")))
+        self.reply = (f if self.echoes else b"") + reply
 
     def read_reply(self, timeout=0.5):
-        f = fx.find_reply(self.reply)
+        rest = fx.skip_echo(self, self.reply)
+        f = fx.find_reply(rest) if rest is not None else None
         self.reply = b""
         if f and self.verbose:
             print("  < " + f.hex())
@@ -215,6 +219,7 @@ def main(argv):
     ap.add_argument("--stock", default=os.environ.get("FLEXIT_STOCK"), help="stock CI600 dump ($FLEXIT_STOCK)")
     ap.add_argument("--app", type=Path, default=layout.ROOT / "hw" / "build" / "ci600.bin", help="application image")
     ap.add_argument("--require", action="store_true", help="fail instead of skipping when there is no dump")
+    ap.add_argument("--echo", action="store_true", help="the adapter hears its own frames, as some do")
     ap.add_argument("-v", "--verbose", action="store_true", help="log frames and the first piece's dispatch")
     a = ap.parse_args(argv)
 
@@ -242,7 +247,7 @@ def main(argv):
     boot = Boot(img)
     print("booted: state %d" % boot.boot_to_loop())
     try:
-        fx.flash(EmuBus(boot, a.verbose), stream)
+        fx.flash(EmuBus(boot, a.verbose, a.echo), stream)
     except fx.Failed as e:
         print("\nFAILED: %s" % e)
         return 1

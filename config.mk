@@ -3,9 +3,10 @@ LVGL     := $(ROOT)/lib/lvgl
 INCLUDES := -I$(ROOT)/app -I$(ROOT)/ui -I$(ROOT)/proto -I$(LVGL) -I$(ROOT)/lib
 DEFS     := -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DCI600_LV_MEM_KB=16  # LVGL heap size on the panel
 WARN     := -Wall -Wextra -Werror
-# The version is the newest v* tag, 0.0.0 without one. $(BUILD)/version holds it and the objects depend on it, so
-# a new tag rebuilds them.
-VERSION  := $(patsubst v%,%,$(shell git -C $(ROOT) describe --tags --match 'v*' --abbrev=0 2>/dev/null))
+# The newest vX.Y.Z tag, the next patch level on a later commit so the ESP can tell them apart, 0.0.0 without one.
+# Same as tools/mkupdate.py. $(BUILD)/version holds it and the objects depend on it, so a new tag rebuilds them.
+VERSION  := $(shell git -C $(ROOT) describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' 2>/dev/null \
+              | awk -F'[v.-]' '{print $$2 "." $$3 "." $$4 + (NF > 4)}')
 VERSION  := $(if $(VERSION),$(VERSION),0.0.0)
 VER_PART  = $(or $(word $(1),$(subst ., ,$(VERSION))),0)
 DEFS     += -DFW_MAJOR=$(call VER_PART,1) -DFW_MINOR=$(call VER_PART,2) -DFW_PATCH=$(call VER_PART,3)

@@ -71,7 +71,8 @@ file in `/config/www`, or run `python3 tools/fxserve.py ci600.fxup` and use the 
     uv run --with pyserial tools/fxupload.py --port /dev/ttyUSB0 ci600.fxup
 
 A stock panel is always at address 1. For one that isn't, add `--panel-addr N`. On Windows the port is something
-like `COM3`.
+like `COM3`. The bootloader answers at address 1, so unplug the ESP (or whatever else is at 1) or move it to
+another address before flashing.
 
 The screen goes dark with all three lights on for a few minutes. When it's back:
 
@@ -233,7 +234,8 @@ All of these come from the simulator. CI redraws them on every push to main and 
     make check    # all tests, SAN=1 adds ASan and UBSan
     make format   # clang-format and ruff
 
-`make check` needs the ESP repo next to this one as `esphome-flexit-modbus-server` (or `ESP_REPO=`), since it
+`make check` needs PyYAML, `pillow` for the pictures, and `gcc-multilib` and `g++-multilib` since the simulator is
+32-bit. It also needs the ESP repo next to this one as `esphome-flexit-modbus-server` (or `ESP_REPO=`), since it
 runs the ESP's panel packages against this repo's link code. Every screen the tests draw is hashed into
 `sim/golden.txt`: `make -C sim changed` shows what changed, `make -C sim golden` accepts it.
 `make -C sim check gallery` draws the README pictures into `sim/build/out/gallery`.
@@ -242,8 +244,9 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
 
 - **`.fxup`:** `tools/mkupdate.py hw/build/ci600.bin ci600.fxup`. It needs the bootloader's key, which isn't in
   this repo. Give it a stock flash dump with `--stock`, or set `CI600_FXUP_KEY` (64 hex digits). CI has it as a
-  secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`. The newest tag is the
-  version the panel reports, 0.0.0 without one.
+  secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`. The newest `vX.Y.Z`
+  tag is the version the panel reports, 0.0.0 without one. A build from a later commit gets the next patch level,
+  so the ESP can tell it from the release.
 - **SWD:** `make -C hw flash STOCK=<a stock flash dump>` with an ST-LINK and `pip install pyocd`. Leave the
   ST-LINK's 3.3 V off when the unit powers the panel. The bootloader comes from the dump. SWD keeps the panel's
   settings.
