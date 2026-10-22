@@ -38,6 +38,9 @@ extern std::string log_all;  // everything logged, for checks
   } while (0)
 
 uint32_t millis();
+template<typename T> struct RAMAllocator {  // picture.h asks how much is free before a download
+  size_t get_max_free_block_size() const { return 100 * 1024; }
+};
 void delayMicroseconds(uint32_t us);
 uint32_t micros();
 
