@@ -76,6 +76,10 @@ static void small_texts(lv_obj_t *b, bool temps) {
 static void saver_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
   memset(saver, 0, sizeof *saver);
+  if (M.screensaver == SAVER_OFF) {  // switched off from the ESP while it shows
+    ui_close_after(0);
+    return;
+  }
   int mode = saver_used(V_SCREENSAVER, M.screensaver);
   lv_obj_t *pic = mode >= SAVER_PIC ? pic_show(b) : NULL;
   if (!pic)

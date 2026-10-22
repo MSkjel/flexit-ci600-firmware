@@ -66,15 +66,18 @@ static void send_pic_ack(void) {
   }
 }
 
-// Send the picture transfer's ack, if any, and update the screen. An ack that doesn't fit waits, a newer one
-// replaces it.
-static void pic_answer(uint16_t key, int32_t ack) {
+// Hands a picture message to picture.c and sends its ack. One that doesn't fit waits, a newer one replaces it.
+static void pic_answer(uint16_t key, const uint8_t *b, int n) {
+  pic_state_t was = pic_state();
+  int32_t ack = pic_msg(key, b, n);
   if (ack >= 0) {
     pic_ack = ack;
     send_pic_ack();
   }
-  if (key == K_PIC_CLEAR || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR || (ack >= 0 && ack >> 24 == PIC_DONE))
-    ui_value_changed(V_SCREENSAVER);  // picture or animation came or went, rebuild the screensaver
+  // Picture or animation came or went, rebuild the screensaver. A new or failed picture drops the old.
+  if (pic_state() != was || key == K_PIC_CLEAR || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR ||
+      (ack >= 0 && ack >> 24 == PIC_DONE))
+    ui_value_changed(V_SCREENSAVER);
   else if (key == K_PIC_BEGIN || key == K_PIC_PATCH)
     ui_value_changed(V_NONE);  // "Receiving ..."
 }
@@ -151,7 +154,7 @@ static void got(void *u, uint16_t key, const uint8_t *b, int n) {
     case K_ANIM_BEGIN:
     case K_ANIM_CLEAR:
     case K_ANIM_MOVE:
-      pic_answer(key, pic_msg(key, b, n));
+      pic_answer(key, b, n);
       return;
     case K_NOTIFY:
       if (n < 2)

@@ -759,7 +759,24 @@ int main(int argc, char **argv) {
   M.screensaver = 4;
   ui_push(&SCR_SAVER, 0);
   shot("59c_saver_photo");
-  ui_pop();
+  // the clock while a new picture comes and after a refused one
+  check(sim_pixel(4, 4), "the photo isn't shown");
+  sim_esp_send_picture();
+  sim_link_run(3);
+  run(50);
+  check(pic_state() == PIC_RECEIVING && !sim_pixel(4, 4), "the saver kept the old picture while a new one came");
+  settle();
+  run(50);
+  check(sim_pixel(4, 4), "the new picture isn't shown");
+  sim_esp_set(K_PIC_BEGIN, 0);  // one the panel refuses
+  settle();
+  run(50);
+  check(pic_state() == PIC_NONE && !sim_pixel(4, 4), "the saver kept a picture the panel dropped");
+  sim_esp_set(K_SCREENSAVER, SAVER_OFF);  // switched off from Home Assistant while it shows
+  settle();
+  run(200);
+  check(ui_top() != &SCR_SAVER, "the screensaver stayed after it was switched off");
+  M.screensaver = 4;
   sim_esp_send_picture();  // the drawing back for the scenes after
   settle();
   sim_esp_set(K_THEME, 1);

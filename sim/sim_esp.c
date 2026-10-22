@@ -16,8 +16,6 @@ unsigned long sim_cycles;
 static uint32_t now_us;                           // bus time
 static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8];  // the CU60's status broadcast and its poll of the panel
 
-void sim_link_run(int cycles);
-
 // Waits for room in the queue like a real sender, running the link meanwhile.
 static void send(uint16_t key, const void *b, int n) {
   while (!pbulk_esp_send(&FL, key, b, n, plink_kind(key) == PLINK_VALUE))

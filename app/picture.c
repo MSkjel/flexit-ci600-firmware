@@ -293,10 +293,10 @@ static bool jpeg_prepare(jpeg_t *j) {
          j->jd.width == P.w && j->jd.height == P.h;
 }
 
-// whether TJpgDec takes the JPEG's tables
+// whether TJpgDec takes the JPEG's tables, assumed yes when LVGL's heap is too full to check
 static bool jpeg_check(void) {
   jpeg_t *j = lv_mem_alloc(sizeof *j);
-  bool ok = j && jpeg_prepare(j);
+  bool ok = !j || jpeg_prepare(j);
   lv_mem_free(j);
   return ok;
 }
@@ -436,7 +436,9 @@ static void pic_event(lv_event_t *e) {
     int stride = lv_area_get_width(ctx->buf_area);
     lv_color_t *buf = (lv_color_t *) ctx->buf + (c.y1 - ctx->buf_area->y1) * stride + (c.x1 - ctx->buf_area->x1);
     lv_area_t a = {c.x1 - o->coords.x1, c.y1 - o->coords.y1, c.x2 - o->coords.x1, c.y2 - o->coords.y1};
-    pic_read(&a, buf, stride);
+    if (!pic_read(&a, buf, stride))  // decoder out of memory or tables unusable, black like the screen
+      for (int y = c.y1; y <= c.y2; y++, buf += stride)
+        memset(buf, 0, lv_area_get_width(&c) * sizeof *buf);
   }
 }
 

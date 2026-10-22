@@ -53,6 +53,7 @@ unsigned sim_esp_send_moon(int *y, int *count);
 void sim_esp_send_dawn(void);
 unsigned sim_esp_send_animation(int x, int y);
 void sim_esp_move_animation(int mode, int a, int b, int ms);  // K_ANIM_MOVE: a, b are x, y or vx, vy
+void sim_link_run(int cycles);                                // run that many CU60 cycles
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1
 void sim_esp_report(const char *what);
 extern unsigned long sim_cycles;

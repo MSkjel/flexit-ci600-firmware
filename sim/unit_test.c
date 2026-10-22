@@ -291,6 +291,14 @@ static void test_jpeg(void) {
   CHECK(!pic_read(&outside, part, JW));
   CHECK(status(patch(0, 1, 4, false)) == PIC_NO_PICTURE);  // only a 16-colour picture takes patches
 
+  // LVGL's heap too full for the decoder: taken, drawn once there's room
+  lv_mem_monitor_t mon;
+  lv_mem_monitor(&mon);
+  void *hog = lv_mem_alloc(mon.free_biggest_size - 1024);
+  CHECK(hog && status(send_jpeg(j, n, JW, JH)) == PIC_DONE && !pic_read(&all, part, JW));
+  lv_mem_free(hog);
+  CHECK(pic_read(&all, part, JW) && !memcmp(part, whole, sizeof whole));
+
   // refused: a size off the MCU grid, a size that isn't the JPEG's, a cut-off stream, a missing restart marker
   CHECK(status(jpeg_begin(JW + 8, JH, n)) == PIC_BAD_SIZE);
   CHECK(status(jpeg_begin(JW, JH + 4, n)) == PIC_BAD_SIZE);
