@@ -9,7 +9,7 @@
 
 #define RX_MAX 512  // room for a few frames back to back, see mb_chunk
 static uint8_t rx[RX_MAX], tx[MB_MAX_FRAME];
-static int rx_len;            // only used by the interrupt
+static int rx_len;            // the burst so far, only the interrupt writes it
 static uint32_t burst_start;  // time of the burst's first byte
 static int tx_len, tx_pos;    // the reply being sent, only used by the interrupt
 
@@ -23,14 +23,21 @@ void rs485_init(void) {
 // One of the two is set from the first byte to the last stop bit, and the interrupt swaps them in one write
 bool rs485_busy(void) { return USART1->CR1 & (USART_CR1_TXEIE | USART_CR1_TCIE); }
 
-// Just after its status broadcast, or when there's no CU60 at all.
-bool rs485_quiet(void) {
+// Early in the CU60's status broadcast, or with no CU60 at all. The rest of it and the gap after take 27 ms or
+// more, and we miss nothing there: the status comes again next cycle and the ESP sends its frame again.
+#define STATUS_EARLY 24  // bytes, 2 ms
+bool rs485_wait_quiet(uint32_t ms) {
   const pbus_panel_t *w = link_bus_state();
-  uint32_t s = board_irq_save();
-  bool after = w->after_status && board_us() - w->status_end_us < PBUS_END_US;
-  bool cu60 = board_ms() - w->status_ms < 1000;
-  board_irq_restore(s);
-  return !rs485_busy() && (after || !cu60);
+  for (uint32_t t = board_ms();;) {
+    uint32_t s = board_irq_save();
+    bool status = rx_len >= 7 && rx_len <= STATUS_EARLY && pbus_status_part(rx, 7) == 7;
+    bool cu60 = board_ms() - w->status_ms < 1000;
+    board_irq_restore(s);
+    if (!rs485_busy() && (status || !cu60))
+      return true;
+    if (board_ms() - t >= ms)
+      return false;
+  }
 }
 
 // Sends the first byte, the interrupt sends the rest.

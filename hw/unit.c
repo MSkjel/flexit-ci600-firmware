@@ -347,6 +347,15 @@ bool unit_cached(uint16_t r) {
 
 void unit_cache_load(uint16_t r, int16_t v) { mb_load(r, v); }
 
+// Nobody sends these again when we restart: a counter's high word, which the CU60 sends once, and another
+// device's week program change. Without an ESP every relay is someone on another panel, so those too.
+static bool save_soon(uint16_t r) {
+  if (r >= R_RT_STOP)
+    return !((r - R_RT_STOP) & 1);
+  bool week = (r >= R_WEEK_FIRST && r <= R_WEEK_LAST) || (r >= R_WEEK_EN && r <= R_WEEK_EN_END);
+  return mb_relayed(r) && (week || !HAS(FEAT_ESP));
+}
+
 void unit_start(void) {
   MB.addr = M.bus_addr;  // the saved address, now that the settings are loaded
 }
@@ -361,7 +370,7 @@ void unit_poll(void) {
       break;
     reg_changed(r);
     if (unit_cached(r))
-      settings_touch(false);
+      settings_touch(save_soon(r));
   }
   if (clock_news && board_ms() - clock_ms >= CLOCK_SETTLE_MS) {
     clock_news = false;

@@ -12,8 +12,8 @@
 #define MAGIC 0x32534943u   // "CIS2"
 #define REG_KEY 0x8000u     // the key of a cached CU60 register is REG_KEY | register
 #define QUIET_MS 5000u      // a save waits until nothing has changed for this long
-#define LATER_MS 3600000u   // changes not made on the panel's keys are written at most this often
-#define FLUSH_WAIT_MS 250u  // for a quiet moment on the bus, the CU60's status broadcast comes every 110 ms
+#define LATER_MS 3600000u   // other changes are written at most this often
+#define QUIET_WAIT_MS 250u  // for a quiet moment on the bus, the CU60's status broadcast comes every 110 ms
 _Static_assert(FLASH_SETTINGS + FLASH_SETTINGS_PAGES * FLASH_PAGE == 0x08080000, "the pages end with the flash");
 
 // Page header, then count records. seq goes up with every save, the highest is current.
@@ -31,9 +31,15 @@ typedef struct {
 #define MAX_RECORDS ((FLASH_PAGE - sizeof(head_t)) / sizeof(record_t))
 _Static_assert(V_ITEM_FIRST + MB_REGS <= MAX_RECORDS, "every saved value and register fits in a page");
 
-static bool dirty, by_user;           // unsaved changes, some of them made on the panel's keys
+static bool dirty, soon;              // unsaved changes, some of them to save soon
 static uint32_t touched, written_ms;  // when the last change came, when flash was last written
 static uint32_t seq, cur;             // the newest copy's seq and page address, cur 0 if there's none
+
+// Page for the next save. Saves go round all the pages, and one that fails is skipped next time.
+static uint32_t next = FLASH_SETTINGS;
+static uint32_t after(uint32_t page) {
+  return FLASH_SETTINGS + (page - FLASH_SETTINGS + FLASH_PAGE) % (FLASH_SETTINGS_PAGES * FLASH_PAGE);
+}
 
 static bool saved(val_t v) { return val_def(v).flags & VF_SAVED; }
 
@@ -72,6 +78,7 @@ void settings_load(void) {
       seq = h->seq;
     }
   }
+  next = cur ? after(cur) : FLASH_SETTINGS;
   if (!cur)
     return;
   const head_t *h = board_flash(cur);
@@ -98,18 +105,19 @@ static bool unchanged(void) {
   return n == h->count;
 }
 
-static void save(void) {
+// force saves even if the bus never gets quiet
+static void save(bool force) {
   touched = board_ms();  // if the save fails, try again later rather than right away
   if (unchanged()) {
-    dirty = by_user = false;
+    dirty = soon = false;
     return;
   }
+  if (!rs485_wait_quiet(QUIET_WAIT_MS) && !force)
+    return;
   written_ms = board_ms();
   head_t h = {.magic = MAGIC, .seq = seq + 1, .pad = 0xFFFF, .crc = 0};
-  // the page after the newest copy, so the saves take turns on all of them
-  uint32_t page =
-      cur ? FLASH_SETTINGS + (cur - FLASH_SETTINGS + FLASH_PAGE) % (FLASH_SETTINGS_PAGES * FLASH_PAGE) : FLASH_SETTINGS;
-  uint32_t at = page + sizeof h;
+  uint32_t page = next, at = page + sizeof h;
+  next = after(page);
   if (!board_flash_erase(page))
     return;
   record_t it;
@@ -122,30 +130,26 @@ static void save(void) {
     return;
   seq = h.seq;
   cur = page;
-  dirty = by_user = false;
+  dirty = soon = false;
 }
 
 uint32_t settings_saves(void) { return seq; }
 
-void settings_touch(bool user) {
+void settings_touch(bool quickly) {
   dirty = true;
-  by_user |= user;
-  if (user)
-    touched = board_ms();  // only the keys restart the wait, the cached runtime counters change every second
+  soon |= quickly;
+  if (quickly)
+    touched = board_ms();  // only quick ones restart the wait, the cached runtime counters change every second
 }
 
-// A page erase stalls the chip for 20-40 ms, the bus interrupt included. A reply caught mid-send would keep driving
-// the bus, so saves wait until the bus is quiet.
+// A page erase stalls the chip for 20-40 ms, the bus interrupt included, see rs485_wait_quiet().
 void settings_poll(void) {
   uint32_t now = board_ms();
-  if (dirty && now - touched > QUIET_MS && (by_user || now - written_ms >= LATER_MS) && rs485_quiet())
-    save();
+  if (dirty && now - touched > QUIET_MS && (soon || now - written_ms >= LATER_MS))
+    save(false);
 }
 
 void settings_flush(void) {
-  if (!dirty)
-    return;
-  for (uint32_t t = board_ms(); !rs485_quiet() && board_ms() - t < FLUSH_WAIT_MS;) {
-  }
-  save();
+  if (dirty)
+    save(true);
 }

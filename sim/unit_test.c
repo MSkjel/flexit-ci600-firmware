@@ -18,6 +18,7 @@ model_t M;
 extern uint32_t stub_ms, stub_rtc;
 extern uint8_t stub_flash[];
 extern int stub_flash_writes_left, stub_flash_erases;
+extern uint32_t stub_flash_bad;
 extern bool stub_bus_quiet;
 static int fails;
 #define CHECK(c) \
@@ -981,11 +982,25 @@ static void test_settings(void) {
   settings_poll();
   CHECK(stub_flash_erases == erases + 1);  // nor while the bus is busy, an erase stalls the bus interrupt
   stub_bus_quiet = true;
+  stub_ms += 6000;
   settings_poll();
   CHECK(stub_flash_erases == erases + 2);
   model_defaults();
   settings_load();
   CHECK(M.brightness == 72);
+
+  // a page that fails a save is skipped next time
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  settings_load();
+  stub_flash_bad = FLASH_SETTINGS;
+  M.brightness = 61;
+  settings_touch(true);
+  settings_flush();
+  settings_flush();
+  stub_flash_bad = 0;
+  model_defaults();
+  settings_load();
+  CHECK(M.brightness == 61);
 }
 
 // ---------------------------------------------------------------- the runtime counters, kept in flash
@@ -1018,6 +1033,29 @@ static void test_runtime(void) {
   settings_load();
   unit_poll();
   CHECK(M.h_stop == 18 && M.h_total == 91 && M.brightness == 33);
+  // saved soon: a high word and a relayed week program change, not a relayed fan change
+  erases = stub_flash_erases;
+  cu60(0x15C, 6);
+  unit_poll();
+  stub_ms += 6000;
+  settings_poll();
+  CHECK(stub_flash_erases == erases + 1);
+  relay(0x118, 1);
+  unit_poll();
+  stub_ms += 6000;
+  settings_poll();
+  CHECK(stub_flash_erases == erases + 2);
+  relay(0x002, 50);
+  unit_poll();
+  stub_ms += 6000;
+  settings_poll();
+  CHECK(stub_flash_erases == erases + 2);
+  M.features &= ~FBIT(FEAT_ESP);  // no ESP, so the relay is another panel's
+  relay(0x002, 55);
+  unit_poll();
+  stub_ms += 6000;
+  settings_poll();
+  CHECK(stub_flash_erases == erases + 3);
 }
 
 // ---------------------------------------------------------------- the LEDs

@@ -8,6 +8,7 @@ uint32_t stub_ms, stub_rtc;
 uint8_t stub_flash[FLASH_SETTINGS_PAGES * FLASH_PAGE];  // the settings pages
 int stub_flash_writes_left = -1;                        // power fails after this many more writes, -1 = never
 int stub_flash_erases;
+uint32_t stub_flash_bad;  // a page that won't program, 0 = none
 bool stub_bus_quiet = true;
 
 uint32_t board_ms(void) { return stub_ms; }
@@ -30,7 +31,10 @@ void board_rtc_poll(void) {}
 void board_reset(void) {}
 void board_bootloader(void) {}
 bool rs485_busy(void) { return false; }
-bool rs485_quiet(void) { return stub_bus_quiet; }
+bool rs485_wait_quiet(uint32_t ms) {
+  (void) ms;
+  return stub_bus_quiet;
+}
 
 const void *board_flash(uint32_t addr) { return stub_flash + (addr - FLASH_SETTINGS); }
 
@@ -46,6 +50,8 @@ bool board_flash_erase(uint32_t addr) {
 
 bool board_flash_write(uint32_t addr, const void *data, uint32_t n) {
   if (addr < FLASH_SETTINGS || addr - FLASH_SETTINGS + n > sizeof stub_flash || stub_flash_writes_left == 0)
+    return false;
+  if (stub_flash_bad && addr - stub_flash_bad < FLASH_PAGE)
     return false;
   if (stub_flash_writes_left > 0)
     stub_flash_writes_left--;
