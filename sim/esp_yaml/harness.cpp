@@ -1159,6 +1159,24 @@ int main(int argc, char **argv) {
     }
   }
 
+  step("a shown online picture that grew too big for the ESP");
+  {
+    // 200 KB on the server
+    static int asked = 0, fetched = 0;
+    auto o = std::make_shared<pic::Online>();
+    o->every = 1000;
+    o->length = [](const std::string &) -> size_t {
+      asked++;
+      return 200 * 1024;
+    };
+    o->fetch = [] { fetched++; };
+    pic::online["flaky"] = o;
+    run(30);
+    CHECK(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state == "flaky: 200 KB is too big for the ESP",
+          "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
+    pic::online.erase("flaky");
+  }
+
   step("online pictures: one too big for the ESP, and a Home Assistant camera's token");
   {
     panel_http.length = 120 * 1024;  // the ESP has 100 KB free
