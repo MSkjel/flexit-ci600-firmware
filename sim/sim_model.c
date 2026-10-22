@@ -124,7 +124,7 @@ void sim_model_init(void) {
   M.heat_pct = 12;
   M.heater_enabled = true;
   M.filter_hours = 2900;
-  M.filter_months = 6;
+  M.filter_days = 180;
   M.week_program = true;
   static const period_t wk[] = {
       {6, 30, 8, 0, MODE_NORMAL, 0, 210}, {8, 0, 15, 30, MODE_MIN, 1, 190}, {15, 30, 22, 30, MODE_NORMAL, 2, 210}};

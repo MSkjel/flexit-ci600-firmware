@@ -1420,7 +1420,12 @@ static void test_unit(void) {
   cu60(0x091, 300);
   cu60(0x016, 0);
   unit_poll();
-  CHECK(M.boost_minutes == 300 && M.filter_months == 0 && filter_life() == 0 && filter_days_left() == 0);
+  CHECK(M.boost_minutes == 300 && M.filter_days == 0 && filter_life() == 0 && filter_days_left() == 0);
+  // a filter interval that isn't whole months is due when the CU60 says
+  cu60(0x016, 100);
+  cu60(0x0C0, 90 * 24);
+  unit_poll();
+  CHECK(M.filter_days == 100 && filter_days_left() == 10);
 
   // A boost the CU60 doesn't count down, nothing answers at address 1, is stopped after a while and the user told
   val_set(V_BOOST, 1);

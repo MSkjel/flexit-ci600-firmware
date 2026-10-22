@@ -210,7 +210,7 @@
   X(RUNNING_SINCE_CHANGE, "Hours since change") \
   X(RUNNING_SINCE_CHANGE_HELP, "Fan hours since the filter timer was last reset.") \
   X(CHANGE_EVERY, "Change every") \
-  X(UNIT_MONTHS, "months") \
+  X(UNIT_DAYS, "days") \
   X(CHANGE_EVERY_HELP, "How often the filter reminder comes up.") \
   X(FILTERS_CHANGED, "Filters changed") \
   X(FILTERS_CHANGED_HELP, "Restarts the filter timer. Do this after fitting new filters.") \

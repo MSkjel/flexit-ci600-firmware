@@ -87,7 +87,7 @@ typedef struct {
 
   // filter
   uint16_t filter_hours;  // since the last change
-  uint8_t filter_months;  // change interval
+  uint16_t filter_days;   // change interval
 
   // alarms
   alarm_t alarms[8];  // active alarms, the filter reminder last
@@ -157,6 +157,6 @@ typedef struct {
 
 extern model_t M;
 
-#define FILTER_INTERVAL_H ((uint32_t) M.filter_months * 30u * 24u)  // a month counts as 30 days
+#define FILTER_INTERVAL_H ((uint32_t) M.filter_days * 24u)
 
 #include "values.h"

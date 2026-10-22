@@ -42,7 +42,7 @@ void model_defaults(void) {
   panel_defaults();
   M.features = FBIT(FEAT_ESP) | FBIT(FEAT_EC_FANS);
   M.mode = M.mode_now = MODE_NORMAL;
-  M.filter_months = 6;
+  M.filter_days = 180;
   M.boost_minutes = 30;
   M.t_supply = M.t_extract = M.t_outdoor = M.t_water = M.t_room = T_NONE;
 }
@@ -81,7 +81,7 @@ int filter_days_left(void) {
 }
 
 int filter_life(void) {
-  if (!M.filter_months)
+  if (!M.filter_days)
     return 0;  // the CU60 allows a 0 day interval
   int life = 100 - (int) ((uint32_t) M.filter_hours * 100 / FILTER_INTERVAL_H);
   return life < 0 ? 0 : life;

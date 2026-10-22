@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
   panel_defaults();
   M.bus_addr = 1;  // the ESP's address, so our replies can be compared with its
   M.features = FBIT(FEAT_ESP) | FBIT(FEAT_EC_FANS);
-  M.filter_months = 6;
+  M.filter_days = 180;
   unit_init();
   sim_display_init();
   ui_init();
