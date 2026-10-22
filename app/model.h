@@ -56,6 +56,7 @@ typedef struct item {
   int16_t level[4];  // ITEMF_LEVELS: bad below [0], good from [1] to [2], bad above [3], fair in between
   char label[ITEM_LABEL], unit[ITEM_UNIT];
   char on[ITEM_STATE], off[ITEM_STATE];  // a toggle's words for on and off, "" for On and Off
+  char text[ITEM_TEXT_LEN];              // an ITEM_TEXT's value, "" for none
 } item_t;
 
 // 24 h of one ITEMF_TREND sensor. Kept by item id so it carries on when the ESP renumbers its items.

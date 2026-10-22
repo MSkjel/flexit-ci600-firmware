@@ -522,6 +522,11 @@ static void test_items(void) {
   CHECK(target->value == 1500);  // a number the user sets is kept in its range
   char b[24];
   CHECK(!strcmp(item_text(b, button, true), _(S_PRESS)));
+  item_t *washer = &M.items[6];
+  *washer = (item_t) {.type = ITEM_TEXT, .flags = ITEMF_VIEW, .id = 80, .value = ITEM_UNKNOWN, .text = "Washing"};
+  CHECK(!strcmp(item_text(b, washer, true), "Washing") && (val_def(v + 4).flags & VF_RO));
+  washer->text[0] = 0;
+  CHECK(!strcmp(item_text(b, washer, true), "\xE2\x80\x93"));
 
   trend_keep(77);
   for (int id = 100; id < 100 + N_TRENDS; id++)

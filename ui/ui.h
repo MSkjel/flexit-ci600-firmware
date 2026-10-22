@@ -129,7 +129,8 @@ const char *fmt_target(char *buf, int16_t t);  // setpoint, always with one deci
 const char *fmt_dec(char *buf, int32_t v, uint8_t dec);
 const char *fmt_hm(char *buf, int minutes);   // minutes since midnight up to 24:00, 12 or 24 h as the clock is set
 char *add_unit(char *buf, const char *unit);  // no space before %, : or °
-int ui_backlight_preview(void);               // brightness an open editor is previewing, -1 if none
+void label_fit(lv_obj_t *l, const char *txt, int w);  // txt in font_f20 if it fits in w, else font_f14
+int ui_backlight_preview(void);                       // brightness an open editor is previewing, -1 if none
 
 // Only one full screen is built at a time, so they share one state buffer. Overlays keep their own statics.
 // SCREEN_STATE(type, name) points name into the buffer and checks that type fits.

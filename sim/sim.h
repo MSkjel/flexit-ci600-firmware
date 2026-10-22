@@ -30,6 +30,7 @@ typedef struct {
   const char *label, *unit, *help;
   bool levels;
   int16_t level[4];
+  const char *text;  // an ITEM_TEXT's value
 } sim_item_t;
 extern const sim_item_t SIM_ITEMS[];
 extern const int SIM_N_ITEMS, SIM_N_COMFORT;

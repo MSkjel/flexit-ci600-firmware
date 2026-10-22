@@ -484,6 +484,10 @@ static void smart_build(lv_obj_t *b) {
     lv_obj_set_pos(l, 10, 38);
     smart->val[k] = mk_label(t, &font_f20, T.text, "");
     lv_obj_set_pos(smart->val[k], 10, 54);
+    if (it->type == ITEM_TEXT) {  // a text can be longer than the tile
+      lv_obj_set_width(smart->val[k], SMART_W - 20);
+      label_dots(smart->val[k]);
+    }
     smart->unit[k] = mk_label(t, &font_f12, T.dim, it->type == ITEM_SENSOR || it->type == ITEM_NUMBER ? it->unit : "");
   }
 }
@@ -492,7 +496,10 @@ static void smart_update(void) {
   char buf[24];
   for (int k = 0; k < smart->n; k++) {
     const item_t *it = &M.items[smart->item[k]];
-    lv_label_set_text(smart->val[k], item_text(buf, it, false));
+    if (it->type == ITEM_TEXT)
+      label_fit(smart->val[k], item_text(buf, it, false), SMART_W - 20);
+    else
+      lv_label_set_text(smart->val[k], item_text(buf, it, false));
     if (it->type == ITEM_TOGGLE) {
       lv_color_t c = item_on(it) ? T.accent : T.faint;
       lv_obj_set_style_text_color(smart->val[k], c, 0);

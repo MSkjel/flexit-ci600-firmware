@@ -233,12 +233,23 @@ bool item_on(const item_t *it) { return it->value != 0 && it->value != ITEM_UNKN
 char *item_text(char *buf, const item_t *it, bool unit) {
   if (it->type == ITEM_BUTTON)
     return strcpy(buf, _(S_PRESS));
+  if (it->type == ITEM_TEXT)
+    return strcpy(buf, it->text[0] ? it->text : "\xE2\x80\x93");
   if (it->value == ITEM_UNKNOWN)
     return strcpy(buf, "\xE2\x80\x93");  // en dash, like an unknown temperature
   if (it->type == ITEM_TOGGLE)
     return strcpy(buf, item_on(it) ? (it->on[0] ? it->on : _(S_ON)) : (it->off[0] ? it->off : _(S_OFF)));
   fmt_dec(buf, it->value, it->dec);
   return unit ? add_unit(buf, it->unit) : buf;
+}
+
+// txt in the value font if it fits in w, else the row font, padded down to sit on the same line. Texts from the
+// ESP can be long. The font goes first, a label with dots cuts the text as it's set.
+void label_fit(lv_obj_t *l, const char *txt, int w) {
+  bool fits = lv_txt_get_width(txt, (uint32_t) strlen(txt), &font_f20, 0, LV_TEXT_FLAG_NONE) <= w;
+  lv_obj_set_style_text_font(l, fits ? &font_f20 : &font_f14, 0);
+  lv_obj_set_style_pad_top(l, fits ? 0 : lv_font_get_line_height(&font_f20) - lv_font_get_line_height(&font_f14), 0);
+  lv_label_set_text(l, txt);
 }
 
 char *add_unit(char *buf, const char *unit) {

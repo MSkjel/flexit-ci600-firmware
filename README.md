@@ -48,7 +48,7 @@ Plus:
 
 With an ESP:
 
-- Any Home Assistant sensor, switch, number or button on the panel. You pick them in the ESP config.
+- Any Home Assistant sensor, switch, number, button or text on the panel. You pick them in the ESP config.
 - 24 h charts of the ESP's sensors, like CO₂ and humidity
 - Messages from Home Assistant
 - A picture, photo, animation or the local weather (MET Norway) as the screensaver

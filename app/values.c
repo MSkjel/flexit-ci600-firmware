@@ -32,7 +32,7 @@ val_def_t val_def(val_t v) {
     return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = VF_PANEL | VF_LAYOUT, .scale = 1};
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST) {
     const item_t *it = &M.items[v - V_ITEM_FIRST];
-    bool ro = it->type == ITEM_SENSOR || (it->flags & ITEMF_RO);
+    bool ro = it->type == ITEM_SENSOR || it->type == ITEM_TEXT || (it->flags & ITEMF_RO);
     return (val_def_t) {.min = it->min,
                         .max = it->max,
                         .key = K_ITEM_VALUE + (v - V_ITEM_FIRST),

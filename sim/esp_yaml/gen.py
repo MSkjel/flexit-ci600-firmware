@@ -44,7 +44,16 @@ FILES = [
             "off_text": "Blocked|Sperret",
         },
     ),
-    ("packages/panel/switch.yaml", {"entity": "heater", "label": "Heater|Varme", "icon": "radiator"}),
+    (
+        "packages/panel/switch.yaml",
+        {
+            "entity": "heater",
+            "label": "Heater|Varme",
+            "icon": "radiator",
+            "on_text": "Heating|Varmer",
+            "off_text": "Idle|Hviler",
+        },
+    ),
     (
         "packages/panel/number.yaml",
         {"entity": "temperature", "label": "Setpoint", "unit": "C", "icon": "thermo", "page": "comfort"},
@@ -52,6 +61,10 @@ FILES = [
     (
         "packages/panel/button.yaml",
         {"entity": "clear_alarms", "label": "Clear alarms", "icon": "bell", "view": "false"},
+    ),
+    (
+        "packages/panel/ha_text.yaml",
+        {"name": "washer", "entity_id": "sensor.washer_state", "label": "Washer|Vaskemaskin", "icon": "washer"},
     ),
     ("packages/panel/picture.yaml", {"name": "dusk", "file": "x.png"}),
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
@@ -82,11 +95,16 @@ def _tag(loader, suffix, node):
 Loader.add_multi_constructor("!", _tag)
 
 
+def text_of(v):
+    """A var's value as ESPHome substitutes it: YAML's true is the string true."""
+    return str(v).lower() if isinstance(v, bool) else str(v)
+
+
 def load(path, vars_):
     """Load a package with ${var} filled in from its defaults and vars_."""
     text = open(f"{ESP}/{path}").read()
     defaults = yaml.load(text, Loader=Loader).get("defaults", {}) or {}
-    subst = {**{k: str(v) for k, v in defaults.items()}, **{k: str(v) for k, v in vars_.items()}}
+    subst = {**{k: text_of(v) for k, v in defaults.items()}, **{k: text_of(v) for k, v in vars_.items()}}
     text = re.sub(r"\$\{(\w+)\}", lambda m: subst.get(m.group(1), m.group(0)), text)
     left = re.findall(r"\$\{\w+\}", text)
     if left:

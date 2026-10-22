@@ -227,7 +227,15 @@ struct BinarySensor {
 
 struct TextSensor {
   std::string state;
-  void publish_state(const std::string &v) { state = v; }
+  bool has = false;
+  Callbacks<std::string> cb;
+  bool has_state() const { return has; }
+  void publish_state(const std::string &v) {
+    state = v;
+    has = true;
+    cb.call(v);
+  }
+  template<typename F> void add_on_state_callback(F &&f) { cb.add(std::forward<F>(f)); }
 };
 
 struct Event {

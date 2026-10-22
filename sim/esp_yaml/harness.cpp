@@ -422,6 +422,7 @@ int main(int argc, char **argv) {
   co2.publish_state(912);
   heater_enabled.publish_state(true);
   temperature.publish_state(20.0f);
+  ha_washer.publish_state("Washing|Vasker");
   draw_ball(panel_animation_ball, 48, 8, false);
   draw_ball(panel_animation_noise, 64, 8, true);  // too big at full size
   yaml_boot();
@@ -497,10 +498,11 @@ int main(int argc, char **argv) {
   }
 
   step("items");
-  static const char *const NAME[] = {"inside_humidity", "heater_enabled", "heater", "temperature", "clear_alarms"};
-  static const char *const LABEL[] = {"Bathroom", "Heater on", "Heater", "Setpoint", "Clear alarms"};
-  static const int TYPE[] = {ITEM_SENSOR, ITEM_TOGGLE, ITEM_TOGGLE, ITEM_NUMBER, ITEM_BUTTON};
-  for (int i = 0; i < 5; i++) {
+  static const char *const NAME[] = {"inside_humidity", "heater_enabled", "heater",
+                                     "temperature",     "clear_alarms",   "washer"};
+  static const char *const LABEL[] = {"Bathroom", "Heater on", "Heater", "Setpoint", "Clear alarms", "Washer"};
+  static const int TYPE[] = {ITEM_SENSOR, ITEM_TOGGLE, ITEM_TOGGLE, ITEM_NUMBER, ITEM_BUTTON, ITEM_TEXT};
+  for (int i = 0; i < 6; i++) {
     PanelItem p = pitem(NAME[i]);
     CHECK(p.type == TYPE[i] && !strcmp(p.label, LABEL[i]), "%s: type %d label '%s'", NAME[i], p.type, p.label);
     printf("  %s: type %d flags 0x%02X icon %d '%s' %d%s (%d..%d step %d, %d decimals)\n", NAME[i], p.type, p.flags,
@@ -513,6 +515,9 @@ int main(int argc, char **argv) {
   CHECK(p.value == 55 && (p.flags & (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS)) == (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS),
         "sensor value %d flags 0x%02X", p.value, p.flags);
   CHECK(pitem("heater_enabled").flags & ITEMF_RO, "a binary sensor the panel may change");
+  CHECK(!(pitem("heater").flags & ITEMF_RO), "a switch the panel can't change");
+  CHECK((pitem("washer").flags & ITEMF_RO) && !strcmp(pn_item_text(item("washer")), "Washing"),
+        "text item: flags 0x%02X, shows '%s'", pitem("washer").flags, pn_item_text(item("washer")));
   CHECK(!(pitem("clear_alarms").flags & ITEMF_VIEW) && (pitem("clear_alarms").flags & ITEMF_MENU),
         "button flags 0x%02X", pitem("clear_alarms").flags);
 
@@ -547,6 +552,8 @@ int main(int argc, char **argv) {
             !strcmp(pitem("temperature").label, "Setpoint"),
         "in Norwegian: '%s', '%s', '%s'", pitem("inside_humidity").label, pitem("fireplace").label,
         pitem("temperature").label);
+  CHECK(!strcmp(pn_item_text(item("washer")), "Vasker"), "the text item in Norwegian: '%s'",
+        pn_item_text(item("washer")));
   CHECK(!pn_item_help(fp), "the English help kept");
   run(10);
   help = pn_item_help(fp);
@@ -613,6 +620,8 @@ int main(int argc, char **argv) {
   pn_set(value_key("clear_alarms"), 1);
   run(30);
   CHECK(heater.state, "heater not on");
+  CHECK(!strcmp(pn_item_text(item("heater")), "Heating"), "a switch with words shows '%s'",
+        pn_item_text(item("heater")));
   CHECK(fabsf(temperature.state - 22.5f) < 0.01f, "temperature %g", temperature.state);
   CHECK(clear_alarms.presses == 1, "button pressed %d times", clear_alarms.presses);
   inside_humidity.publish_state(61.4f);
@@ -625,6 +634,27 @@ int main(int argc, char **argv) {
   pn_set(value_key("heater_enabled"), 1);  // read only: nothing happens
   run(10);
   CHECK(!heater_enabled.state, "binary sensor changed from the panel");
+
+  step("a text item");
+  int wi = item("washer");
+  ha_washer.publish_state("Vasker ferdig!\xC3\xA5");  // 16 bytes, the 15th byte is half a character
+  run(10);
+  CHECK(!strcmp(pn_item_text(wi), "Vasker ferdig!"), "a long text shows as '%s'", pn_item_text(wi));
+  ha_washer.publish_state("Dishwasher done");  // 15 bytes fit
+  run(10);
+  CHECK(!strcmp(pn_item_text(wi), "Dishwasher done"), "a 15 byte text shows as '%s'", pn_item_text(wi));
+  ha_washer.publish_state("");
+  run(10);
+  CHECK(!strcmp(pn_item_text(wi), "\xE2\x80\x93"), "an empty text shows as '%s'", pn_item_text(wi));
+  ha_washer.publish_state("Washing");
+  run(10);
+  pn_set(value_key("washer"), 1);  // read only: the panel keeps the text and the ESP hears nothing
+  run(10);
+  CHECK(!strcmp(pn_item_text(wi), "Washing") && pn_get(value_key("washer")) == ITEM_UNKNOWN,
+        "a text item set from the panel: '%s', value %d", pn_item_text(wi), pn_get(value_key("washer")));
+  pn_restart();
+  run_until([] { return pn_online() && settled(); }, 2000);
+  CHECK(!strcmp(pn_item_text(wi), "Washing"), "the text after a panel restart: '%s'", pn_item_text(wi));
 
   step("comfort");
   pn_set(value_key("fireplace"), 1);

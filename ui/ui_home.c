@@ -174,7 +174,11 @@ static void tile_update(int i) {
   int src = tile_src(i), bar = -1;
   char b[32];
   lv_color_t c = tile_color(src);
-  lv_label_set_text(dash->tile_val[i], tile_value(src, b, &bar, &c));
+  const char *v = tile_value(src, b, &bar, &c);
+  if (tile_item(src) && tile_item(src)->type == ITEM_TEXT)
+    label_fit(dash->tile_val[i], v, DASH_TILE_W - 16);
+  else
+    lv_label_set_text(dash->tile_val[i], v);
   if (src >= TILE_ITEM)  // the ESP can rename items, a weather item's label is the current condition
     lv_label_set_text(dash->tile_cap[i], tile_name(src) ? tile_name(src) : NO_VALUE);
   lv_obj_set_style_bg_color(dash->tile_stripe[i], c, 0);

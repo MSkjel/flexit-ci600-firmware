@@ -83,8 +83,8 @@ static void pic_answer(uint16_t key, int32_t ack) {
 static void item_def(item_t *it, const uint8_t *b, int n) {
   if (n != ITEM_DEF_LEN)
     return;
-  it->type = b[0] <= ITEM_BUTTON ? b[0] : ITEM_NONE;
-  it->flags = b[1];
+  it->type = b[0] <= ITEM_TEXT ? b[0] : ITEM_NONE;
+  it->flags = it->type == ITEM_TEXT ? b[1] & ~ITEMF_TREND : b[1];  // nothing to chart in a text
   it->icon = b[2];
   it->dec = b[3] & 3;
   it->step = (uint16_t) (b[4] | b[5] << 8);
@@ -177,6 +177,9 @@ static void got(void *u, uint16_t key, const uint8_t *b, int n) {
   } else if (key >= K_ITEM_OFF && key < K_ITEM_OFF + N_ITEMS) {
     text(M.items[key - K_ITEM_OFF].off, ITEM_STATE, b, n);
     ui_layout_changed();
+  } else if (key >= K_ITEM_TEXT && key < K_ITEM_TEXT + N_ITEMS) {
+    text(M.items[key - K_ITEM_TEXT].text, ITEM_TEXT_LEN, b, n);
+    ui_value_changed((val_t) (V_ITEM_FIRST + key - K_ITEM_TEXT));
   } else if (key == K_ITEM_HELP) {
     if (n >= 1 && b[0] < N_ITEMS) {
       forget_helps(b[0]);

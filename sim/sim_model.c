@@ -49,6 +49,8 @@ const sim_item_t SIM_ITEMS[] = {
      "kr/kWh", "", NOL},
     {"hallway_light", ITEM_TOGGLE, ITEMF_VIEW | ITEMF_MENU, ICN_BULB, 0, 1, 1, 0, 1, "Hallway light|Ganglys", "", "",
      NOL},
+    {"washer", ITEM_TEXT, ITEMF_VIEW | ITEMF_MENU, ICN_WASHER, 0, 1, 0, 0, 1, "Washer|Vaskemaskin", "", "", NOL,
+     .text = "Washing|Vasker"},
     {"bedroom", ITEM_NUMBER, ITEMF_VIEW | ITEMF_MENU, ICN_THERMOSTAT, 1, 5, 195, 150, 250, "Bedroom|Soverom", DEG, "",
      NOL},
     {"vacuum", ITEM_BUTTON, ITEMF_VIEW | ITEMF_MENU, ICN_VACUUM, 0, 1, 0, 0, 1, "Robot vacuum|Robotst\xC3\xB8vsuger",
@@ -96,6 +98,8 @@ void sim_item(int i, item_t *it) {
   memcpy(it->level, d->level, sizeof it->level);
   sim_text(it->label, sizeof it->label, d->label);
   sim_text(it->unit, sizeof it->unit, d->unit);
+  if (d->text)
+    sim_text(it->text, sizeof it->text, d->text);
 }
 
 void sim_model_init(void) {

@@ -301,7 +301,10 @@ static void item(int i) {
   send(K_ITEM_DEF + i, d, sizeof d);
   send_text(K_ITEM_LABEL + i, it.label);
   send_text(K_ITEM_UNIT + i, it.unit);
-  send_number(K_ITEM_VALUE + i, (uint32_t) it.value);
+  if (it.type == ITEM_TEXT)
+    send_text(K_ITEM_TEXT + i, it.text);
+  else
+    send_number(K_ITEM_VALUE + i, (uint32_t) it.value);
 }
 
 void sim_link_run(int cycles) {
