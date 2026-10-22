@@ -311,6 +311,7 @@
   X(YEAR_HELP, "Set the year.") \
   X(SUMMER_TIME, "Summer time") \
   X(SUMMER_TIME_HELP, "Change the clock automatically on the last Sunday of March and October.") \
+  X(TIME_ON_OTHER_PANEL, "Set the time on the other panel") \
   X(EQUIPMENT, "Equipment") \
   X(SYSTEM, "System") \
   X(ABOUT, "About") \

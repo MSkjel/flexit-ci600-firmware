@@ -114,6 +114,9 @@ change them from Home Assistant if the ESP is at 1.
 **Week program doesn't run, or a boost stops after a few seconds.** Check that Week program is switched on in its
 menu, the clock is right, and that something is at address 1. The CU60 only runs either with a panel there.
 
+**Clock jumps back after setting it.** A stock panel on the bus keeps its own time and sends it every second, so
+set it on that one.
+
 **Update stopped halfway, screen dark, all lights on.** The panel is sitting in the bootloader, which won't start
 anything it hasn't fully checked. Just flash again. With `fxupload.py` add `--no-enter`, and `--status` shows
 what the bootloader is up to.

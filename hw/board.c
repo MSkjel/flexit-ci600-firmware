@@ -337,7 +337,12 @@ static void rtc_init(void) {
 }
 
 void board_rtc_poll(void) {
-  if (rtc_ok || !(RCC->BDCR & RCC_BDCR_LSERDY))
+  if (rtc_ok)
+    return;
+  uint32_t s = (ms - soft_ms) / 1000;  // move whole seconds to soft_time, ms - soft_ms wraps after 49.7 days
+  soft_time += s;
+  soft_ms += s * 1000;
+  if (!(RCC->BDCR & RCC_BDCR_LSERDY))
     return;
   uint32_t now = board_rtc_get();  // carry the software clock's time over to the RTC
   RCC->BDCR |= RCC_BDCR_RTCSEL_LSE | RCC_BDCR_RTCEN;

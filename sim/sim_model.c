@@ -212,6 +212,7 @@ void plat_value_changed(val_t v) {
 
 void plat_time_set(void) {}
 void plat_save(bool by_user) { (void) by_user; }
+void plat_save_now(void) {}
 
 void plat_period_set(void) {}  // schedule.c keeps M.week itself
 

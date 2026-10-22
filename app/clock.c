@@ -55,30 +55,27 @@ bool clock_summer(uint32_t t) {
   return t >= change(y, 3) && t < change(y, 10);
 }
 
-// Wall time w is on summer time: from 03:00 on the March Sunday to 03:00 on the October Sunday. 02:xx on the
-// October Sunday comes twice, so it can't tell: *unsure says so
-static bool wall_summer(uint32_t w, bool *unsure) {
-  uint16_t y;
-  uint8_t mo, dd, hh, mi;
-  unix_split(w, &y, &mo, &dd, &hh, &mi);
-  uint32_t spring = change(y, 3) + 3600, autumn = change(y, 10) + 3600;
-  *unsure = w >= autumn - 3600 && w < autumn;
-  return w >= spring && w < autumn;
-}
-
 // dst_now is saved so a restart knows which side of a switch the clock is on. Saved right away: after a restart
 // with the old flag the switch would be made again
 static void set_dst(bool summer) {
   if (summer == M.dst_now)
     return;
   val_set_bus(V_DST_NOW, summer);
-  plat_save(true);
+  plat_save_now();
 }
 
-void clock_follow(uint32_t t) {
-  bool unsure, summer = wall_summer(t, &unsure);
-  if (!unsure)
-    set_dst(summer);
+// October's 02:xx comes twice, so only a step back of an hour there is the switch. March's 02:xx doesn't exist, so
+// a panel without summer time set it and the flag stays.
+void clock_follow(uint32_t t, uint32_t from) {
+  uint16_t y;
+  uint8_t mo, dd, hh, mi;
+  unix_split(t, &y, &mo, &dd, &hh, &mi);
+  uint32_t spring = change(y, 3), autumn = change(y, 10);
+  if (t >= autumn && t < autumn + 3600) {
+    if (from - t >= 3600 - 60 && from - t <= 3600 + 60)
+      set_dst(false);
+  } else if (t < spring || t >= spring + 3600)
+    set_dst(t >= spring && t < autumn);
 }
 
 // Summer time is 02:00 last Sunday of March to 03:00 last Sunday of October. Sets the CU60's clock too. Only

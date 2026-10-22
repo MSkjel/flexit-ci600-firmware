@@ -308,6 +308,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_YEAR_HELP] = "Still inn året.",
     [S_SUMMER_TIME] = "Sommertid",
     [S_SUMMER_TIME_HELP] = "Still klokken automatisk siste søndag i mars og i oktober.",
+    [S_TIME_ON_OTHER_PANEL] = "Still klokken på det andre panelet",
     [S_EQUIPMENT] = "Utstyr",
     [S_SYSTEM] = "System",
     [S_ABOUT] = "Om",

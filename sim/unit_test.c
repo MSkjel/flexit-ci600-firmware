@@ -685,11 +685,9 @@ static void test_clock(void) {
   int erases = stub_flash_erases;
   clock_second();
   CHECK(!M.dst_now && M.hh == 2 && M.mi == 0);  // 03:00 summer is 02:00 standard
-  stub_ms += 6000;  // the flag is saved like a change on the keys, so a restart soon after knows
-  settings_poll();
-  CHECK(stub_flash_erases == erases + 1);
-  M.dst_now = true;  // a restart before it was saved: 02:xx comes twice, so the old flag stands and nothing moves
-  clock_follow(clock_to_unix());
+  CHECK(stub_flash_erases == erases + 1);       // saved right away
+  M.dst_now = true;                             // restart with the old flag: 02:xx comes twice, it stands
+  clock_follow(clock_to_unix(), clock_to_unix());
   clock_second();
   CHECK(M.dst_now && M.hh == 2 && M.mi == 0);
   M.dst_now = false;
@@ -703,20 +701,27 @@ static void test_clock(void) {
   clock_from_unix(t);
   clock_second();
   CHECK(!M.dst_now && clock_to_unix() == t);
-  clock_follow(t);  // from the RTC at boot, or the CU60
+  clock_follow(t, t);  // from the RTC at boot, or the CU60
   CHECK(M.dst_now && clock_to_unix() == t);
   M.dst_now = true;  // and the other way, a summer flag in winter
   clock_from_unix(1792328640u);
   clock_second();
   CHECK(M.dst_now && clock_to_unix() == 1792328640u);
-  clock_follow(1792897200u);  // 03:00 on 25 October is standard time
+  clock_follow(1792897200u, 1792897200u);  // 03:00 on 25 October is standard time
   CHECK(!M.dst_now);
-  clock_follow(1792893600u + 3600 + 1800);  // 03:30 that day: still is
+  clock_follow(1792893600u + 3600 + 1800, 1792893600u);  // 03:30 that day: still is
   CHECK(!M.dst_now);
-  clock_follow(1792895400u);  // 02:30 that day could be either, the flag stays
+  clock_follow(1792895400u, 1792895400u);  // 02:30 that day could be either, the flag stays
   CHECK(!M.dst_now);
   M.dst_now = true;
-  clock_follow(1792895400u);
+  clock_follow(1792895400u, 1792895400u);
+  CHECK(M.dst_now);
+  clock_follow(1792895400u, 1792895400u + 3600);  // unless the clock just moved back an hour
+  CHECK(!M.dst_now);
+  clock_follow(1774751400u, 1774751400u);  // 02:30 on 29 March doesn't exist, the flag stays either way
+  CHECK(!M.dst_now);
+  M.dst_now = true;
+  clock_follow(1774751400u, 1774751400u);
   CHECK(M.dst_now);
   // the day stays in its month, so setting the day before the month doesn't roll the date over
   M.yy = 2026, M.mo = 2, M.dd = 15;
@@ -806,8 +811,8 @@ static bool clock_coils(void) { return coil(0x94) && coil(0x95); }
 static void test_bus_clock(void) {
   model_defaults();
   unit_init();
-  uint32_t t = 1792328640u;  // 2026-10-18 13:04:00
-  // written at the start of each minute
+  uint32_t t = 1792328641u;  // 2026-10-18 13:04:01
+  // written at :01 of each minute
   stub_rtc = t;
   clock_from_unix(t);
   unit_second();
@@ -822,7 +827,7 @@ static void test_bus_clock(void) {
   stub_ms += 600;
   unit_poll();
   CHECK(stub_rtc == t + 1);
-  clock_from_unix(t + 59);
+  clock_from_unix(t + 59);  // 13:05:00
   unit_second();
   CHECK(!clock_coils());
   clock_from_unix(t + 60);
@@ -850,14 +855,16 @@ static void test_bus_clock(void) {
   stub_ms += 600;
   unit_poll();
   CHECK(stub_rtc == t2);
-  // The settings block the CU60 sends when it starts has the clock it saved at its last power cut. Ours stays,
-  // unless we have none.
+  // The settings block the CU60 sends when it starts has the clock it saved at its last power cut. Ours stays
+  // and goes out right away, unless we have none.
   uint16_t old[2] = {(uint16_t) ((t2 - 7200) >> 16), (uint16_t) (t2 - 7200)};
   block(0x94, old, 2);
   unit_poll();
   stub_ms += 600;
   unit_poll();
   CHECK(stub_rtc == t2 && clock_to_unix() == t2);
+  unit_second();
+  CHECK(clock_coils() && (uint16_t) MB.hold[0x94] == t2 >> 16 && (uint16_t) MB.hold[0x95] == (t2 & 0xFFFF));
   stub_rtc = 0;
   clock_from_unix(0);
   old[1]--;
@@ -866,6 +873,37 @@ static void test_bus_clock(void) {
   stub_ms += 600;
   unit_poll();
   CHECK(stub_rtc == t2 - 7201);
+
+  // another panel switches back first, at our 02:59:59, and ours isn't made again an hour later
+  M.features = 0;
+  M.auto_dst = true;
+  M.dst_now = true;
+  uint32_t autumn = 1792893600u;  // 2026-10-25 02:00 standard
+  stub_rtc = autumn + 3599;
+  clock_from_unix(stub_rtc);
+  relay(0x94, (uint16_t) (autumn >> 16));
+  relay(0x95, (uint16_t) autumn);
+  unit_poll();
+  stub_ms += 600;
+  unit_poll();
+  CHECK(!M.dst_now && stub_rtc == autumn);
+  clock_from_unix(autumn + 3600);
+  clock_second();
+  CHECK(!M.dst_now && M.hh == 3 && M.mi == 0);
+  // a stock panel's 02:00 after our spring switch is followed without switching again
+  uint32_t spring = 1774749600u;  // 2026-03-29 02:00
+  M.dst_now = false;
+  stub_rtc = spring;
+  clock_from_unix(spring);
+  clock_second();
+  CHECK(M.dst_now && stub_rtc == spring + 3600 && clock_coils());
+  relay(0x94, (uint16_t) ((spring + 1) >> 16));
+  relay(0x95, (uint16_t) (spring + 1));
+  unit_poll();
+  stub_ms += 600;
+  unit_poll();
+  clock_second();
+  CHECK(M.dst_now && stub_rtc == spring + 1 && M.hh == 2);
 }
 
 // ---------------------------------------------------------------- settings in the RAM flash, with power cuts
@@ -1301,6 +1339,29 @@ static void test_unit(void) {
   unit_poll();
   unit_second();
   CHECK(coil(0x13B) && toasts == 1);
+  cu60(0x0C1, 0);
+  unit_poll();
+
+  // a stock panel sets back a time set on the keys: one toast, a later change is just followed
+  toasts = 0;
+  uint32_t t = 1792328641u;  // 2026-10-18 13:04:01
+  stub_rtc = t;
+  clock_from_unix(t);
+  val_set(V_HOUR, 15);
+  CHECK(clock_coils() && stub_rtc == t + 7200);
+  relay(0x94, (uint16_t) ((t + 1) >> 16));
+  relay(0x95, (uint16_t) (t + 1));
+  unit_poll();
+  stub_ms += 600;
+  unit_poll();
+  CHECK(stub_rtc == t + 1 && toasts == 1);
+  for (int s = 0; s < 5; s++)
+    unit_second();
+  relay(0x95, (uint16_t) (t + 600));
+  unit_poll();
+  stub_ms += 600;
+  unit_poll();
+  CHECK(stub_rtc == t + 600 && toasts == 1);
 }
 
 static void test_link(void) {

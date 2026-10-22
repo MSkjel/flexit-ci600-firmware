@@ -191,9 +191,15 @@ static void fan_outputs(void) { M.fan_ext = M.mode_now >= MODE_MIN ? M.fan_pct[M
 // is 18 hours off, so the clock is only read once the words have stopped changing for CLOCK_SETTLE_MS.
 #define CLOCK_SETTLE_MS 500
 #define CLOCK_SLACK_S 2        // a clock this close to ours isn't followed
+#define CLOCK_UNDONE_S 5       // a panel writing its clock this soon after the keys set ours keeps its own
 static bool clock_news;        // a clock word changed
 static uint32_t clock_ms;      // when the last one did
-static uint32_t clock_minute;  // the minute the CU60 last got from us, or sent us
+static uint32_t clock_minute;  // the minute the CU60 last got from us, or sent us, see minute_of()
+static uint8_t clock_keys_s;   // seconds left of CLOCK_UNDONE_S after the clock was set on the keys
+
+// The CU60 starts a week program period once its clock is past the start, not at it. Minutes count from :01
+// and go out then, as the stock panel's every-second writes do.
+static uint32_t minute_of(uint32_t t) { return (t - 1) / 60; }
 
 static void reg_changed(uint16_t r) {
   int16_t v = MB.hold[r];
@@ -264,11 +270,12 @@ static void reg_changed(uint16_t r) {
     case R_CLOCK_HI:
     case R_CLOCK_LO:
       // The settings block the CU60 sends when it starts has the clock it saved at its last power cut. Only a
-      // panel's write is worth following, unless we have no clock at all.
+      // panel's write is worth following, unless we have no clock at all. Otherwise ours goes out right away.
       if (mb_relayed(r) || clock_to_unix() <= SECS_1970_TO_2000) {
         clock_news = true;
         clock_ms = board_ms();
-      }
+      } else
+        clock_minute = 0;
       break;
     default:
       if (r >= R_ALARMS && r <= R_ALARMS_END)
@@ -306,15 +313,19 @@ static void clock_changed(void) {
     return;
   board_rtc_set(t);
   clock_from_unix(t);
-  clock_minute = t / 60;  // no need to send it back
+  clock_minute = minute_of(t);  // no need to send it back
   if (t > ours + 60 || t + 60 < ours)
-    clock_follow(t);  // a real change, not clocks drifting apart
+    clock_follow(t, ours);  // a real change, not clocks drifting apart
+  if (clock_keys_s) {
+    clock_keys_s = 0;
+    ui_toast(IC_CLOCK, S_TIME_ON_OTHER_PANEL);  // a stock panel never follows ours
+  }
 }
 
 // The CU60 has no clock of its own and keeps what the panels write. Stock writes it every second, the week program
 // only needs minutes.
 static void clock_write(uint32_t t) {
-  clock_minute = t / 60;
+  clock_minute = minute_of(t);
   bus_write(R_CLOCK_HI, (int16_t) (t >> 16));
   bus_write(R_CLOCK_LO, (int16_t) (t & 0xFFFF));
 }
@@ -402,14 +413,17 @@ void unit_second(void) {
     val_set_bus(V_HEATER, U(R_ST_HEATER) != 0);
   // Each new minute, whatever our address. The ESP never writes the clock and there may be no stock panel.
   uint32_t t = clock_to_unix();
-  if (t > SECS_1970_TO_2000 && t / 60 != clock_minute)
+  if (t > SECS_1970_TO_2000 && minute_of(t) != clock_minute)
     clock_write(t);
+  if (clock_keys_s)
+    clock_keys_s--;
 }
 
 // ---------------------------------------------------------------- changes made on the panel
 void plat_value_changed(val_t v) {
   val_def_t d = val_def(v);
   if (d.flags & VF_CLOCK) {
+    clock_keys_s = CLOCK_UNDONE_S;
     plat_time_set();
     return;
   }
@@ -445,6 +459,11 @@ void plat_value_changed(val_t v) {
 
 void plat_save(bool by_user) { settings_touch(by_user); }
 
+void plat_save_now(void) {
+  settings_touch(true);
+  settings_flush();
+}
+
 void plat_action(int a) {
   switch (a) {
     case A_RESET_FILTER:
@@ -479,9 +498,9 @@ void plat_action(int a) {
 
 // The clock was set on the panel or by the ESP. Write it to the CU60 so it and the other panels follow.
 void plat_time_set(void) {
-  uint32_t t = clock_to_unix();
+  uint32_t t = clock_to_unix(), from = board_rtc_get();
   clock_from_unix(t);
   board_rtc_set(t);
-  clock_follow(t);
+  clock_follow(t, from);
   clock_write(t);
 }

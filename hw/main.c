@@ -135,7 +135,7 @@ int main(void) {
   uint32_t t = board_rtc_get();
   clock_from_unix(t);
   if (t > SECS_1970_TO_2000)
-    clock_follow(t);  // the saved dst_now may be stale, or the settings wiped
+    clock_follow(t, t);  // the saved dst_now may be stale, or the settings wiped
   ui_init();
   link_init();
   if (!known)
