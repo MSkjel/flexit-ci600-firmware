@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -38,8 +39,9 @@ extern std::string log_all;  // everything logged, for checks
   } while (0)
 
 uint32_t millis();
+inline size_t ram_free = 100 * 1024;        // the ESP's biggest free block
 template<typename T> struct RAMAllocator {  // picture.h asks how much is free before a download
-  size_t get_max_free_block_size() const { return 100 * 1024; }
+  size_t get_max_free_block_size() const { return ram_free; }
 };
 void delayMicroseconds(uint32_t us);
 uint32_t micros();
@@ -295,6 +297,45 @@ struct Image {
     return Color{(uint8_t) (c >> 16), (uint8_t) (c >> 8), (uint8_t) c};
   }
 };
+
+// online_image. update() starts a download, the test finishes it and calls a trigger.
+struct OnlineImage : Image {
+  std::string url;
+  int downloads = 0;
+  bool decoding = false;
+  std::function<void()> on_download_finished, on_error;
+  bool is_decoding() const { return decoding; }
+  void update() {
+    downloads++;
+    decoding = true;
+  }
+  void release() {
+    w = h = 0;
+    px.clear();
+  }
+  void set_url(const std::string &u) { url = u; }
+};
+
+// http_request, for online_picture.yaml's size check
+struct HttpContainer {
+  size_t content_length = 0;
+  void end() {}
+};
+struct HttpRequest {
+  size_t length = 0;  // the Content-Length the server reports
+  std::shared_ptr<HttpContainer> get(const std::string &) {
+    auto c = std::make_shared<HttpContainer>();
+    c->content_length = length;
+    return c;
+  }
+};
+
+// the packages' homeassistant.action calls, for checks
+struct HaAction {
+  std::string action;
+  std::map<std::string, std::string> data;
+};
+inline std::vector<HaAction> ha_actions;
 
 namespace flexit_modbus_server {
 enum HoldingRegisterIndex : uint16_t { REG_CMD_TEMPERATURE_SETPOINT = 0x0C };

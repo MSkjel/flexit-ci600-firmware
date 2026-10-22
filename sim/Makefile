@@ -38,7 +38,9 @@ $(BUILD)/sim $(BUILD)/lang_test $(BUILD)/unit_test $(BUILD)/replay $(BUILD)/link
 
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CU60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
-$(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py $(ESP_YAML)
+# gen.py also checks the ESP's copies of proto/
+ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/*)
+$(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py $(ESP_YAML) $(ESP_PROTO)
 	@test -d $(ESP_REPO) || { echo "needs the ESP repo: ESP_REPO=<esphome-flexit-modbus-server>"; exit 1; }
 	@mkdir -p $(dir $@)
 	python3 esp_yaml/gen.py $(ESP_REPO) $@

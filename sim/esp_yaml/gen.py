@@ -16,7 +16,8 @@ import yaml
 ESP = sys.argv[1]
 OUT = sys.argv[2]
 
-# Packages the harness runs and the vars for each, roughly what tests/panel.yaml in the ESP repo uses
+# Packages the harness runs and the vars for each, roughly what tests/panel.yaml in the ESP repo uses. Not met.yaml,
+# whose automations are HTTP requests (harness.cpp drives met.h), or update.yaml (the ESP repo's update_test.cpp).
 FILES = [
     ("packages/panel.yaml", {}),
     ("packages/panel/fireplace.yaml", {}),
@@ -66,7 +67,48 @@ FILES = [
         "packages/panel/ha_text.yaml",
         {"name": "washer", "entity_id": "sensor.washer_state", "label": "Washer|Vaskemaskin", "icon": "washer"},
     ),
+    (
+        "packages/panel/ha_sensor.yaml",
+        {
+            "name": "hot_water",
+            "entity_id": "sensor.water_heater_temperature",
+            "label": "Hot water|Varmtvann",
+            "icon": "shower",
+            "unit": "°C",
+            "decimals": "0",
+            "levels": "40,50,75,85",
+            "min": "20",
+            "max": "80",
+        },
+    ),
+    (
+        "packages/panel/ha_binary_sensor.yaml",
+        {
+            "name": "front_door",
+            "entity_id": "binary_sensor.front_door",
+            "label": "Front door|Inngangsdør",
+            "icon": "door",
+            "on_text": "Open|Åpen",
+            "off_text": "Closed|Lukket",
+        },
+    ),
+    (
+        "packages/panel/ha_switch.yaml",
+        {
+            "name": "door_lock",
+            "entity_id": "lock.front_door",
+            "label": "Door lock|Dørlås",
+            "icon": "lock",
+            "on_action": "lock.lock",
+            "off_action": "lock.unlock",
+            "on_state": "locked",
+            "on_text": "Locked|Låst",
+            "off_text": "Unlocked|Ulåst",
+        },
+    ),
     ("packages/panel/picture.yaml", {"name": "dusk", "file": "x.png"}),
+    ("packages/panel/online_picture.yaml", {"name": "radar", "url": "http://homeassistant.local:8123/local/radar.png"}),
+    ("packages/panel/ha_picture.yaml", {"name": "front_door", "entity_id": "camera.front_door"}),
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
     ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64", "drift_x": -10}),
 ]
@@ -128,15 +170,20 @@ def esp_ids(code):
 
 
 def lambdas(actions):
-    """The code for each action in a list. The packages only use lambda and script.execute actions."""
+    """Each action's code. homeassistant.action goes in stubs.h's ha_actions, an action it can't run stops gen.py."""
     out = []
     for a in actions or []:
         if isinstance(a, dict) and "lambda" in a:
             out.append(esp_ids(a["lambda"]))
-        elif isinstance(a, dict) and "script.execute" in a:
-            s = a["script.execute"]
-            out.append(f"id({s}).execute();" if isinstance(s, str) else None)
-    return [x for x in out if x]
+        elif isinstance(a, dict) and isinstance(a.get("script.execute"), str):
+            out.append(f"id({a['script.execute']}).execute();")
+        elif isinstance(a, dict) and "homeassistant.action" in a:
+            h = a["homeassistant.action"]
+            data = ", ".join(f'{{"{k}", "{v}"}}' for k, v in (h.get("data") or {}).items())
+            out.append(f'ha_actions.push_back({{"{h["action"]}", {{{data}}}}});')
+        else:
+            sys.exit(f"gen.py can't run this action: {a}")
+    return out
 
 
 def then(v):
@@ -144,10 +191,11 @@ def then(v):
 
 
 PTYPE = {"int": "int", "string": "std::string", "bool": "bool", "float": "float"}
+X_TYPE = {"sensor": "float", "binary_sensor": "bool", "text_sensor": "std::string"}  # the type of x in on_value
 
 PROTO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "proto")
 
-globals_, scripts, boots, intervals, wiring, entities, headers = [], [], [], [], [], {}, []
+globals_, scripts, boots, intervals, wiring, entities, images, headers = [], [], [], [], [], {}, [], []
 for path, doc in (p for top in FILES for p in packages(*top)):
     # esphome includes are relative to the package. Headers go in after the globals, like ESPHome does it.
     # The .c files and their headers are copies of proto/, which the harness builds anyway, so they must match.
@@ -171,7 +219,7 @@ for path, doc in (p for top in FILES for p in packages(*top)):
     for s in doc.get("script", []):
         scripts.append(s)
     for b in (doc.get("esphome") or {}).get("on_boot", []):
-        boots.extend(lambdas(then(b)))
+        boots.append((b.get("priority", 600) if isinstance(b, dict) else 600, lambdas(then(b))))
     for i in doc.get("interval", []):
         intervals.extend(lambdas(then(i)))
     for kind in ("select", "number", "switch", "button", "sensor", "binary_sensor", "text_sensor", "event"):
@@ -183,6 +231,7 @@ for path, doc in (p for top in FILES for p in packages(*top)):
                 entities[str(eid)][1].setdefault("options", []).extend(e.get("options", []))
                 continue
             entities[eid] = (kind, e)
+    images.extend(doc.get("image", []) or [])  # declared in extra.h, only their triggers are wired here
 
 out = [
     "// generated by gen.py from the ESP repo's packages, don't edit",
@@ -230,8 +279,9 @@ for s in scripts:
     out.append(f"void Script_{s['id']}::execute({params}) {{\n{body}\n}}")
 out.append("")
 out.append("void yaml_boot() {")
-for b in boots:
-    out.append(f"  []() {{\n{b}\n  }}();")
+for _, codes in sorted(boots, key=lambda b: -b[0]):  # higher priority first, as ESPHome runs them
+    for b in codes:
+        out.append(f"  []() {{\n{b}\n  }}();")
 out.append("}")
 out.append("void yaml_interval() {")
 for b in intervals:
@@ -259,6 +309,12 @@ for eid, (kind, e) in entities.items():
                 out.append(f"  {eid}.{f} = []() {{ {' '.join(lambdas(e[a]))} }};")
     if kind == "button" and "on_press" in e:
         out.append(f"  {eid}.on_press = []() {{ {' '.join(lambdas(e['on_press']))} }};")
+    if kind in X_TYPE and "on_value" in e:
+        out.append(f"  {eid}.add_on_state_callback([]({X_TYPE[kind]} x) {{ {' '.join(lambdas(e['on_value']))} }});")
+for e in images:
+    for t in ("on_download_finished", "on_error"):
+        if t in e:
+            out.append(f"  {e['id']}.{t} = []() {{ {' '.join(lambdas(e[t]))} }};")
 out.append("}")
 open(OUT, "w").write("\n".join(out) + "\n")
 print(

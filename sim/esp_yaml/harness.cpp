@@ -426,7 +426,14 @@ int main(int argc, char **argv) {
   ha_washer.publish_state("Washing|Vasker");
   draw_ball(panel_animation_ball, 48, 8, false);
   draw_ball(panel_animation_noise, 64, 8, true);  // too big at full size
+  panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
+  panel_animation.publish_state("ball");
   yaml_boot();
+  CHECK(flexit::panel::picture::S.want == "dusk" && flexit::panel::anim::A.want == "ball",
+        "the restored picture and animation aren't shown after boot: '%s', '%s'",
+        flexit::panel::picture::S.want.c_str(), flexit::panel::anim::A.want.c_str());
+  flexit::panel::picture::clear();
+  flexit::panel::anim::clear();
   CHECK(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
         "panel settings known before the panel reported them: brightness %g, idle %g, screensaver '%s'",
         panel_brightness.state, panel_idle_brightness.state, panel_screensaver.state.c_str());
@@ -656,6 +663,26 @@ int main(int argc, char **argv) {
   pn_restart();
   run_until([] { return pn_online() && settled(); }, 2000);
   CHECK(!strcmp(pn_item_text(wi), "Washing"), "the text after a panel restart: '%s'", pn_item_text(wi));
+
+  step("Home Assistant entities (ha_sensor, ha_binary_sensor and ha_switch)");
+  ha_hot_water.publish_state(61.4f);
+  ha_front_door.publish_state(true);
+  ha_door_lock_state.publish_state("locked");
+  run(20);
+  CHECK(pitem("hot_water").value == 61 && pitem("front_door").value == 1 && pitem("door_lock").value == 1,
+        "hot water %d, front door %d, door lock %d", pitem("hot_water").value, pitem("front_door").value,
+        pitem("door_lock").value);
+  pn_set(value_key("door_lock"), 0);
+  run(20);
+  CHECK(ha_actions.size() == 1 && ha_actions[0].action == "lock.unlock" &&
+            ha_actions[0].data["entity_id"] == "lock.front_door",
+        "unlocking from the panel asked Home Assistant for %s",
+        ha_actions.empty() ? "nothing" : ha_actions[0].action.c_str());
+  CHECK(pitem("door_lock").value == 1, "the lock shows %d before Home Assistant says it's unlocked",
+        pitem("door_lock").value);
+  ha_door_lock_state.publish_state("unlocked");
+  run(10);
+  CHECK(pitem("door_lock").value == 0, "the lock shows %d once it's unlocked", pitem("door_lock").value);
 
   step("comfort");
   pn_set(value_key("fireplace"), 1);
@@ -1130,6 +1157,30 @@ int main(int argc, char **argv) {
       CHECK(picture(failing ? "flaky, downloaded again after a failure" : "flaky, downloaded again", 3000) >= 0,
             "not shown after the download came");
     }
+  }
+
+  step("online pictures: one too big for the ESP, and a Home Assistant camera's token");
+  {
+    panel_http.length = 120 * 1024;  // the ESP has 100 KB free
+    pic::show("radar");
+    run(10);
+    CHECK(!panel_picture_radar.downloads && panel_picture_status.state == "radar: 120 KB is too big for the ESP",
+          "a download too big for the ESP: %d tries, '%s'", panel_picture_radar.downloads,
+          panel_picture_status.state.c_str());
+    ram_free = 200 * 1024;
+    run(300);  // retried after 30 s
+    CHECK(panel_picture_radar.downloads == 1, "%d downloads once it fits", panel_picture_radar.downloads);
+    draw_dusk(panel_picture_radar, 180, false);
+    panel_picture_radar.decoding = false;
+    panel_picture_radar.on_download_finished();
+    CHECK(picture("radar", 6000) >= 0, "radar not shown after its download");
+    ram_free = 100 * 1024;
+    ha_front_door_token.publish_state("t0k3n");
+    CHECK(panel_picture_front_door.url ==
+              "http://homeassistant.local:8123/api/camera_proxy/camera.front_door?width=320&token=t0k3n",
+          "the camera's URL with its token: %s", panel_picture_front_door.url.c_str());
+    panel_picture.control(0);
+    run(20);
   }
 
   step("a number whose entity answers late");

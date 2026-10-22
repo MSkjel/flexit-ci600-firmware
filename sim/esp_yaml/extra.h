@@ -25,4 +25,6 @@ static Number temperature{10, 30, 0.5, 20};
 static Button clear_alarms;
 
 static Image panel_picture_dusk;
+static OnlineImage panel_picture_radar, panel_picture_front_door;
+static HttpRequest panel_http;
 static Animation panel_animation_ball, panel_animation_noise;
