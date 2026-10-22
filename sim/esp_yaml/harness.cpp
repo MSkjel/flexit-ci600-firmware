@@ -266,6 +266,16 @@ static void draw_flat(Image &img) {
     c &= 0xC0C0C0;
 }
 
+// picks dusk after online_pick_after pixels, mid-way through making the picture
+static int online_pick_after;
+struct PickingImage : OnlineImage {
+  Color get_pixel(int x, int y) const {
+    if (online_pick_after && !--online_pick_after)
+      flexit::panel::picture::show("dusk");
+    return Image::get_pixel(x, y);
+  }
+};
+
 static bool load_ppm(Image &img, const char *path) {  // P6, 8 bits
   FILE *f = fopen(path, "rb");
   if (!f)
@@ -1077,6 +1087,7 @@ int main(int argc, char **argv) {
     draw_dusk(panel_picture_dusk, 210, false);
     flexit::panel::picture::show("dusk");
     CHECK(picture("its answer lost", 3000) >= 0 && !lose, "the picture not sent again");
+    CHECK(pic::S.tries == 0, "%d tries left over for the next transfer", pic::S.tries);
     lose = 1;
     panel_animation.control(1);  // ball
     int r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
@@ -1165,34 +1176,43 @@ int main(int argc, char **argv) {
     static int asked = 0, fetched = 0;
     auto o = std::make_shared<pic::Online>();
     o->every = 1000;
-    o->length = [](const std::string &) -> size_t {
+    o->format = "JPEG";
+    o->head = [](const std::string &, size_t &n, std::string &) {
       asked++;
-      return 200 * 1024;
+      n = 200 * 1024;
+      return 200;
     };
-    o->fetch = [] { fetched++; };
+    o->busy = [] { return false; };
+    o->fetch = [] {
+      fetched++;
+      return true;
+    };
     pic::online["flaky"] = o;
     run(30);
-    CHECK(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state == "flaky: 200 KB is too big for the ESP",
+    CHECK(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state.rfind("flaky: too big", 0) == 0,
           "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
     pic::online.erase("flaky");
   }
 
   step("online pictures: one too big for the ESP, and a Home Assistant camera's token");
   {
-    panel_http.length = 120 * 1024;  // the ESP has 100 KB free
+    panel_http.length = 120 * 1024;  // a JPEG, kept whole
+    panel_http.type = "image/jpeg";
     pic::show("radar");
     run(10);
-    CHECK(!panel_picture_radar.downloads && panel_picture_status.state == "radar: 120 KB is too big for the ESP",
-          "a download too big for the ESP: %d tries, '%s'", panel_picture_radar.downloads,
+    CHECK(!panel_picture_radar.updates && panel_picture_status.state.rfind("radar: too big for the ESP", 0) == 0,
+          "a download too big for the ESP: %d tries, '%s'", panel_picture_radar.updates,
           panel_picture_status.state.c_str());
-    ram_free = 200 * 1024;
+    ram_free = 400 * 1024;
+    ram_block = 200 * 1024;
     run(300);  // retried after 30 s
-    CHECK(panel_picture_radar.downloads == 1, "%d downloads once it fits", panel_picture_radar.downloads);
+    CHECK(panel_picture_radar.updates == 1, "%d downloads once it fits", panel_picture_radar.updates);
     draw_dusk(panel_picture_radar, 180, false);
     panel_picture_radar.decoding = false;
     panel_picture_radar.on_download_finished();
     CHECK(picture("radar", 6000) >= 0, "radar not shown after its download");
-    ram_free = 100 * 1024;
+    ram_free = 200 * 1024;
+    ram_block = 100 * 1024;
     ha_front_door_token.publish_state("t0k3n");
     CHECK(panel_picture_front_door.url ==
               "http://homeassistant.local:8123/api/camera_proxy/camera.front_door?width=320&token=t0k3n",
@@ -1200,6 +1220,187 @@ int main(int argc, char **argv) {
     panel_picture.control(0);
     run(20);
   }
+
+  step("an online picture's downloads, refreshes and RAM checks");
+  {
+    static PickingImage webcam;
+    static int code = 200, heads = 0;  // the server's answer, and how often it was asked
+    static size_t size = 30000;
+    static std::string type = "image/jpeg";
+    pic::add_online_image("webcam", webcam, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto",
+                          [](const std::string &, size_t &n, std::string &t) {
+                            heads++;
+                            n = size;
+                            t = type;
+                            return code;
+                          });
+    pic::Online &o = *pic::online["webcam"];
+    CHECK(o.every == 600000 && o.pixels == 160 * 120 * 2 && o.format == "AUTO", "webcam: every %u, %u bytes, %s",
+          (unsigned) o.every, (unsigned) o.pixels, o.format.c_str());
+    CHECK(pic::interval_ms("1d") == 86400000 && pic::interval_ms("1.5h") == 5400000 &&
+              pic::interval_ms("2 min") == 120000 && pic::interval_ms("500ms") == 500 &&
+              pic::interval_ms("30s") == 30000 && !pic::interval_ms("never") && !pic::interval_ms("5") &&
+              !pic::interval_ms("5 parsecs"),
+          "update_interval not read as ESPHome writes it");
+    auto shown = [](int max) {
+      run(3);
+      return run_until([] { return panel_picture_status.state.rfind("Shown: webcam", 0) == 0 && settled(); }, max);
+    };
+    auto made = [](size_t from) {  // pictures made since log_all was at offset from
+      int n = 0;
+      for (size_t at = from; (at = log_all.find("Picture webcam: 320x240 as a JPEG", at)) != std::string::npos; at++)
+        n++;
+      return n;
+    };
+    pic::show("webcam");
+    run(3);
+    CHECK(heads == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
+          "not downloaded when shown: asked %d, %d downloads, '%s'", heads, webcam.updates,
+          panel_picture_status.state.c_str());
+    draw_photo(webcam, 160, 120);  // the download came
+    webcam.decoding = false;
+    pic::changed("webcam");
+    CHECK(shown(3000) >= 0 && pn_pic_format() == PIC_JPEG, "webcam not shown as a JPEG: '%s'",
+          panel_picture_status.state.c_str());
+    CHECK(o.kept.buffer == 30000 && o.kept.decoder == 'J' && !webcam.w,
+          "download buffer %u, decoder %c, pixels %dx%d kept", (unsigned) o.kept.buffer, o.kept.decoder, webcam.w,
+          webcam.h);
+
+    // the same picture downloaded again: made again, nothing sent
+    size_t mark = log_all.size();
+    uint8_t ids = pic::transfer_ids;
+    o.fetched = millis() - o.every;
+    run(1);
+    CHECK(heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
+    draw_photo(webcam, 160, 120);
+    webcam.decoding = false;
+    pic::changed("webcam");
+    CHECK(shown(3000) >= 0 && made(mark) == 1 && pic::transfer_ids == ids, "the same JPEG: made %d times, %d transfers",
+          made(mark), (uint8_t) (pic::transfer_ids - ids));
+
+    // a failed refresh: the panel keeps the picture until the next one
+    o.fetched = millis() - o.every;
+    run(1);
+    webcam.decoding = false;
+    pic::failed("webcam");
+    run(20);
+    CHECK(heads == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
+              pn_pic(&pw, &ph) == 2,
+          "after a failed refresh: asked %d, %d downloads, '%s'", heads, webcam.updates,
+          panel_picture_status.state.c_str());
+
+    // a failed first download: the reason stays, the next try waits
+    pic::show("dusk");
+    CHECK(picture("dusk", 6000) >= 0, "dusk not shown");
+    o.at = millis();
+    pic::show("webcam");
+    run(3);
+    CHECK(webcam.updates == 4, "webcam not downloaded");
+    webcam.decoding = false;
+    pic::failed("webcam");
+    run(20);
+    CHECK(webcam.updates == 4 && panel_picture_status.state == "webcam: couldn't download it, trying again later",
+          "after a failed download: %d downloads, '%s'", webcam.updates, panel_picture_status.state.c_str());
+
+    // what the server says before a download
+    auto fits = [&](int c, size_t n, const char *t) {
+      code = c;
+      size = n;
+      type = t;
+      return pic::fits("webcam", o);
+    };
+    ram_free = 100 * 1024;
+    CHECK(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
+    CHECK(!fits(200, 40000, "image/jpeg") && pic::S.waiting.find("too big") == 0, "a bigger JPEG: '%s'",
+          pic::S.waiting.c_str());
+    ram_free = 200 * 1024;
+    CHECK(fits(200, 150000, "image/png"), "a PNG bigger than the RAM refused, it's read 4 KB at a time");
+    CHECK(!fits(200, 150000, "image/jpeg"), "a JPEG bigger than the RAM taken");
+    CHECK(!fits(200, 0, "image/jpeg") && pic::S.waiting.find("doesn't say how big") != std::string::npos,
+          "a JPEG without a size: '%s'", pic::S.waiting.c_str());
+    CHECK(fits(200, 0, "image/png"), "a PNG without a size refused");
+    CHECK(!fits(0, 0, "") && pic::S.waiting.find("couldn't reach") == 0, "no answer: '%s'", pic::S.waiting.c_str());
+    CHECK(!fits(404, 100, "text/html") && pic::S.waiting.find("404") != std::string::npos, "a 404: '%s'",
+          pic::S.waiting.c_str());
+    o.format = "PNG";
+    CHECK(fits(200, 150000, "image/jpeg"), "format PNG taken as a JPEG");
+    o.format = "AUTO";
+    // a download that doesn't start doesn't grow the buffer
+    webcam.fail = true;
+    size = 40000;
+    pic::download("webcam", o);
+    webcam.fail = false;
+    CHECK(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
+    pic::download("webcam", o);
+    int updates = webcam.updates, asked = heads;
+    size = 50000;
+    pic::download("webcam", o);  // while that one still runs
+    webcam.decoding = false;
+    CHECK(o.kept.buffer == 40000 && webcam.updates == updates && heads == asked,
+          "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
+          webcam.updates - updates + 1, heads - asked + 1);
+    // the first PNG needs room for its decoder too
+    ram_free = 120 * 1024;
+    CHECK(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
+    ram_free = 200 * 1024;
+    type = "image/png";
+    pic::download("webcam", o);
+    webcam.decoding = false;
+    ram_free = 120 * 1024;
+    CHECK(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
+    ram_free = 200 * 1024;
+    code = 200;
+    size = 30000;
+    type = "image/jpeg";
+
+    // another picture picked while it's being made: its pixels are freed
+    draw_flat(webcam);
+    pic::show("webcam");
+    online_pick_after = 1000;
+    CHECK(picture("dusk, picked while webcam was being made", 6000) >= 0 && !webcam.w && !online_pick_after,
+          "webcam's pixels kept: %dx%d", webcam.w, webcam.h);
+  }
+
+  step("a picture the ESP doesn't have the RAM to make");
+  auto no_ram = [] {
+    return run_until([] { return panel_picture_status.state == "dusk: the ESP doesn't have the RAM to make it"; },
+                     100) >= 0 &&
+           pic::S.phase == pic::IDLE;
+  };
+  ram_free = 30 * 1024;  // not even for counting its colours
+  draw_dusk(panel_picture_dusk, 215, false);
+  pic::show("dusk");
+  CHECK(no_ram(), "too little RAM to count: '%s', phase %d", panel_picture_status.state.c_str(), pic::S.phase);
+  ram_free = 40 * 1024;          // for 16 colours, not a JPEG
+  for (int x = 0; x < 320; x++)  // 16 reds on top, over 16 colours in all, so it tries a JPEG too
+    for (int y = 0; y < 8; y++)
+      panel_picture_dusk.px[(size_t) y * 320 + x] = (uint32_t) (x / 20 * 17) << 16;
+  size_t no_jpeg = log_all.size();
+  pic::show("dusk");
+  CHECK(picture("dusk without the RAM for a JPEG", 6000) >= 0 && pn_pic_format() == PIC_PALETTE &&
+            log_all.find("no RAM for a JPEG", no_jpeg) != std::string::npos,
+        "dusk not shown as 16 colours");
+  draw_photo(panel_picture_dusk, 320, 240);  // too detailed for 16 colours
+  pic::show("dusk");
+  CHECK(no_ram(), "a photo without the RAM for a JPEG: '%s', phase %d", panel_picture_status.state.c_str(),
+        pic::S.phase);
+  ram_free = 200 * 1024;
+  draw_dusk(panel_picture_dusk, 215, false);
+  pic::show("dusk");
+  CHECK(picture("dusk with the RAM back", 6000) >= 0, "dusk not shown");
+
+  step("the actions are kept for after a restart, like the selects");
+  pic::clear();
+  run(3);
+  CHECK(panel_picture.saved == "None", "clear: '%s' kept", panel_picture.saved.c_str());
+  pic::show("dusk");
+  CHECK(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept", panel_picture.saved.c_str());
+  flexit::panel::anim::show("ball");
+  CHECK(panel_animation.saved == "ball", "animation: '%s' kept", panel_animation.saved.c_str());
+  flexit::panel::anim::clear();
+  CHECK(panel_animation.saved == "None" && panel_animation.state == "None", "animation cleared: '%s' kept",
+        panel_animation.saved.c_str());
+  run(10);
 
   step("a number whose entity answers late");
   {

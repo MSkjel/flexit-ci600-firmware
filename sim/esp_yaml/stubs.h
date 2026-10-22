@@ -39,9 +39,10 @@ extern std::string log_all;  // everything logged, for checks
   } while (0)
 
 uint32_t millis();
-inline size_t ram_free = 100 * 1024;        // the ESP's biggest free block
-template<typename T> struct RAMAllocator {  // picture.h asks how much is free before a download
-  size_t get_max_free_block_size() const { return ram_free; }
+inline size_t ram_free = 200 * 1024, ram_block = 100 * 1024;  // the fake heap, set by the tests
+template<typename T> struct RAMAllocator {  // picture.h checks free RAM before downloading or making a picture
+  size_t get_free_heap_size() const { return ram_free; }
+  size_t get_max_free_block_size() const { return ram_block; }
 };
 void delayMicroseconds(uint32_t us);
 uint32_t micros();
@@ -70,8 +71,8 @@ struct Select {
   std::vector<std::string> options;
   size_t idx = 0;
   bool has = false;
-  bool optimistic = true;  // publishes what it's set to, else only what set_action publishes
-  std::string state;
+  bool optimistic = true;    // publishes what it's set to, else only what set_action publishes
+  std::string state, saved;  // saved: what restore_value keeps, which ESPHome only saves in control()
   std::function<void(StringRef)> set_action;
   Callbacks<size_t> cb;
   Select(std::vector<std::string> o, const char *initial) : options(std::move(o)) {  // initial null: no state
@@ -114,7 +115,14 @@ struct Select {
       i = v;
       return *this;
     }
-    void perform() { s->control(i); }
+    Call &set_option(const std::string &o) {
+      i = s->index_of(o).value_or(s->options.size());
+      return *this;
+    }
+    void perform() {
+      if (i < s->options.size())
+        s->control(i);
+    }
   };
   Call make_call() { return Call{this}; }
   void control(size_t i) {  // like a template select
@@ -122,6 +130,7 @@ struct Select {
       set_action(StringRef(options[i]));
     if (optimistic)
       publish_state(i);
+    saved = options[i];
   }
 };
 
@@ -301,13 +310,13 @@ struct Image {
 // online_image. update() starts a download, the test finishes it and calls a trigger.
 struct OnlineImage : Image {
   std::string url;
-  int downloads = 0;
-  bool decoding = false;
+  int updates = 0;
+  bool decoding = false, fail = false;  // fail: the download doesn't start, like on a server error
   std::function<void()> on_download_finished, on_error;
   bool is_decoding() const { return decoding; }
   void update() {
-    downloads++;
-    decoding = true;
+    updates++;
+    decoding = !fail;
   }
   void release() {
     w = h = 0;
@@ -316,16 +325,27 @@ struct OnlineImage : Image {
   void set_url(const std::string &u) { url = u; }
 };
 
-// http_request, for online_picture.yaml's size check
+// http_request, for online_picture.yaml's check before a download
+namespace http_request {
+struct Header {
+  std::string name, value;
+};
+}  // namespace http_request
 struct HttpContainer {
+  int status_code = 200;
   size_t content_length = 0;
+  std::string type;
+  std::string get_response_header(const std::string &) const { return type; }
   void end() {}
 };
 struct HttpRequest {
   size_t length = 0;  // the Content-Length the server reports
-  std::shared_ptr<HttpContainer> get(const std::string &) {
+  std::string type;   // and its Content-Type
+  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &,
+                                     const std::vector<std::string> &) {
     auto c = std::make_shared<HttpContainer>();
     c->content_length = length;
+    c->type = type;
     return c;
   }
 };
