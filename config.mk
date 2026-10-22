@@ -13,6 +13,13 @@ DEFS     += -DFW_MAJOR=$(call VER_PART,1) -DFW_MINOR=$(call VER_PART,2) -DFW_PAT
 FW_STAMP := $(BUILD)/version
 $(FW_STAMP): FORCE
 	@mkdir -p $(BUILD) && { echo $(VERSION) | cmp -s - $@ || echo $(VERSION) > $@; }
+# The authors for the About pages, from git the same way: $(AUTHORS_H) only changes with the list, which is empty
+# without python3. The simulator sets AUTHORS so its screens don't change with the history.
+AUTHORS_H := $(BUILD)/gen/authors.h
+INCLUDES += -I$(BUILD)/gen
+$(AUTHORS_H): FORCE
+	@if command -v python3 >/dev/null; then python3 $(ROOT)/tools/mkauthors.py $(ROOT) $@ $(AUTHORS); \
+	else mkdir -p $(dir $@) && { echo '#define AUTHORS_N 0' | cmp -s - $@ || echo '#define AUTHORS_N 0' > $@; }; fi
 FORCE:
 .PHONY: FORCE
 APP_SRC  := $(wildcard $(ROOT)/app/*.c $(ROOT)/ui/*.c $(ROOT)/ui/fonts/*.c $(ROOT)/proto/*.c $(ROOT)/lib/tjpgd/*.c)

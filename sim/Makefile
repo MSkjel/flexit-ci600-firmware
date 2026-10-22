@@ -6,6 +6,7 @@
 #   make esp_sync       copy proto/ into the ESP repo, which builds the same files
 ROOT     := ..
 BUILD    := build$(if $(SAN),-san)
+AUTHORS  := MSkjel
 .DEFAULT_GOAL := check
 include $(ROOT)/config.mk
 OUT      := $(BUILD)/out
@@ -61,12 +62,13 @@ $(BUILD)/obj/%.o: $(ROOT)/%.cpp $(ROOT)/config.mk $(FW_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 $(BUILD)/obj/lib/%.o: CFLAGS += -w
+$(BUILD)/obj/ui/ui_info.o: $(AUTHORS_H)
 # the patched LVGL copies find their relative includes next to the originals
 $(LV_COPY)/%.o: $(LV_COPY)/%.c $(ROOT)/config.mk $(FW_STAMP)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -w -I$(LVGL)/$(dir $*) -c -o $@ $<
 
 # Every screen the tests draw. Their hashes are in golden.txt.
-SCREENS := shots/*.ppm shots_no/*.ppm esp/*.ppm replay/*.ppm
+SCREENS := shots/*.ppm shots_no/*.ppm shots*/checks/*.ppm esp/*.ppm replay/*.ppm
 # hashed and sorted by name in C order, since wildcards sort by the locale and CI has another one
 HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 
@@ -106,7 +108,7 @@ $(BUILD)/lang_en.h: $(ROOT)/ui/lang.h
 	printf '#include "lang.h"\n#define X(id, en) EN(id) en\nSTRINGS(X)\n' | $(CC) -E -P -I$(ROOT)/ui -x c - \
 	  | sed 's/EN(\([A-Z0-9_]*\))/\n#define EN_S_\1/g' | grep '^#define EN_S_' > $@
 
-lang: $(BUILD)/lang_en.h | $(LVGL_PATCHED)
+lang: $(BUILD)/lang_en.h $(AUTHORS_H) | $(LVGL_PATCHED)
 	$(CC) $(filter-out -MMD -MP,$(CPPFLAGS)) $(CFLAGS) -fsyntax-only -DCI600_FMTCHECK -include $< -Werror=format $(wildcard $(ROOT)/ui/*.c)
 	@for s in $$(sed -n 's/^ *X(\([A-Z0-9_]*\),.*/\1/p' $(ROOT)/ui/lang.h); do \
 	  grep -rqw --include='*.c' --include='*.h' --exclude='lang*' "S_$$s" $(ROOT)/ui $(ROOT)/app $(ROOT)/hw \

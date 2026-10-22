@@ -33,6 +33,15 @@ static void shot(const char *name) {
     failed++;
 }
 
+// For the checks: in golden.txt, not in the gallery
+static void check_shot(const char *name) {
+  char dir[256];
+  snprintf(dir, sizeof dir, "%s/checks", outdir);
+  sim_mkdir(dir);
+  if (!sim_shot(dir, name))
+    failed++;
+}
+
 // Press and release a key through input.c. HOME is BACK held for 1 s, OK_LONG is OK held for 2.2 s.
 static void tap(int k) {
   int in = k == KEY_HOME ? IN_BACK : k == KEY_OK_LONG ? IN_OK : k - KEY_UP;
@@ -134,6 +143,18 @@ static bool shows(lv_obj_t *o, const char *text) {
     return true;
   for (uint32_t i = 0; i < lv_obj_get_child_cnt(o); i++)
     if (shows(lv_obj_get_child(o, i), text))
+      return true;
+  return false;
+}
+
+// True if a label in o or below it reads text and is at least partly on the screen
+static bool on_screen(lv_obj_t *o, const char *text) {
+  lv_area_t a;
+  lv_obj_get_coords(o, &a);
+  if (lv_obj_check_type(o, &lv_label_class) && !strcmp(lv_label_get_text(o), text) && a.y2 >= 0 && a.y1 < SCR_H)
+    return true;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(o); i++)
+    if (on_screen(lv_obj_get_child(o, i), text))
       return true;
   return false;
 }
@@ -303,6 +324,43 @@ static void checks(void) {
   check(ui_top() != &SCR_EDIT, "the editor stayed open on an item the ESP forgot");
 }
 
+static void press(const int *k, int n) {
+  for (int i = 0; i < n; i++)
+    key(k[i]);
+}
+
+static const int ABOUT_KEYS[] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_UP, KEY_DOWN, KEY_UP, KEY_DOWN, KEY_OK};
+
+// The notices: the keys on About open them, not on another page, after a wrong key or after a pause
+static void notices(void) {
+  fresh();
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(S_BUS);
+  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  check(ui_top() == &SCR_INFO, "the keys did something on the Bus page");
+  key(KEY_BACK);
+  open(S_ABOUT);
+  press(ABOUT_KEYS, 4);
+  key(KEY_DOWN);
+  press(ABOUT_KEYS + 4, 5);
+  check(ui_top() == &SCR_INFO, "the notices opened after a wrong key");
+  press(ABOUT_KEYS, 4);
+  run(3500);
+  press(ABOUT_KEYS + 4, 5);
+  check(ui_top() == &SCR_INFO, "the notices opened after a pause");
+  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  check(ui_top() == &SCR_NOTICES, "the keys didn't open the notices");
+  check_shot("91_notices");
+  run(12000);
+  check_shot("91b_notices_later");
+  check(!on_screen(lv_scr_act(), "CI600"), "the notices didn't go up");
+  run(20000);
+  check(on_screen(lv_scr_act(), "CI600"), "the notices didn't come round again");
+  key(KEY_BACK);
+  check(ui_top() == &SCR_INFO && !strcmp(ui_title(), tr(S_ABOUT)), "BACK didn't leave the notices for About");
+}
+
 // For --perf. Repainted pixels are what cost time on the panel.
 static void measure(const char *what, int k) {
   run(200);
@@ -337,6 +395,8 @@ static void perf(void) {
   ui_push(&SCR_DAY, 1);
   measure("day: next period (DOWN)", KEY_DOWN);
   measure("idle second, day", 0);
+  ui_push(&SCR_NOTICES, 0);
+  measure("notices going up, 200 ms", 0);
 }
 
 int main(int argc, char **argv) {
@@ -929,6 +989,7 @@ int main(int argc, char **argv) {
   ui_pop();
 
   checks();
+  notices();
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

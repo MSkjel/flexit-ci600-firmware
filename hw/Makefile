@@ -41,6 +41,8 @@ $(BUILD)/%.o: $(ROOT)/%.c $(ROOT)/config.mk $(FW_STAMP) | $(LVGL_PATCHED)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/ui/ui_info.o: $(AUTHORS_H)
+
 # LVGL at -O2, it draws faster and there's room in flash. Warnings off, they aren't ours
 $(BUILD)/lib/%.o: CFLAGS += -O2 -w
 # the patched copies find their relative includes next to the originals

@@ -156,6 +156,14 @@ lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, lv_color_t c, const lv_f
   return mk_disc(p, x, y, size, lv_color_mix(c, T.surface, 60), f, c, icon);
 }
 
+static void timer_gone(lv_event_t *e) { lv_timer_del(lv_event_get_user_data(e)); }
+
+lv_timer_t *mk_timer(lv_obj_t *owner, lv_timer_cb_t cb, uint32_t ms) {
+  lv_timer_t *t = lv_timer_create(cb, ms, NULL);
+  lv_obj_add_event_cb(owner, timer_gone, LV_EVENT_DELETE, t);
+  return t;
+}
+
 void label_text(lv_obj_t *l, const char *txt) {
   if (plat_const(txt))
     lv_label_set_text_static(l, txt);

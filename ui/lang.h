@@ -500,6 +500,19 @@
     "For finding faults. Restarts counts since the power came on and should stay low. Processor is the share of the " \
     "time it's awake. Memory is the screen's, now and at most.") \
   X(ABOUT_PAGE_HELP, "Software versions of this panel and the unit, and what's installed.") \
+  X(NOTICE_FIRMWARE, "Replacement firmware %s") \
+  X(NOTICE_REVERSED, "Reverse engineered by") \
+  X(NOTICE_WRITTEN, "Written by") \
+  X(NOTICE_TOOLS, "Taken apart with") \
+  X(NOTICE_BUILT_ON, "Built on") \
+  X(NOTICE_JPEG, "TJpgDec by ChaN") \
+  X(NOTICE_FONT, "Text in Noto Sans") \
+  X(NOTICE_ICONS, "Icons from Material Design Icons by Pictogrammers") \
+  X(NOTICE_ESPHOME, "Talks to Home Assistant through ESPHome") \
+  X(NOTICE_FLEXIT, "Not made or approved by Flexit") \
+  X(NOTICE_HARMED, "No ventilation units were harmed") \
+  X(NOTICE_CU60, "One CU60 was a bit confused") \
+  X(NOTICE_SINCE, "Fresh air since 2026") \
   X(HELP, "Help") \
   X(NO_HELP, "Nothing to explain here.") \
   X(HELP_FOOTER, "BACK goes up one level, hold it to go home. Hold ? for 3 s to lock the keys.") \

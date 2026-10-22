@@ -107,6 +107,7 @@ lv_obj_t *mk_icon(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *ic)
 void label_dots(lv_obj_t *l);                   // truncate with "...", copying static text first
 void label_text(lv_obj_t *l, const char *txt);  // doesn't copy text in flash, so not for label_dots() labels
 lv_obj_t *mk_bar(lv_obj_t *p, int x, int y, int w, int h, int val, int max, lv_color_t c);
+lv_timer_t *mk_timer(lv_obj_t *owner, lv_timer_cb_t cb, uint32_t ms);  // deleted with owner
 lv_obj_t *mk_arc(lv_obj_t *p, int size, int width, int val, int max, lv_color_t c);
 lv_obj_t *mk_card(lv_obj_t *p, int x, int y, int w, int h, lv_color_t border, int border_w);
 lv_obj_t *mk_disc(lv_obj_t *p, int x, int y, int size, lv_color_t bg, const lv_font_t *f, lv_color_t c,
@@ -148,7 +149,7 @@ const char *alarm_text(uint8_t code);  // name of a CU60 alarm code
 enum { ALARMS_NOW, ALARMS_HISTORY };       // arg for SCR_ALARMS
 enum { INFO_ABOUT, INFO_BUS, INFO_DIAG };  // arg for SCR_INFO
 extern const screen_t SCR_HOME, SCR_MENU, SCR_LIST, SCR_EDIT, SCR_ALARMS, SCR_ALARM_POPUP, SCR_SCHEDULE, SCR_INFO,
-    SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
+    SCR_NOTICES, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
 // A home screen view. BACK cycles through them in VIEW_* order.
 typedef struct {
   void (*build)(lv_obj_t *body);
