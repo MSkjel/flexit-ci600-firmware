@@ -393,6 +393,7 @@ struct Server {
   void set_frame_length(uint8_t, size_t (*f)(const uint8_t *, size_t)) { frame_length = f; }
   uint32_t frame_age_us() { return 300; }
   uint32_t quiet_min_us() { return 1000; }
+  bool rx_empty() { return true; }
   uint32_t status_age_us() { return age_us; }
   bool synced_ = true;  // a CU60 status broadcast has been heard since boot
   bool synced() const { return synced_; }

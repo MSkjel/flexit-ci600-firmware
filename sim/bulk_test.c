@@ -408,10 +408,10 @@ static void panel_burst(burst_t *b) {
   if (b->n > 0 && b->b[0] == PBULK_ADDR) {
     if (pbulk_frame_len(b->b, b->n) != b->n)
       return;
-    bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS_END_US);
+    bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS.end_us);
     uint8_t say;
     uint32_t left = pbus_panel_window(&PBUS, idle_us, ms, &say);
-    int n = pbulk_panel_frame(&PRX, 3, b->b, b->n, left, say, panel_answer);
+    int n = pbulk_panel_frame(&PRX, 3, b->b, b->n, left, say, PBUS.end_us, panel_answer);
     if (n) {  // wait for the ESP's driver to let go, like hw/rs485.c
       panel_answer_n = n;
       panel_answer_at = idle + between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US);
@@ -536,7 +536,8 @@ static struct {
   int txn;
   bool tx_bulk;
   ns_t tx_started, seen_at;  // when its frame started, when it last read or sent a frame
-  bool own;                  // its own reply is on the bus, to pass on once it's out
+  bool own;                  // its own frame is on the bus, to pass on once it's out
+  ns_t link_end;             // when its last link frame was out
 } E;
 static pbus_gaps_t EG;  // the gaps, as the ESP sees them
 
@@ -659,15 +660,17 @@ static ns_t esp_start(void) {  // from deciding to send to the first bit on the 
 
 static void esp(void) {
   esp_uart();
-  if (E.own && !TX[ESP].on) {  // its reply is out, and flush() passes it to the frame callback
+  if (E.own && !TX[ESP].on) {  // its frame is out, and flush() passes it to the frame callback
     pbus_gaps_frame(&EG, TX[ESP].b, TX[ESP].n, (uint32_t) (E.tx_started / US), (uint32_t) (E.tx_started / US));
     E.seen_at = now;
     E.own = false;
+    if (TX[ESP].bulk)
+      E.link_end = now;
   }
   if (E.txn) {  // sendResponse() blocks until it's out
     if (now >= E.tx_at && !TX[ESP].on) {
       start_tx(ESP, E.txbuf, E.txn, E.tx_bulk);
-      E.own = !E.tx_bulk;
+      E.own = true;
       E.tx_started = now;
       E.txn = 0;
     }
@@ -707,6 +710,9 @@ static void esp(void) {
   }
   int id = (int) (E.first % NB), part = E.first <= E.next && !E.done[id] ? E.have[id] : 0;  // the partial frame, if any
   int k = pbus_status_part(E.frame[id], part > 200 ? 200 : part);
+  // Like panel_link.h's gap(): an answer starts within PBUS_TURN_US, nothing on the way well after that means none
+  if (ETX.sent && now - E.link_end > (PBUS_TURN_US + 1000) * US && !E.fifo && !E.ring && !E.open && E.first >= E.next)
+    pbulk_esp_no_answer(&ETX);
   if (E.reply) {  // the Modbus library answers the CU60 first
     int n = reply_to(esp_req, E.txbuf, flags_for(esp_req, 50));
     E.txn = n;
@@ -721,7 +727,7 @@ static void esp(void) {
     ns_t wait = pbus_wait_us(0) * US;
     uint32_t age =
         pbus_since_status((uint32_t) ((now + wait - E.prev_start) / US), E.prev_k, esp_threshold, ESP_ISR_US);
-    int n = pbulk_esp_window(&ETX, pbus_status_left(age), E.txbuf);
+    int n = pbulk_esp_window(&ETX, pbus_status_left(age, ETX.end_us), E.txbuf);
     if (n) {
       E.txn = n;
       E.tx_bulk = true;
@@ -885,9 +891,9 @@ int main(int argc, char **argv) {
   printf("  gaps after polls: the ESP saw %u (the panel %u) and sent %ld frames in them, the panel answered %ld%s%s\n",
          EG.gaps, PBUS.gaps.gaps, E.gap_frames, panel_gap_answers, EG.off || PBUS.gaps.off ? ", turned off" : "",
          ETX.no_gaps ? ", the panel said no" : "");
-  printf("  the link off the bus by %.2f ms after the status frame (the promise: %.1f); %ld bytes the panel lost\n"
-         "  while busy with a status frame\n",
-         worst_end / 1e6, PBUS_END_US / 1000.0, PW.overruns);
+  printf("  the link off the bus by %.2f ms after the status frame (the promise: %.1f, at most %.1f); %ld bytes the\n"
+         "  panel lost while busy with a status frame\n",
+         worst_end / 1e6, PBUS.end_us / 1000.0, PBUS_END_MAX_US / 1000.0, PW.overruns);
   printf("  pictures of %d bytes: %ld intact, %ld not; the first after %.1f s, then one every %.1f s\n", PIC_LEN,
          pics_ok, pics_bad, first_pic_at / 1e9, pics_ok > 1 ? (last_pic_at - first_pic_at) / 1e9 / (pics_ok - 1) : 0);
   if (helps_sent > helps_got && now - help_queued > help_wait)
@@ -899,9 +905,10 @@ int main(int argc, char **argv) {
          BUS.cu60_hit, BUS.answers_hit, BUS.collisions - BUS.cu60_hit - BUS.answers_hit);
   // The gaps go off when the CU60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
   // busy that long at a step. So they only have to stay on with control_tick <= 2.5 ms.
-  bool ok = !BUS.cu60_hit && !C.overflows && !PW.overruns && (ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off)) &&
-            !pics_bad && !esp_heard_wrong && panel_said - esp_heard < 20 && (ETX.refused || pics_ok > 0) &&
-            refused_long && (ETX.refused || help_wait < HELP_WAIT_MAX);
+  bool ok = !BUS.cu60_hit && !C.overflows && !PW.overruns && worst_end <= PBUS_END_MAX_US * US &&
+            (ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off)) && !pics_bad && !esp_heard_wrong &&
+            panel_said - esp_heard < 20 && (ETX.refused || pics_ok > 0) && refused_long &&
+            (ETX.refused || help_wait < HELP_WAIT_MAX);
   printf("%s\n", ok ? "OK" : "FAILED");
   return ok ? 0 : 1;
 }

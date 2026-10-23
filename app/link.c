@@ -221,7 +221,7 @@ int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, 
     return 0;
   uint8_t say;
   uint32_t left = pbus_panel_window(&W, idle_us, now_ms, &say);
-  return pbulk_panel_frame(&B, M.bus_addr, f, n, left, say, answer);
+  return pbulk_panel_frame(&B, M.bus_addr, f, n, left, say, W.end_us, answer);
 }
 
 const pbulk_panel_t *link_bulk_state(void) { return &B; }

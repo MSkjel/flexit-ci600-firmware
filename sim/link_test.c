@@ -76,7 +76,7 @@ static void panel_loop(void) {
 static int transact(uint8_t say) {
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
   int n = pbulk_esp_window(&E, 10000, f);  // 10 ms of the quiet left, as the ESP sees it
-  int an = n ? pbulk_panel_frame(&P, 3, f, n, 10000 - (uint32_t) (n + 1) * PBUS_BYTE_US, say, a) : 0;
+  int an = n ? pbulk_panel_frame(&P, 3, f, n, 10000 - (uint32_t) (n + 1) * PBUS_BYTE_US, say, PBUS_END_US, a) : 0;
   if (!an)
     return -1;
   pbulk_esp_answer(&E, a, an, at_esp, NULL);
@@ -113,7 +113,8 @@ static void test_random(void) {
     bool drop_frame = (seed >> 8) % 17 == 0, drop_answer = (seed >> 9) % 13 == 0;
     uint32_t late = (seed >> 10) % 23 == 0 ? 900 : 0;                // the ESP started later than it planned
     uint32_t at = since + late + (uint32_t) (n + 1) * PBUS_BYTE_US;  // when the panel's idle interrupt fires
-    int an = drop_frame ? 0 : pbulk_panel_frame(&P, 3, f, n, at < PBUS_END_US ? PBUS_END_US - at : 0, PB_OK, a);
+    int an =
+        drop_frame ? 0 : pbulk_panel_frame(&P, 3, f, n, at < PBUS_END_US ? PBUS_END_US - at : 0, PB_OK, PBUS_END_US, a);
     if (an) {
       CHECK(at + PBUS_PANEL_US + (uint32_t) an * PBUS_BYTE_US <= PBUS_END_US);  // off the bus in time
       if (!drop_answer)
@@ -301,10 +302,10 @@ static void test_other_panel(void) {
   int n = pbulk_esp_window(&E, 10000, f);
   pbulk_panel_t other;
   pbulk_panel_init(&other, 0x55);
-  CHECK(!pbulk_panel_frame(&other, 2, f, n, 10000, PB_OK, a2) && !other.frames && !other.bad);
-  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a);
+  CHECK(!pbulk_panel_frame(&other, 2, f, n, 10000, PB_OK, PBUS_END_US, a2) && !other.frames && !other.bad);
+  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, PBUS_END_US, a);
   CHECK(an && P.frames == 1 && !P.bad);
-  CHECK(!pbulk_panel_frame(&other, 2, a, an, 10000, PB_OK, a2) && !other.frames && !other.bad);
+  CHECK(!pbulk_panel_frame(&other, 2, a, an, 10000, PB_OK, PBUS_END_US, a2) && !other.frames && !other.bad);
   pbulk_esp_answer(&E, a, an, at_esp, NULL);
   cycles(3);
   CHECK(got_panel == 1 && !wrong);
@@ -322,13 +323,14 @@ static void test_split_resend(void) {
   CHECK(pbulk_esp_send(&E, K_ITEM_UNIT + 3, none, 0, false));  // an empty text last
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
   int n = pbulk_esp_window(&E, 10000, f);
-  CHECK(f[PBULK_N] == E.qn && pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a));  // all of it arrives, not the answer
+  CHECK(f[PBULK_N] == E.qn &&
+        pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, PBUS_END_US, a));  // all of it arrives, not the answer
   n = pbulk_esp_window(&E, 3800, f);
   CHECK(f[PBULK_N] < 64);
   uint16_t qn = E.qn;
   pbulk_esp_drop_unsent(&E, keep_values);  // all of it went out, so none is dropped
   CHECK(E.qn == qn);
-  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, a);
+  int an = pbulk_panel_frame(&P, 3, f, n, 10000, PB_OK, PBUS_END_US, a);
   pbulk_esp_answer(&E, a, an, at_esp, NULL);
   cycles(5);
   CHECK(got_panel == 17 && !wrong && others == 1 && !E.sessions && !E.qn);
@@ -401,6 +403,54 @@ static void test_rearm(void) {
   CHECK(cycles_to(&w, &t, 14400, 20000, gaps_on) == 2 * PBUS_GAP_REARM);
 }
 
+// The deadline after a status broadcast follows the shortest quiet time measured. The ESP learns it from the
+// answers and drops back after a frame that got none.
+static void test_status_end(void) {
+  pbus_panel_t w;
+  pbus_panel_init(&w);
+  uint32_t t = 0;
+  for (int i = 0; i < PBUS_END_SURE - 1; i++, t += 110000)
+    bus_cycle(&w, t, 14400, 20000);
+  CHECK(w.end_us == PBUS_END_US);  // not measured long enough
+  bus_cycle(&w, t, 14400, 20000);
+  t += 110000;
+  CHECK(w.end_us == PBUS_END_MAX_US);
+  bus_cycle(&w, t, 13650, 20000);  // once a bit sooner
+  t += 110000;
+  CHECK(w.end_us == 12600);
+  bus_cycle(&w, t, 12500, 20000);  // too soon
+  t += 110000;
+  CHECK(w.refused && w.end_us == PBUS_END_US);
+  CHECK(cycles_to(&w, &t, 14400, 20000, link_in) > 0 && w.end_us == PBUS_END_US);  // measured again from scratch
+  for (int i = 0; i < PBUS_END_SURE; i++, t += 110000)
+    bus_cycle(&w, t, 14400, 20000);
+  CHECK(w.end_us == PBUS_END_MAX_US);
+
+  pbulk_esp_t e;
+  pbulk_panel_t p;
+  pbulk_esp_init(&e, 0x31, 3);
+  pbulk_panel_init(&p, 0x32);
+  uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
+  int n = pbulk_esp_window(&e, 10000, f);
+  int an = pbulk_panel_frame(&p, 3, f, n, 10000, PB_OK, 12600, a);
+  pbulk_esp_answer(&e, a, an, at_esp, NULL);
+  CHECK(e.end_us == 12600 && (a[PBULK_A_STATUS] & 3) == PB_OK && !e.refused);
+  CHECK(pbus_status_left(1000, e.end_us) == 12600 - PBUS_ESP_START_US - 1000);
+  pbulk_esp_window(&e, 10000, f);  // this one gets no answer
+  pbulk_esp_no_answer(&e);
+  CHECK(e.end_us == PBUS_END_US && e.missed == 1 && !e.sent);
+}
+
+// A frame read late started no sooner than the one before it ended
+static void test_bus_order(void) {
+  pbus_gaps_t g;
+  memset(&g, 0, sizeof g);
+  pbus_gaps_frame(&g, STATUS, PBUS_STATUS_LEN, 1000, 1000);
+  uint32_t end = 1000 + PBUS_STATUS_LEN * 86806u / 1000u;
+  pbus_gaps_frame(&g, POLL, 8, 0, end + 15000);  // could have started any time since 0
+  CHECK(g.step_lo_us == end && g.end_lo_us == end + 8 * 86806u / 1000u);
+}
+
 // ---------------------------------------------------------------- the panel's queue (plink)
 static void test_plink(void) {
   plink_t l;
@@ -448,6 +498,8 @@ int main(void) {
   test_hello_first();
   test_other_panel();
   test_rearm();
+  test_status_end();
+  test_bus_order();
   test_plink();
   printf(fails ? "link_test: %d failed\n" : "link_test: all passed\n", fails);
   return fails != 0;

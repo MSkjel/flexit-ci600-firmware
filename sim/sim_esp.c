@@ -63,7 +63,7 @@ static void cu60_cycle(void) {
   uint32_t t0 = now_us, end = t0 + PBUS_STATUS_LEN * PBUS_BYTE_US;
   link_bus(STATUS, PBUS_STATUS_LEN, t0, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
-  int n = pbulk_esp_window(&FL, pbus_status_left(1000), f);
+  int n = pbulk_esp_window(&FL, pbus_status_left(1000, FL.end_us), f);
   if (n) {
     uint32_t idle = end + 1500 + (uint32_t) (n + 1) * PBUS_BYTE_US;
     int an = link_bulk_frame(f, n, idle, idle / 1000, a);

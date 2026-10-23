@@ -96,7 +96,12 @@ static bool link_windows = true;     // false while the CU60 restarts and sends 
 static int link_lost_frames;         // the panel doesn't hear this many of the ESP's frames
 static int link_lost_answers;        // the ESP doesn't hear this many of the panel's answers
 static uint32_t link_quiet = 14400;  // end of the status broadcast to the poll, the panel refuses under 13 ms
-static int link_early, link_late;    // ESP frames too soon after the status, answers that ended after the quiet
+// The latest the panel's deadline after a status broadcast can be with that quiet time
+static uint32_t link_end() {
+  uint32_t e = link_quiet - PBUS_END_MARGIN_US;
+  return e > PBUS_END_MAX_US ? PBUS_END_MAX_US : e < PBUS_END_US ? PBUS_END_US : e;
+}
+static int link_early, link_late;  // ESP frames too soon after the status, answers that ended after the quiet
 static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8], REPLY[13];
 
 static void fin(uint8_t *f, int n) {
@@ -158,7 +163,7 @@ static void cs60_cycle() {
   if (!server->sent.empty() && 150 + waited_us < PBUS_START_MIN_US)
     link_early++;
   link_frame();
-  if (now_us > end + PBUS_END_US)
+  if (now_us > end + link_end())
     link_late++;
   now_us = end + link_quiet;  // the poll, and the panel's reply
   on_bus(POLL, sizeof POLL, true);
@@ -456,7 +461,7 @@ int main(int argc, char **argv) {
     hellos++;
   CHECK(hellos == 1, "the ESP sent its state %d times", hellos);
   CHECK(!link_early, "%d frames sent sooner than %d us after the status", link_early, PBUS_START_MIN_US);
-  CHECK(!link_late, "%d answers ended later than %d us after the status", link_late, PBUS_END_US);
+  CHECK(!link_late, "%d answers ended later than %u us after the status", link_late, (unsigned) link_end());
   CHECK(gap_frames > 0, "nothing sent in the gaps after polls");
   CHECK(pn_get(K_SETPOINT) == 200 && pn_get(K_FAN_MAX_SUP) != 20,
         "the ESP sent unit settings it doesn't have: setpoint %d, max supply %d", pn_get(K_SETPOINT),
