@@ -380,6 +380,23 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
       }
 }
 
+// The delays of animation name's records, as the panel plays them
+static std::vector<int> anim_delays(const char *name) {
+  std::vector<int> d;
+  const flexit::panel::anim::Anim *a = flexit::panel::anim::find(name);
+  for (size_t at = 0; a && at + 5 <= a->data.size();) {
+    const uint8_t *r = a->data.data() + at;
+    uint32_t n =
+        r[3] ? pinflate(r + 5, (uint32_t) (a->data.size() - at - 5), nullptr, r[3], a->w / 2, (uint32_t) r[3] * r[4], 0)
+             : 0;
+    if (r[3] && !n)
+      break;
+    d.push_back(r[0]);
+    at += 5 + n;
+  }
+  return d;
+}
+
 // Whether the panel draws frame f of animation `name` at place p as the ESP made it: transparent in the same
 // places and palette colours elsewhere
 static bool same_anim(const char *name, int f, int p = 0) {
@@ -902,7 +919,18 @@ int main(int argc, char **argv) {
   link_lost_frames = 3;  // the panel misses three of the ESP's frames
   CHECK(picture("moved again, 3 frames lost", 3000) >= 0, "not shown after lost frames");
 
-  // Two pieces, the moon and a box lower down. Back to the picture before once the first is in: the panel has
+  // The moon and a box just below it go as one piece, the rows between along
+  draw_dusk(panel_picture_dusk, 250, false);
+  for (int y = 88; y < 94; y++)
+    for (int x = 150; x < 170; x++)
+      panel_picture_dusk.px[(size_t) y * 320 + x] = 0x5A3C28;
+  size_t one = log_all.size();
+  flexit::panel::picture::show("dusk");
+  CHECK(picture("the moon and a box below it", 3000) >= 0 &&
+            log_all.find("Picture dusk: 1 pieces", one) != std::string::npos,
+        "the moon and a box below it not sent as one piece");
+
+  // Two pieces, the box gone and a box lower down. Back to the picture before once the first is in: the panel has
   // neither now, so all of it has to go.
   draw_dusk(panel_picture_dusk, 250, false);
   for (int y = 205; y < 215; y++)
@@ -1173,6 +1201,27 @@ int main(int argc, char **argv) {
           "a fifth animation: '%s'", panel_animation_status.state.c_str());
     anim::clear("");
     run(3);
+    // A GIF that repeats itself goes once round, and a frame shown twice in a row goes as one twice as long
+    auto cycle = [](int f, int x, int y) -> uint32_t {
+      return 0xFF000000u | ((uint32_t) ((f % 3) * 4096 + y * 64 + x + 1) * 2654435761u) >> 8;
+    };
+    auto held = [](int f, int x, int y) -> uint32_t {
+      return 0xFF000000u | ((uint32_t) ((f == 2 ? 1 : f) * 4096 + y * 64 + x + 1) * 2654435761u) >> 8;
+    };
+    anim::add("cycle", {16, 16, 9, 100, 0, 0, 1, cycle});
+    anim::add("held", {16, 16, 4, 100, 0, 40, 1, held});
+    size_t made = log_all.size();
+    anim::show("cycle");
+    anim::show("held");
+    ar = run_until([] { return panel_animation_status.state == "Shown: cycle, held" && settled(); }, 3000);
+    CHECK(ar >= 0 &&
+              log_all.find("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) != std::string::npos &&
+              anim_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
+          "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) anim_delays("cycle").size());
+    CHECK(ar >= 0 && anim_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
+          "held: %u records", (unsigned) anim_delays("held").size());
+    anim::clear("");
+    run(3);
   }
 
   step("the weather picture (packages/panel/met.yaml)");
@@ -1336,6 +1385,7 @@ int main(int argc, char **argv) {
     tz_offset_s = 7200;
     met::redraw();
     CHECK(picture("weather, back in Oslo", 3000) >= 0 && !met::canvas, "weather picture not shown again");
+    CHECK(log_all.find("refused a piece") == std::string::npos, "the panel refused a piece");
     tz_offset_s = 0;
   }
 
