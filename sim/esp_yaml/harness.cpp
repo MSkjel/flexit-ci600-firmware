@@ -1754,6 +1754,18 @@ int main(int argc, char **argv) {
   flexit::panel::notify("Door open", "door", "warning");
   run(10);
   CHECK(!flexit::panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
+  {  // nothing made for it meanwhile
+    namespace pic = flexit::panel::picture;
+    namespace anim = flexit::panel::anim;
+    anim::clear("");
+    pic::show("weather");
+    panel_anim_ball.turn_on();
+    run(50);
+    CHECK(pic::S.phase == pic::START && !flexit::panel::met::canvas && anim::W.phase == anim::IDLE &&
+              panel_picture_status.state == "weather: waiting for the panel",
+          "made for a panel that's away: '%s', '%s'", panel_picture_status.state.c_str(),
+          panel_animation_status.state.c_str());
+  }
   link_lost_frames = 0;
   pn_restart();
   run_until([] { return pn_online() && settled(); }, 2000);
@@ -1761,6 +1773,9 @@ int main(int argc, char **argv) {
   const char *away = pn_note(&icon, &level, &fresh);
   CHECK(fresh && !strcmp(away, "Door open") && flexit::panel::note.empty(), "note while away: '%s', fresh %d", away,
         fresh);
+  CHECK(picture("weather, the panel back", 6000) >= 0 && flexit::panel::anim::find("ball") &&
+            flexit::panel::anim::find("ball")->state == flexit::panel::anim::SENT,
+        "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
   flexit::panel::notify("Washer done", "washer", "info");
   pn_restart();  // before it went out
   run_until([] { return pn_online() && settled(); }, 2000);
