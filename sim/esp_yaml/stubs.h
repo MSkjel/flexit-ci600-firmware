@@ -43,7 +43,12 @@ inline size_t ram_free = 200 * 1024, ram_block = 100 * 1024;  // the fake heap, 
 template<typename T> struct RAMAllocator {  // picture.h checks free RAM before downloading or making a picture
   size_t get_free_heap_size() const { return ram_free; }
   size_t get_max_free_block_size() const { return ram_block; }
+  T *allocate(size_t n) { return n * sizeof(T) > ram_block ? nullptr : (T *) malloc(n * sizeof(T)); }
+  void deallocate(T *p, size_t) { free(p); }
 };
+inline struct {
+  void feed_wdt() {}
+} App;
 void delayMicroseconds(uint32_t us);
 uint32_t micros();
 
@@ -325,27 +330,54 @@ struct OnlineImage : Image {
   void set_url(const std::string &u) { url = u; }
 };
 
-// http_request, for online_picture.yaml's check before a download
+// http_request, for online_picture.yaml's check before a download and met.h's forecast
 namespace http_request {
 struct Header {
   std::string name, value;
 };
+enum class HttpReadLoopResult { DATA, RETRY, COMPLETE, ERROR, TIMEOUT };
+inline HttpReadLoopResult http_read_loop_result(int r, uint32_t &, uint32_t, bool complete) {
+  return r > 0      ? HttpReadLoopResult::DATA
+         : r < 0    ? HttpReadLoopResult::ERROR
+         : complete ? HttpReadLoopResult::COMPLETE
+                    : HttpReadLoopResult::RETRY;
+}
 }  // namespace http_request
 struct HttpContainer {
   int status_code = 200;
   size_t content_length = 0;
-  std::string type;
-  std::string get_response_header(const std::string &) const { return type; }
+  std::string type, body, last_modified, expires;
+  size_t at = 0;  // of body
+  std::string get_response_header(const std::string &h) const {
+    return h == "last-modified" ? last_modified : h == "expires" ? expires : type;
+  }
+  int read(uint8_t *buf, size_t n) {  // 512 at a time, like a real one
+    n = std::min(n, std::min<size_t>(body.size() - at, 512));
+    memcpy(buf, body.data() + at, n);
+    at += n;
+    return (int) n;
+  }
+  bool is_read_complete() const { return at >= body.size(); }
   void end() {}
 };
 struct HttpRequest {
-  size_t length = 0;  // the Content-Length the server reports
-  std::string type;   // and its Content-Type
-  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &,
+  size_t length = 0;                         // the Content-Length the server reports
+  std::string type;                          // and its Content-Type
+  std::string body, last_modified, expires;  // what it answers with
+  bool down = false;                         // no answer at all
+  std::vector<http_request::Header> sent;    // the last request's headers
+  uint32_t get_timeout() const { return 4500; }
+  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &h,
                                      const std::vector<std::string> &) {
+    sent = h;
+    if (down)
+      return nullptr;
     auto c = std::make_shared<HttpContainer>();
-    c->content_length = length;
+    c->content_length = length ? length : body.size();
     c->type = type;
+    c->body = body;
+    c->last_modified = last_modified;
+    c->expires = expires;
     return c;
   }
 };

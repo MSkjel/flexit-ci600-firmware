@@ -1179,8 +1179,31 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 3; i++)
       met::unreachable();
     CHECK(met::backoff_s == 3600 && !met::due(), "kept trying without backing off");
-    met::fetched(200, body.str(), "Mon, 19 Oct 2026 11:34:38 GMT", "Mon, 19 Oct 2026 12:00:00 GMT");
+    // the request itself: no answer, then the forecast in 512-byte reads, then without the RAM for it
+    panel_http.down = true;
+    met::not_before = 0;
+    met::fetch();
+    CHECK(met::backoff_s == 7200 && status == "Couldn't reach MET Norway", "no answer: %s, back-off %u", status.c_str(),
+          (unsigned) met::backoff_s);
+    panel_http.down = false;
+    panel_http.body = body.str();
+    panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
+    panel_http.expires = "Mon, 19 Oct 2026 12:00:00 GMT";
+    met::not_before = 0;
+    met::fetch();
+    CHECK(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
     CHECK(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
+    met::not_before = 0;
+    ram_block = 8 * 1024;
+    met::fetch();
+    CHECK(status == "No RAM for the forecast" && met::not_before == 1792410000 && met::weather.ok,
+          "without the RAM: %s, next at %u", status.c_str(), (unsigned) met::not_before);
+    ram_block = 100 * 1024;
+    met::not_before = 0;
+    met::fetch();
+    CHECK(panel_http.sent.size() == 1 && panel_http.sent[0].name == "If-Modified-Since" &&
+              panel_http.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
+          "If-Modified-Since not sent with the Last-Modified we have");
     CHECK(
         met::weather.ok && !strcmp(met::weather.symbol, "partlycloudy_day") && fabsf(met::weather.temp - 6.6f) < 0.01f,
         "forecast read as %s, %.1f", met::weather.symbol, met::weather.temp);
