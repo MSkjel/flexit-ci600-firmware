@@ -453,7 +453,7 @@ int main(int argc, char **argv) {
   draw_ball(panel_animation_ball, 48, 8, false);
   draw_ball(panel_animation_noise, 64, 8, true);  // too big at full size
   panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
-  panel_animation.publish_state("ball");
+  panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
   CHECK(flexit::panel::picture::S.want == "dusk" && flexit::panel::anim::find("ball"),
         "the restored picture and animation aren't shown after boot: '%s', %d", flexit::panel::picture::S.want.c_str(),
@@ -952,7 +952,7 @@ int main(int argc, char **argv) {
 
   step("animations");
   namespace anim = flexit::panel::anim;
-  panel_animation.control(1);  // the select: "ball"
+  panel_anim_ball.turn_on();  // the switch
   auto shown = [] { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); };
   int ar = run_until(shown, 2000);
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), ar);
@@ -1051,10 +1051,10 @@ int main(int argc, char **argv) {
   CHECK(!anim::find("big") && pn_anim_pos(0, &ax, &ay) && !pn_anim_pos(3, &ax, &ay) &&
             panel_animation_status.state == "Shown: ball (2 copies)",
         "clearing one animation: '%s'", panel_animation_status.state.c_str());
-  panel_animation.control(0);
+  anim::clear("");
   run(3);
-  CHECK(!pn_anim_ready() && !pn_anim_used(), "the animations are still there after None");
-  panel_animation.control(2);  // noise
+  CHECK(!pn_anim_ready() && !pn_anim_used() && !panel_anim_ball.state, "the animations are still there after clearing");
+  panel_anim_noise.turn_on();
   ar = run_until(shown, 3000);
   CHECK(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
         "noise not shown at half size: %s", panel_animation_status.state.c_str());
@@ -1075,7 +1075,8 @@ int main(int argc, char **argv) {
   pn_anim_pos(0, &ax, &ay);
   CHECK(ax == 15, "the drift wasn't sent again after a panel restart: at %d", ax);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
-  flexit::panel::anim::show("big");  // not in the select, so it takes the picked one's place like the select would
+  panel_anim_noise.turn_off();
+  flexit::panel::anim::show("big");  // no yaml, no switch
   ar = run_until([] { return panel_animation_status.state == "Shown: big" && settled(); }, 3000);
   CHECK(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
         panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
@@ -1085,6 +1086,7 @@ int main(int argc, char **argv) {
     };
     // flush with the right and bottom edges, half size rounds up, so it moves in
     anim::add("edge", {62, 45, 8, 100, 258, 195, 1, noise});
+    anim::clear("big");
     anim::show("edge");
     ar = run_until([] { return panel_animation_status.state == "Shown: edge" && settled(); }, 3000);
     pn_anim_pos(0, &ax, &ay);
@@ -1092,17 +1094,20 @@ int main(int argc, char **argv) {
           "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, ax, ay);
     // the panel draws 2x at most, so scale 2 can't go to half size
     anim::add("noise2", {64, 64, 4, 100, 16, 16, 2, noise});
+    anim::clear("edge");
     anim::show("noise2");
     ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
     CHECK(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
               anim::find("noise2")->scale == 2,
           "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
     anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise});
+    anim::clear("noise2");
     anim::show("scale3");
     run(1);
     CHECK(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
           panel_animation_status.state.c_str());
     anim::add("left", {8, 8, 1, 100, -4, 0, 1, noise});
+    anim::clear("scale3");
     anim::show("left");
     run(1);
     CHECK(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
@@ -1112,7 +1117,8 @@ int main(int argc, char **argv) {
     CHECK(anim::sources["slow"].frame_ms == 2550 &&
               log_all.find("frame_ms 5000 is outside 40..2550", slow_at) != std::string::npos,
           "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
-    // None while it's being made frees its buffers
+    // clearing it while it's being made frees its buffers
+    anim::clear("left");
     anim::show("edge");
     anim::W.a = anim::find("edge");
     anim::start();
@@ -1120,10 +1126,10 @@ int main(int argc, char **argv) {
       anim::count();
     anim::make();
     CHECK(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
-    panel_animation.control(0);
+    anim::clear("");
     CHECK(
         !anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
-        "None kept the buffers");
+        "clearing kept the buffers");
     // no room next to the others: ball and three big ones, the last one has to go at half size and is refused
     anim::show("ball");
     anim::place("big", 0, 16, 16, false, 0);
@@ -1147,11 +1153,9 @@ int main(int argc, char **argv) {
     CHECK(!anim::find("big4") &&
               log_all.find("No room for animation big4: the panel holds 4 at a time") != std::string::npos,
           "a fifth animation: '%s'", panel_animation_status.state.c_str());
-    panel_animation.control(0);
+    anim::clear("");
     run(3);
   }
-  panel_animation.control(0);
-  run(3);
 
   step("the weather picture (packages/panel/met.yaml)");
   {
@@ -1251,7 +1255,7 @@ int main(int argc, char **argv) {
     draw_dusk(panel_picture_dusk, 200, false);
     panel_picture.control(1);
     CHECK(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
-    panel_animation.control(2);  // noise, big enough to take a while
+    panel_anim_noise.turn_on();  // big enough to take a while
     int r = run_until([] { return anim::sending() && anim::W.pos > 0 && anim::W.pos < anim::W.a->data.size(); }, 3000);
     CHECK(r >= 0, "the animation never went out");
     panel_picture.control(0);
@@ -1281,15 +1285,16 @@ int main(int argc, char **argv) {
     CHECK(picture("its answer lost", 3000) >= 0 && !lose, "the picture not sent again");
     CHECK(pic::S.tries == 0, "%d tries left over for the next transfer", pic::S.tries);
     lose = 1;
-    panel_animation.control(1);  // ball
+    panel_anim_noise.turn_off();
+    panel_anim_ball.turn_on();
     int r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
     CHECK(r >= 0 && !lose && same_anim("ball", 0), "the animation not sent again: %s",
           panel_animation_status.state.c_str());
     printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), r);
     lose = 3;  // gives up after three tries, tries again after a panel restart
-    panel_animation.control(0);
+    panel_anim_ball.turn_off();
     run(3);
-    panel_animation.control(1);
+    panel_anim_ball.turn_on();
     r = run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::FAILED; }, 3000);
     CHECK(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
           panel_animation_status.state.c_str());
@@ -1308,16 +1313,16 @@ int main(int argc, char **argv) {
             log_all.find("No animation called 'nope'") != std::string::npos,
         "no warnings about the names");
   CHECK(panel_picture.state == "dusk" && panel_picture_status.state.rfind("Shown: dusk", 0) == 0 &&
-            pn_pic(&pw, &ph) == 2 && panel_animation.state == "ball" && pn_anim_ready(),
-        "an unknown name changed what's shown: '%s' '%s', '%s' '%s'", panel_picture.state.c_str(),
-        panel_picture_status.state.c_str(), panel_animation.state.c_str(), panel_animation_status.state.c_str());
+            pn_pic(&pw, &ph) == 2 && panel_anim_ball.state && pn_anim_ready(),
+        "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
+        panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
   flexit::panel::anim::show("");  // panel_show_animation without a name
   flexit::panel::picture::show("");
   run(20);
   CHECK(panel_picture.state == "None" && panel_picture_status.state == "None" && pn_pic(&pw, &ph) == 0,
         "picture '%s' '%s' after no name", panel_picture.state.c_str(), panel_picture_status.state.c_str());
-  CHECK(panel_animation.state == "None" && panel_animation_status.state == "None" && !pn_anim_ready(),
-        "animation '%s' '%s' after no name", panel_animation.state.c_str(), panel_animation_status.state.c_str());
+  CHECK(!panel_anim_ball.state && panel_animation_status.state == "None" && !pn_anim_ready(),
+        "animation %d '%s' after no name", panel_anim_ball.state, panel_animation_status.state.c_str());
 
   panel_picture.control(1);
   CHECK(picture("dusk", 6000) >= 0, "dusk not shown");
@@ -1600,10 +1605,9 @@ int main(int argc, char **argv) {
   pic::show("dusk");
   CHECK(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept", panel_picture.saved.c_str());
   flexit::panel::anim::show("ball");
-  CHECK(panel_animation.saved == "ball", "animation: '%s' kept", panel_animation.saved.c_str());
+  CHECK(panel_anim_ball.state, "animation: the switch isn't on");
   flexit::panel::anim::clear();
-  CHECK(panel_animation.saved == "None" && panel_animation.state == "None", "animation cleared: '%s' kept",
-        panel_animation.saved.c_str());
+  CHECK(!panel_anim_ball.state, "animation cleared: the switch is still on");
   run(10);
 
   step("a number whose entity answers late");
