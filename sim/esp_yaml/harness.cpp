@@ -381,9 +381,10 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
 }
 
 // Whether the panel draws frame f of animation `name` at place p as the ESP made it: transparent in the same
-// places and palette colours elsewhere. The colour map is the last one made, so check right after making it.
+// places and palette colours elsewhere
 static bool same_anim(const char *name, int f, int p = 0) {
   namespace anim = flexit::panel::anim;
+  namespace pic = flexit::panel::picture;
   anim::Anim *a = anim::find(name);
   if (!a)
     return false;
@@ -394,12 +395,29 @@ static bool same_anim(const char *name, int f, int p = 0) {
     anim::Anim *was;
     ~Back() { anim::W.a = was; }
   } back{was};
+  // its colour map, made again as count() makes it, since the ESP frees it
+  std::vector<uint32_t> hist(4096);
+  for (int g = 0; g < A.src->frames; g++)
+    for (int y = 0; y < A.h; y++)
+      for (int x = 0; x < A.w; x++) {
+        uint32_t c = anim::px(g, x, y);
+        if (c >> 24 >= 128)
+          hist[pic::bin(c)]++;
+      }
+  uint32_t pal[16] = {};
+  std::vector<uint16_t> bins;
+  int colours = pic::median_cut(hist, A.transp == 15 ? 15 : 16, pal, bins);
+  if (memcmp(pal, A.pal, sizeof pal))
+    return false;
+  std::vector<uint8_t> lut(4096);
+  for (int i = 0; i < 4096; i++)
+    lut[i] = (uint8_t) pic::nearest(pic::bin_rgb(i), A.pal, colours);
   for (int y = 0; y < A.h * A.scale; y++) {
     uint8_t line[320 * 3];
     if (pn_anim_line(p, y, line) != A.w * A.scale)
       return false;
     for (int x = 0; x < A.w * A.scale; x++) {
-      uint32_t c = anim::px(f, x / A.scale, y / A.scale), rgb = A.pal[anim::W.lut[flexit::panel::picture::bin(c)]];
+      uint32_t c = anim::px(f, x / A.scale, y / A.scale), rgb = A.pal[lut[pic::bin(c)]];
       uint16_t want = (rgb >> 8 & 0xF800) | (rgb >> 5 & 0x07E0) | (rgb >> 3 & 0x001F),
                got = line[3 * x] | line[3 * x + 1] << 8;
       bool see = c >> 24 < 128;
@@ -1194,7 +1212,7 @@ int main(int argc, char **argv) {
     CHECK(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
     CHECK(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
     met::not_before = 0;
-    ram_block = 8 * 1024;
+    ram_block = 2 * 1024;  // the reader's buffer is 4 KB
     met::fetch();
     CHECK(status == "No RAM for the forecast" && met::not_before == 1792410000 && met::weather.ok,
           "without the RAM: %s, next at %u", status.c_str(), (unsigned) met::not_before);
@@ -1211,9 +1229,39 @@ int main(int argc, char **argv) {
     CHECK(met::weather.hours == 12 && met::weather.hour[2].time == met::weather.hour[0].time + 7200,
           "forecast hours: %d", met::weather.hours);
     CHECK(status.find("partlycloudy_day") == 0, "status: %s", status.c_str());
+    // the reader with the answer cut anywhere, more hours than it needs, and an hour too big for its buffer
+    auto read = [](const std::string &b, size_t chunk, bool *stopped) {
+      std::vector<char> buf(met::Reader::SIZE + 1);
+      met::Reader rd(buf.data());
+      *stopped = false;
+      for (size_t at = 0, room; at < b.size() && !*stopped; at += room) {
+        char *p = rd.space(room);
+        room = std::min({room, chunk, b.size() - at});
+        memcpy(p, b.data() + at, room);
+        *stopped = !rd.got(room);
+      }
+      return rd.w;
+    };
+    bool stopped;
+    std::string b = body.str();
+    met::Weather w1 = read(b, 1, &stopped);
+    CHECK(!stopped && w1.hours == met::weather.hours && w1.temp == met::weather.temp &&
+              w1.cloud == met::weather.cloud && !strcmp(w1.symbol, met::weather.symbol) &&
+              w1.hour[5].time == met::weather.hour[5].time,
+          "a byte at a time: %d hours, %s", w1.hours, w1.symbol);
+    size_t e = b.find("{\"time\""), f = b.find("{\"time\"", e + 1);
+    std::string many = b.substr(0, f);
+    for (int i = 0; i < 30; i++)
+      many += b.substr(e, f - e);
+    met::Weather w2 = read(many, 512, &stopped);
+    CHECK(stopped && w2.ok && w2.hours == met::HOURS, "30 hours: %d read, stopped %d", w2.hours, stopped);
+    std::string big = b.substr(0, f) + "{\"time\":\"" + std::string(5000, 'x') + "\"}," + b.substr(e, f - e);
+    met::Weather w3 = read(big, 512, &stopped);
+    CHECK(stopped && w3.ok && w3.hours == 1, "an hour over 4 KB: %d hours, stopped %d", w3.hours, stopped);
     flexit::panel::picture::show("weather");
     CHECK(picture("weather", 6000) >= 0, "weather picture not shown");
     CHECK(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "weather picture %dx%d", pw, ph);
+    CHECK(!met::canvas, "the scene kept its RAM once the picture was made");
     run(10);
     PanelItem wx = pitem("weather");
     CHECK(wx.value == 66 && wx.icon == ICN_SUN && !strcmp(wx.label, "Fair") && !(wx.flags & (ITEMF_VIEW | ITEMF_MENU)),
@@ -1232,26 +1280,33 @@ int main(int argc, char **argv) {
     CHECK(picture("weather with the forecast", 3000) >= 0, "weather picture with the forecast not shown");
     pn_shot(outdir, "esp_weather_forecast");
     met::with_forecast = false;
-    met::fetched(304, "", "", "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
+    ram_block = 8 * 1024;  // the scene's biggest piece is about 14 KB
+    met::redraw();
+    run(20);
+    CHECK(!met::canvas && panel_picture_status.state == "weather: no RAM to draw it",
+          "without the RAM to draw it: '%s'", panel_picture_status.state.c_str());
+    ram_block = 100 * 1024;
+    CHECK(picture("weather, with the RAM back", 3000) >= 0 && !met::canvas, "not drawn with the RAM back");
+    met::fetched(304, {}, "", "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
     CHECK(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
     CHECK(met::not_before == 1792414800, "the 304's Expires not kept");
-    met::fetched(500, "", "", "");
+    met::fetched(500, {}, "", "");
     CHECK(met::weather.ok && status.find("HTTP 500") != std::string::npos, "an error lost the forecast: %s",
           status.c_str());
     // errors back off an hour, then twice as long, and an answer starts over
     uint32_t now = (uint32_t) flexit_panel_time.t.timestamp;
     CHECK(met::not_before == now + 3600, "no back-off after an error");
-    met::fetched(429, "", "", "");
+    met::fetched(429, {}, "", "");
     CHECK(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
     flexit_panel_time.t.timestamp += 7200;
     CHECK(met::due(), "not due after the back-off");
-    met::fetched(304, "", "", "");  // without Expires, an hour
+    met::fetched(304, {}, "", "");  // without Expires, an hour
     CHECK(met::backoff_s == 0 && met::not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
     met::unreachable();  // no answer at all backs off too
     CHECK(met::backoff_s == 3600 && status == "Couldn't reach MET Norway", "no back-off without an answer: %s",
           status.c_str());
     met::weather.ok = false;
-    met::fetched(203, body.str(), "", "");  // a deprecated product, its data is still good
+    met::fetched(203, w1, "", "");  // a deprecated product, its data is still good
     CHECK(met::weather.ok && met::backoff_s == 0, "a 203 not taken: %s", status.c_str());
     CHECK(met::http_date("Fri, 31 Dec 1999 23:59:59 GMT") == 946684799 && !met::http_date("soon") &&
               !met::http_date("Mon, 19 Foo 2026 11:34:38 GMT"),
@@ -1262,13 +1317,25 @@ int main(int argc, char **argv) {
     flexit_panel_time.t.timestamp = 1780228800;  // 2026-05-31 12:00 UTC
     tz_offset_s = 13 * 3600;
     met::redraw();
+    CHECK(met::draw(), "the scene not drawn");
     static met::Scene want;
+    static met::Sprite sprites[met::SPRITES];
+    static uint8_t ov[met::OV_H][met::W / 4];
+    want.sprite = sprites;
+    want.ov = ov;
     met::build(want, met::weather, met::lat, met::lon, 1780228800, false, 13 * 3600, met::options);
-    CHECK(!memcmp(&want, &met::scene, sizeof want), "UTC+13 drawn for the day before");
+    bool same = true;
+    for (int y = 0; y < met::H && same; y++) {
+      uint32_t r1[met::W], r2[met::W];
+      met::row(want, y, r1);
+      met::row(met::canvas->scene, y, r2);
+      same = !memcmp(r1, r2, sizeof r1);
+    }
+    CHECK(same, "UTC+13 drawn for the day before");
     flexit_panel_time.t = was;
     tz_offset_s = 7200;
     met::redraw();
-    CHECK(picture("weather, back in Oslo", 3000) >= 0, "weather picture not shown again");
+    CHECK(picture("weather, back in Oslo", 3000) >= 0 && !met::canvas, "weather picture not shown again");
     tz_offset_s = 0;
   }
 

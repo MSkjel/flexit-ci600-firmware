@@ -61,6 +61,10 @@ static Weather wx(const char *symbol, float cloud, float rain = 0, float temp = 
 
 static void render(const char *dir, const Case &c) {
   static Scene s;
+  static Sprite sprite[SPRITES];
+  static uint8_t ov[OV_H][W / 4];
+  s.sprite = sprite;
+  s.ov = ov;
   Weather w = c.w;
   if (w.ok && !w.time)
     w.time = c.t / 3600 * 3600;
@@ -157,12 +161,22 @@ int main(int argc, char **argv) {
        69.65,
        18.96},
   };
-  if (argc > 2) {  // a real answer, only the start of it, as the ESP gets it
+  if (argc > 2) {  // a real answer, read as the ESP reads it
     std::ifstream in(argv[2]);
     std::stringstream ss;
     ss << in.rdbuf();
-    Weather w;
-    if (parse(ss.str().substr(0, 20480), w)) {
+    std::string body = ss.str();
+    std::vector<char> buf(Reader::SIZE + 1);
+    Reader rd(buf.data());
+    for (size_t at = 0, room; at < body.size(); at += room) {
+      char *p = rd.space(room);
+      room = std::min(room, body.size() - at);
+      memcpy(p, body.data() + at, room);
+      if (!rd.got(room))
+        break;
+    }
+    const Weather &w = rd.w;
+    if (w.ok) {
       printf("parsed: %s %.1f C, clouds %.0f (low %.0f mid %.0f high %.0f) fog %.0f, rain %.1f mm, wind %.1f from "
              "%.0f, thunder %.0f; %d hours\n",
              w.symbol, w.temp, w.cloud, w.cloud_low, w.cloud_mid, w.cloud_high, w.fog, w.rain, w.wind, w.wind_from,
