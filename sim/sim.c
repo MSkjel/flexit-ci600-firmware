@@ -1088,7 +1088,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 200; i++) {
     run(50);
     stale += sim_stale();
-    anim_pos(&ax, &ay);
+    anim_pos(0, &ax, &ay);
     if (ax > 250 && ax <= 296)
       break;
   }
@@ -1106,14 +1106,14 @@ int main(int argc, char **argv) {
   sim_esp_move_animation(ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
   settle();
   run(500);
-  anim_pos(&ax, &ay);
+  anim_pos(0, &ax, &ay);
   check(ax > 100 && ay < 100, "the animation isn't on its way");
   run(600);
-  anim_pos(&ax, &ay);
+  anim_pos(0, &ax, &ay);
   check(ax == 100 && ay == 100 && ball_in(100, 100), "the glide didn't land on 100,100");
   unsigned long px = sim_px;
   run(300);
-  anim_pos(&ax, &ay);
+  anim_pos(0, &ax, &ay);
   check(ax == 100 && sim_px > px, "the frames stopped after the glide");
   // the motion pauses with the backlight: idle at night with the night idle brightness 0
   sim_esp_move_animation(ANIM_DRIFT, 60, 0, 0);
@@ -1127,19 +1127,19 @@ int main(int argc, char **argv) {
   M.night_from = 0;
   M.night_to = 23;
   run(16000);  // idle, the screensaver comes up by itself, dark
-  anim_pos(&ax, &ay);
+  anim_pos(0, &ax, &ay);
   int16_t bx;
   run(1000);
-  anim_pos(&bx, &ay);
+  anim_pos(0, &bx, &ay);
   check(bx == ax, "the animation drifts while the backlight is off");
   M.night = false;
   run(1000);
-  anim_pos(&bx, &ay);
+  anim_pos(0, &bx, &ay);
   check(bx == ax + 60, "the animation didn't drift on when the backlight came back");
   key(KEY_OK);
   M.idle_after = (uint8_t) idle_after;
   M.go_home = go_home;
-  sim_esp_set(K_ANIM_CLEAR, 0);
+  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
   settle();
   ui_go_home();
   key(KEY_OK);

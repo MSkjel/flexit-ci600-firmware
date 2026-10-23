@@ -78,7 +78,8 @@ static void cu60_cycle(void) {
 // ---------------------------------------------------------------- sending pictures, as the ESP does
 static uint8_t comp[PIC_POOL + 1024];
 static unsigned comp_len, comp_pos;
-static bool pic_sending;
+static bool pic_sending, place_after;  // place_after: an animation, place it at place_x, place_y after END
+static int place_x, place_y;
 static uint8_t pic_id;
 
 static unsigned pack_rows(const uint8_t rows[][TP_W / 2], int y, int count) {
@@ -253,28 +254,39 @@ unsigned sim_esp_send_animation(int x, int y) {
   for (int f = 0; f <= AN_FRAMES; f++)
     comp_len += plink_anim_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
                                   comp + comp_len);
-  // ANIM_BEGIN: id, w, h, scale, x, y, transparent colour, len, palette
-  uint8_t h[63] = {++pic_id};
-  put16(h + 1, AN_W);
-  put16(h + 3, AN_H);
-  h[5] = 1;
-  put16(h + 6, (unsigned) x);
-  put16(h + 8, (unsigned) y);
-  h[10] = 15;
-  put32(h + 11, comp_len);
-  put_palette(h + 15, PAL);
+  // ANIM_BEGIN: id, slot, w, h, scale, transparent colour, len, palette. Then place 0 at x, y once it's in.
+  uint8_t h[60] = {++pic_id, 0};
+  put16(h + 2, AN_W);
+  put16(h + 4, AN_H);
+  h[6] = 1;
+  h[7] = 15;
+  put32(h + 8, comp_len);
+  put_palette(h + 12, PAL);
   send(K_ANIM_BEGIN, h, sizeof h);
   comp_pos = 0;
   pic_sending = true;
+  place_x = x;
+  place_y = y;
+  place_after = true;
   return comp_len;
 }
 
+// ANIM_PLACE: place, slot, x, y, own, start
+void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start) {
+  uint8_t m[8] = {(uint8_t) place, (uint8_t) slot};
+  put16(m + 2, (unsigned) x);
+  put16(m + 4, (unsigned) y);
+  m[6] = (uint8_t) own;
+  m[7] = (uint8_t) start;
+  send(K_ANIM_PLACE, m, sizeof m);
+}
+
 void sim_esp_move_animation(int mode, int a, int b, int ms) {
-  uint8_t m[7] = {(uint8_t) mode};
-  put16(m + 1, (unsigned) a);
-  put16(m + 3, (unsigned) b);
-  put16(m + 5, (unsigned) ms);
-  send(K_ANIM_MOVE, m, mode == ANIM_GLIDE ? 7 : mode == ANIM_DRIFT ? 5 : 1);
+  uint8_t m[8] = {0, (uint8_t) mode};
+  put16(m + 2, (unsigned) a);
+  put16(m + 4, (unsigned) b);
+  put16(m + 6, (unsigned) ms);
+  send(K_ANIM_MOVE, m, mode == ANIM_GLIDE ? 8 : mode == ANIM_DRIFT ? 6 : 2);
 }
 
 static void esp_pump(void) {
@@ -282,6 +294,9 @@ static void esp_pump(void) {
     if (comp_pos >= comp_len) {
       send_number(K_PIC_END, plink_crc32(0, comp, comp_len));
       pic_sending = false;
+      if (place_after)
+        sim_esp_place_animation(0, 0, place_x, place_y, 0, 0);
+      place_after = false;
       break;
     }
     uint8_t b[64] = {0};  // DATA is padded to a multiple of 4 bytes

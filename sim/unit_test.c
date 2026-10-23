@@ -313,26 +313,39 @@ static void test_jpeg(void) {
   CHECK(pic_state() == PIC_NONE);
 }
 
-// ---------------------------------------------------------------- the animation
+// ---------------------------------------------------------------- the animations
 #define AW 8
 #define AH 4
 static uint8_t an[4][AH][AW / 2];  // the frames, colour 15 is transparent
 
-// ANIM_BEGIN: id, w, h, scale, x, y, transparent colour, len, palette. Then the data.
-static int32_t anim_send(int w, int x, uint32_t len, const uint8_t *data, uint32_t crc) {
-  uint8_t h[63] = {++id};
-  put16(h + 1, (unsigned) w);
-  put16(h + 3, AH);
-  h[5] = 2;
-  put16(h + 6, (unsigned) x);
-  put16(h + 8, 10);
-  h[10] = 15;
-  put32(h + 11, len);
-  palette(h + 15);
+// ANIM_BEGIN: id, slot, w, h, scale, transparent colour, len, palette. Then the data.
+static int32_t anim_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc) {
+  uint8_t h[60] = {++id, (uint8_t) slot};
+  put16(h + 2, (unsigned) w);
+  put16(h + 4, AH);
+  h[6] = 2;
+  h[7] = 15;
+  put32(h + 8, len);
+  palette(h + 12);
   return rest(pic_msg(K_ANIM_BEGIN, h, sizeof h), data, len, 5, crc);
 }
 
-// Whether the animation's decoder gives frame f, drawn at 2x.
+// ANIM_PLACE: place, slot, x, y, own, start
+static void place(int p, int slot, int x, int y, int own, int start) {
+  uint8_t m[8] = {(uint8_t) p, (uint8_t) slot};
+  put16(m + 2, (unsigned) x);
+  put16(m + 4, (unsigned) y);
+  m[6] = (uint8_t) own;
+  m[7] = (uint8_t) start;
+  pic_msg(K_ANIM_PLACE, m, sizeof m);
+}
+
+static void anim_clear_msg(unsigned v) {
+  uint8_t m[4] = {(uint8_t) v};
+  pic_msg(K_ANIM_CLEAR, m, 4);
+}
+
+// Whether an image's decoder gives frame f of the AW x AH frames, drawn at 2x.
 static bool anim_shows(lv_obj_t *img, int f) {
   lv_img_decoder_dsc_t dsc;
   if (lv_img_decoder_open(&dsc, lv_img_get_src(img), lv_color_black(), 0) != LV_RES_OK)
@@ -351,6 +364,14 @@ static bool anim_shows(lv_obj_t *img, int f) {
   return same;
 }
 
+// the records of the 4 test frames: frame 0 whole, the last record back to frame 0. Frame f shows for delay + f
+static uint32_t anim_records(uint8_t *d, int delay) {
+  uint32_t n = 0;
+  for (int f = 0; f <= 4; f++)
+    n += plink_anim_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, (uint8_t) (delay + f), d + n);
+  return n;
+}
+
 static void test_anim(void) {
   memset(an, 0xFF, sizeof an);
   an[0][1][1] = 0x12;  // a dot that moves, then stays
@@ -358,10 +379,11 @@ static void test_anim(void) {
   an[2][2][2] = 0x34;
   an[3][0][0] = 0x56;
   uint8_t d[512];
-  uint32_t n = 0;
-  for (int f = 0; f <= 4; f++)  // frame 0 whole, the last record back to frame 0
-    n += plink_anim_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, (uint8_t) (5 + f), d + n);
-  CHECK(status(anim_send(AW, 0, n, d, plink_crc32(0, d, n))) == PIC_DONE && anim_ready());
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && !anim_ready());  // not placed yet
+  CHECK(anim_used() == AW / 2 * AH + n && !anim_show(lv_scr_act()));
+  place(0, 0, 0, 10, 0, 0);
+  CHECK(anim_ready());
   lv_obj_t *img = anim_show(lv_scr_act());
   CHECK(img && anim_shows(img, 0));
   sim_run(50);  // the first frame for 50 ms, the next for 60, ...
@@ -375,46 +397,123 @@ static void test_anim(void) {
   lv_obj_del(img);
 
   // bad sizes, then bad data
-  CHECK(status(anim_send(AW - 1, 0, n, d, 0)) == PIC_BAD_SIZE && !anim_ready());
-  CHECK(status(anim_send(AW, PIC_MAX_W - AW, n, d, 0)) == PIC_BAD_SIZE);
-  CHECK(status(anim_send(AW, 0, ANIM_POOL, d, 0)) == PIC_TOO_BIG);
-  CHECK(status(anim_send(AW, 0, UINT32_MAX, d, 0)) == PIC_TOO_BIG);  // doesn't wrap round to fit
-  uint8_t big[63] = {++id};                                          // a frame bigger than the pool
-  put16(big + 1, 160);
-  put16(big + 3, 100);
-  big[5] = 1;
-  big[10] = ANIM_OPAQUE;
-  put32(big + 11, 4);
+  CHECK(status(anim_send(0, AW - 1, n, d, 0)) == PIC_BAD_SIZE && !anim_ready());  // the slot's gone with it
+  CHECK(status(anim_send(0, PIC_MAX_W, n, d, 0)) == PIC_BAD_SIZE);
+  CHECK(status(anim_send(0, AW, ANIM_POOL, d, 0)) == PIC_TOO_BIG);
+  CHECK(status(anim_send(0, AW, UINT32_MAX, d, 0)) == PIC_TOO_BIG);  // doesn't wrap round to fit
+  uint8_t big[60] = {++id, 1};                                       // a frame bigger than the pool
+  put16(big + 2, 160);
+  put16(big + 4, 100);
+  big[6] = 1;
+  big[7] = ANIM_OPAQUE;
+  put32(big + 8, 4);
   CHECK(status(pic_msg(K_ANIM_BEGIN, big, sizeof big)) == PIC_TOO_BIG);
+  big[1] = ANIM_SLOTS;  // no such slot
+  CHECK(status(pic_msg(K_ANIM_BEGIN, big, sizeof big)) == PIC_BAD);
   uint8_t bad[sizeof d];
   memcpy(bad, d, n);
   bad[4] = AH + 1;
-  CHECK(status(anim_send(AW, 0, n, bad, plink_crc32(0, bad, n))) == PIC_BAD);
-  CHECK(status(anim_send(AW, 0, n, d, 12345)) == PIC_BAD_CRC);
+  CHECK(status(anim_send(0, AW, n, bad, plink_crc32(0, bad, n))) == PIC_BAD);
+  CHECK(status(anim_send(0, AW, n, d, 12345)) == PIC_BAD_CRC);
   uint8_t five[5] = {0x11, 0x11, 0x11, 0x11, 0x11}, over[5 + PDEFLATE_BOUND(5)] = {5, 0, 0, 4, 1};
   uint32_t on = 5 + pdeflate(five, 5, 5, 5, over + 5, PDEFLATE_BOUND(5));  // 5 bytes for a rectangle of 4
-  CHECK(status(anim_send(AW, 0, on, over, plink_crc32(0, over, on))) == PIC_BAD);
-  CHECK(status(anim_send(AW, 0, n - 1, d, plink_crc32(0, d, n - 1))) == PIC_BAD);  // the last record cut short
+  CHECK(status(anim_send(0, AW, on, over, plink_crc32(0, over, on))) == PIC_BAD);
+  CHECK(status(anim_send(0, AW, n - 1, d, plink_crc32(0, d, n - 1))) == PIC_BAD);  // the last record cut short
+  CHECK(anim_used() == 0);
   // A picture coming in cancels an animation coming in. A finished animation stays until the ESP clears it.
-  CHECK(status(anim_send(AW, 0, n, d, plink_crc32(0, d, n))) == PIC_DONE);
-  uint8_t h[63] = {++id};
-  put16(h + 1, AW);
-  put16(h + 3, AH);
-  h[5] = 1;
-  h[10] = 15;
-  put32(h + 11, n);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 10, 0, 0);
+  uint8_t h[60] = {++id, 1};
+  put16(h + 2, AW);
+  put16(h + 4, AH);
+  h[6] = 1;
+  h[7] = 15;
+  put32(h + 8, n);
   CHECK(pic_msg(K_ANIM_BEGIN, h, sizeof h) == -1 && data(d, n / 2) == -1);
   fill(0, H, 5);
-  CHECK(status(send_picture(16)) == PIC_DONE && shows() && !anim_ready());
+  CHECK(status(send_picture(16)) == PIC_DONE && shows() && anim_ready() && anim_used() == AW / 2 * AH + n);
   CHECK(data(d + n / 2, n - n / 2) == -1 && end(plink_crc32(0, d, n)) == -1);  // the rest is no longer expected
-  CHECK(status(anim_send(AW, 0, n, d, plink_crc32(0, d, n))) == PIC_DONE && anim_ready());
-  pic_msg(K_ANIM_CLEAR, NULL, 0);
-  CHECK(!anim_ready() && shows());
+  CHECK(status(anim_send(1, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && anim_ready());
+  anim_clear_msg(ANIM_ALL);
+  CHECK(!anim_ready() && shows() && anim_used() == 0);
+}
+
+// Two slots and places in step and out of step, sharing the pool
+static void test_anim_slots(void) {
+  uint8_t d[512], d2[ANIM_POOL];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  uint32_t n2 = anim_records(d2, 10);  // the same frames in slot 1, every one twice as long
+  CHECK(status(anim_send(1, AW, n2, d2, plink_crc32(0, d2, n2))) == PIC_DONE);
+  unsigned frame = AW / 2 * AH, both = 2 * frame + n + n2;
+  CHECK(anim_used() == both);
+  place(0, 0, 0, 0, 0, 0);
+  place(1, 0, 100, 0, 0, 0);    // in step with place 0
+  place(2, 0, 200, 0, 1, 2);    // its own frame, 2 frames ahead
+  place(3, 1, 0, 100, 0, 0);    // slot 1
+  place(4, 1, 100, 100, 1, 0);  // its own frame, in step as it happens
+  CHECK(anim_used() == both + 2 * frame);
+  place(5, 2, 0, 0, 0, 0);              // no animation there
+  place(6, 0, PIC_MAX_W - 1, 0, 0, 0);  // off the screen
+  place(ANIM_PLACES, 0, 0, 0, 0, 0);    // no such place
+  int16_t x, y;
+  CHECK(anim_pos(2, &x, &y) && x == 200 && y == 0 && !anim_pos(5, &x, &y) && !anim_pos(6, &x, &y));
+  lv_obj_t *img[5];
+  CHECK(anim_show(lv_scr_act()));
+  for (int i = 0; i < 5; i++)
+    img[i] = lv_obj_get_child(lv_scr_act(), -5 + i);
+  // slot 0 shows a frame for 50, 60, 70, 80 ms, slot 1 for 100, 110, ...; place 2 starts on frame 2
+  CHECK(anim_shows(img[0], 0) && anim_shows(img[1], 0) && anim_shows(img[2], 2) && anim_shows(img[3], 0) &&
+        anim_shows(img[4], 0));
+  sim_run(50);
+  CHECK(anim_shows(img[0], 1) && anim_shows(img[1], 1) && anim_shows(img[2], 2) && anim_shows(img[3], 0) &&
+        anim_shows(img[4], 0));
+  sim_run(50);  // 100: place 2 on to frame 3 at 70, slot 1 to frame 1
+  CHECK(anim_shows(img[0], 1) && anim_shows(img[2], 3) && anim_shows(img[3], 1) && anim_shows(img[4], 1));
+  sim_run(10);  // 110: slot 0 to frame 2
+  CHECK(anim_shows(img[0], 2) && anim_shows(img[1], 2) && anim_shows(img[2], 3));
+  sim_run(40);  // 150: place 2 back to frame 0
+  CHECK(anim_shows(img[2], 0) && anim_shows(img[0], 2));
+  // a new place takes the old one's spot, a place with a frame of its own gives it back when cleared
+  place(2, 1, 50, 50, 0, 0);
+  CHECK(anim_used() == both + frame && anim_pos(2, &x, &y) && x == 50);
+  anim_clear_msg(ANIM_PLACE_BIT | 4);
+  CHECK(anim_used() == both && !anim_pos(4, &x, &y));
+  // the pool is packed: clearing slot 0 moves slot 1 down, and it plays on from where it was
+  anim_clear_msg(0);
+  CHECK(anim_used() == frame + n2 && !anim_pos(0, &x, &y) && !anim_pos(1, &x, &y) && anim_pos(3, &x, &y));
+  CHECK(anim_shows(img[3], 1));
+  sim_run(60);  // 210
+  CHECK(anim_shows(img[3], 2));
+  // one byte too many for what's left
+  CHECK(status(anim_send(0, AW, ANIM_POOL - anim_used() - frame + 1, d, 0)) == PIC_TOO_BIG &&
+        anim_used() == frame + n2);
+  anim_clear_msg(ANIM_ALL);
+  CHECK(anim_used() == 0);
+  // slot 1 padded with empty records until only one frame of its own fits behind slot 0 and it
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  uint32_t m = (ANIM_POOL - anim_used() - 2 * frame - n2) / 5;
+  for (uint32_t i = 0; i < m; i++)
+    memcpy(d2 + n2 + 5 * i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
+  uint32_t n3 = n2 + 5 * m;
+  CHECK(status(anim_send(1, AW, n3, d2, plink_crc32(0, d2, n3))) == PIC_DONE);
+  CHECK(ANIM_POOL - anim_used() >= frame && ANIM_POOL - anim_used() < 2 * frame);
+  place(0, 0, 0, 0, 1, 0);
+  place(1, 0, 20, 0, 1, 0);  // no room for its frame
+  place(2, 1, 40, 0, 0, 0);  // no frame needed
+  CHECK(anim_pos(0, &x, &y) && !anim_pos(1, &x, &y) && anim_pos(2, &x, &y));
+  anim_clear_msg(ANIM_PLACE_BIT | 0);
+  place(1, 0, 20, 0, 1, 0);
+  CHECK(!anim_pos(0, &x, &y) && anim_pos(1, &x, &y));
+  anim_clear_msg(ANIM_ALL);
+  CHECK(anim_used() == 0 && !anim_ready());
+  lv_obj_clean(lv_scr_act());
 }
 
 static bool anim_at(lv_obj_t *img, int x, int y) {
   int16_t ax, ay;
-  anim_pos(&ax, &ay);
+  if (!anim_pos(0, &ax, &ay))
+    return false;
   lv_obj_update_layout(img);
   return ax == x && ay == y && lv_obj_get_x(img) == x && lv_obj_get_y(img) == y;
 }
@@ -431,40 +530,42 @@ static bool ghosts_shown(lv_obj_t *img, bool right, bool below) {
 // K_ANIM_MOVE: glides land on the target, drifts wrap round the screen, bad messages are ignored
 static void test_anim_move(void) {
   uint8_t d[512];
-  uint32_t n = 0;
-  for (int f = 0; f <= 4; f++)
-    n += plink_anim_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, 5, d + n);
-  uint8_t stop[1] = {ANIM_STOP}, glide[7] = {ANIM_GLIDE}, drift[5] = {ANIM_DRIFT}, bad[7] = {3};
-  put16(glide + 1, 100);
-  put16(glide + 3, 50);
-  put16(drift + 1, (unsigned) -40);           // 40 px/s left, 2 px a step
+  uint32_t n = anim_records(d, 5);
+  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT}, bad[8] = {0, 3};
+  put16(glide + 2, 100);
+  put16(glide + 4, 50);
+  put16(drift + 2, (unsigned) -40);           // 40 px/s left, 2 px a step
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // no animation yet
-  CHECK(status(anim_send(AW, 10, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 10, 10, 0, 0);
   lv_obj_t *img = anim_show(lv_scr_act());
-  CHECK(img && anim_at(img, 10, 10) && ghosts_shown(img, false, false));  // 16x8 at the header's x, 10
-  pic_msg(K_ANIM_MOVE, glide, 5);                                         // the wrong length for the mode
-  pic_msg(K_ANIM_MOVE, drift, 7);
-  pic_msg(K_ANIM_MOVE, stop, 2);
-  pic_msg(K_ANIM_MOVE, bad, 7);
+  CHECK(img && anim_at(img, 10, 10) && ghosts_shown(img, false, false));  // 16x8 where it was placed
+  pic_msg(K_ANIM_MOVE, glide, 6);                                         // the wrong length for the mode
+  pic_msg(K_ANIM_MOVE, drift, 8);
+  pic_msg(K_ANIM_MOVE, stop, 3);
+  pic_msg(K_ANIM_MOVE, bad, 8);
   pic_msg(K_ANIM_MOVE, NULL, 0);
+  glide[0] = 1;  // no such place
+  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  glide[0] = 0;
   sim_run(200);
   CHECK(anim_at(img, 10, 10));
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // ms = 0 is a jump
   CHECK(anim_at(img, 100, 50));
-  put16(glide + 1, 310);  // partly off the right edge: that's where it is, no wrapping until it drifts
+  put16(glide + 2, 310);  // partly off the right edge: that's where it is, no wrapping until it drifts
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);
   CHECK(anim_at(img, 310, 50) && ghosts_shown(img, false, false));
-  put16(drift + 3, 0);
+  put16(drift + 4, 0);
   pic_msg(K_ANIM_MOVE, drift, sizeof drift);
   sim_run(50);
   CHECK(anim_at(img, 308, 50) && ghosts_shown(img, true, false));
-  put16(glide + 1, (unsigned) -20);  // a glide can end partly off the screen
-  put16(glide + 3, 60);
-  put16(glide + 5, 1000);
+  put16(glide + 2, (unsigned) -20);  // a glide can end partly off the screen
+  put16(glide + 4, 60);
+  put16(glide + 6, 1000);
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);
   sim_run(500);
   int16_t x, y;
-  anim_pos(&x, &y);
+  anim_pos(0, &x, &y);
   CHECK(x == 144 && y == 55);  // halfway from 308, 50
   sim_run(500);
   CHECK(anim_at(img, -20, 60));  // landed exactly
@@ -479,8 +580,8 @@ static void test_anim_move(void) {
   CHECK(anim_at(img, 318, 60) && ghosts_shown(img, true, false));  // over the right edge, the ghost draws the rest
   sim_run(50 * 159);
   CHECK(anim_at(img, 0, 60) && ghosts_shown(img, false, false));
-  put16(drift + 1, 0);
-  put16(drift + 3, 100);  // 5 px a step down
+  put16(drift + 2, 0);
+  put16(drift + 4, 100);  // 5 px a step down
   pic_msg(K_ANIM_MOVE, drift, sizeof drift);
   sim_run(50 * 35);
   CHECK(anim_at(img, 0, 235) && ghosts_shown(img, false, true));
@@ -488,8 +589,8 @@ static void test_anim_move(void) {
   CHECK(anim_at(img, 0, 0) && ghosts_shown(img, false, false));
   sim_run(50);
   CHECK(anim_at(img, 0, 5));
-  put16(drift + 1, (unsigned) -1);  // the sub-pixel part adds up
-  put16(drift + 3, 0);
+  put16(drift + 2, (unsigned) -1);  // the sub-pixel part adds up
+  put16(drift + 4, 0);
   pic_msg(K_ANIM_MOVE, drift, sizeof drift);
   sim_run(50);
   CHECK(anim_at(img, 319, 5) && ghosts_shown(img, true, false));
@@ -497,7 +598,7 @@ static void test_anim_move(void) {
   CHECK(anim_at(img, 319, 5));
   sim_run(50);
   CHECK(anim_at(img, 318, 5));
-  pic_msg(K_ANIM_MOVE, stop, 1);
+  pic_msg(K_ANIM_MOVE, stop, 2);
   sim_run(1000);
   CHECK(anim_at(img, 318, 5));
   // the animation outlives its image, and the motion with it
@@ -509,34 +610,35 @@ static void test_anim_move(void) {
   sim_run(1000);
   CHECK(anim_at(img, 317, 5));
   lv_obj_del(img);
-  // a new animation starts where its header says, still
-  CHECK(status(anim_send(AW, 20, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  // placing it again stops it and puts it there
+  place(0, 0, 20, 10, 0, 0);
   img = anim_show(lv_scr_act());
   sim_run(1000);
   CHECK(img && anim_at(img, 20, 10));
   pic_msg(K_ANIM_MOVE, drift, sizeof drift);
-  pic_msg(K_ANIM_CLEAR, NULL, 0);  // clearing stops it
-  CHECK(status(anim_send(AW, 20, n, d, plink_crc32(0, d, n))) == PIC_DONE);
-  lv_obj_del(img);
+  anim_clear_msg(0);  // clearing the slot takes the place with it
+  CHECK(!anim_pos(0, &x, &y));
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 20, 10, 0, 0);
   img = anim_show(lv_scr_act());
   sim_run(2000);
   CHECK(anim_at(img, 20, 10));
-  put16(glide + 1, (unsigned) -32768);  // a glide across the whole int16 range
-  put16(glide + 3, 10);
-  put16(glide + 5, 0);
+  put16(glide + 2, (unsigned) -32768);  // a glide across the whole int16 range
+  put16(glide + 4, 10);
+  put16(glide + 6, 0);
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);
-  put16(glide + 1, 32767);
-  put16(glide + 5, 65535);
+  put16(glide + 2, 32767);
+  put16(glide + 6, 65535);
   pic_msg(K_ANIM_MOVE, glide, sizeof glide);
   sim_run(50000);
   int16_t gx, gy;
-  anim_pos(&gx, &gy);
+  anim_pos(0, &gx, &gy);
   CHECK(gx == 17232 && gy == 10);
   sim_run(15550);  // landed
-  anim_pos(&gx, &gy);
+  anim_pos(0, &gx, &gy);
   CHECK(gx == 32767 && gy == 10);
   lv_obj_del(img);
-  pic_msg(K_ANIM_CLEAR, NULL, 0);
+  anim_clear_msg(ANIM_ALL);
 }
 
 // ---------------------------------------------------------------- deflate
@@ -1566,6 +1668,7 @@ int main(void) {
   test_jpeg();
   test_deflate();
   test_anim();
+  test_anim_slots();
   test_anim_move();
   test_formats();
   test_values();

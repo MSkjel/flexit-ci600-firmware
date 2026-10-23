@@ -27,10 +27,11 @@ int sim_item_id(const char *name);
 int pn_pic(int *w, int *h);
 int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
-int pn_anim_line(int y, uint8_t *out);
+int pn_anim_line(int place, int y, uint8_t *out);
 void pn_anim_step(int ms);
 int pn_anim_ready(void);
-void pn_anim_pos(int *x, int *y);
+int pn_anim_pos(int place, int *x, int *y);
+unsigned pn_anim_used(void);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_shot(const char *dir, const char *name);
@@ -379,16 +380,26 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
       }
 }
 
-// Whether the panel draws frame f as the ESP made it, transparent in the same places and palette colours elsewhere.
-static bool same_anim(int f) {
+// Whether the panel draws frame f of animation `name` at place p as the ESP made it: transparent in the same
+// places and palette colours elsewhere. The colour map is the last one made, so check right after making it.
+static bool same_anim(const char *name, int f, int p = 0) {
   namespace anim = flexit::panel::anim;
-  auto &A = anim::A;
+  anim::Anim *a = anim::find(name);
+  if (!a)
+    return false;
+  auto &A = *a;
+  anim::Anim *was = anim::W.a;
+  anim::W.a = a;  // px() goes by it
+  struct Back {
+    anim::Anim *was;
+    ~Back() { anim::W.a = was; }
+  } back{was};
   for (int y = 0; y < A.h * A.scale; y++) {
     uint8_t line[320 * 3];
-    if (pn_anim_line(y, line) != A.w * A.scale)
+    if (pn_anim_line(p, y, line) != A.w * A.scale)
       return false;
     for (int x = 0; x < A.w * A.scale; x++) {
-      uint32_t c = anim::px(f, x / A.scale, y / A.scale), rgb = A.pal[A.lut[flexit::panel::picture::bin(c)]];
+      uint32_t c = anim::px(f, x / A.scale, y / A.scale), rgb = A.pal[anim::W.lut[flexit::panel::picture::bin(c)]];
       uint16_t want = (rgb >> 8 & 0xF800) | (rgb >> 5 & 0x07E0) | (rgb >> 3 & 0x001F),
                got = line[3 * x] | line[3 * x + 1] << 8;
       bool see = c >> 24 < 128;
@@ -444,9 +455,9 @@ int main(int argc, char **argv) {
   panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
   panel_animation.publish_state("ball");
   yaml_boot();
-  CHECK(flexit::panel::picture::S.want == "dusk" && flexit::panel::anim::A.want == "ball",
-        "the restored picture and animation aren't shown after boot: '%s', '%s'",
-        flexit::panel::picture::S.want.c_str(), flexit::panel::anim::A.want.c_str());
+  CHECK(flexit::panel::picture::S.want == "dusk" && flexit::panel::anim::find("ball"),
+        "the restored picture and animation aren't shown after boot: '%s', %d", flexit::panel::picture::S.want.c_str(),
+        flexit::panel::anim::find("ball") != nullptr);
   flexit::panel::picture::clear();
   flexit::panel::anim::clear();
   CHECK(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
@@ -940,24 +951,25 @@ int main(int argc, char **argv) {
   printf("  %lu frames for the pictures\n", link_frames - frames_before);
 
   step("animations");
+  namespace anim = flexit::panel::anim;
   panel_animation.control(1);  // the select: "ball"
   auto shown = [] { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); };
   int ar = run_until(shown, 2000);
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), ar);
-  CHECK(ar >= 0 && same_anim(0), "the panel's first frame isn't the ESP's");
+  CHECK(ar >= 0 && same_anim("ball", 0), "the panel's first frame isn't the ESP's");
   for (int f = 1; f <= 8; f++) {
     pn_anim_step(100);
-    CHECK(same_anim(f % 8), "frame %d isn't the ESP's", f % 8);
+    CHECK(same_anim("ball", f % 8), "frame %d isn't the ESP's", f % 8);
   }
   pn_shot(outdir, "esp_animation");
   // moving it: the actions reach the panel, a step of the panel's motion timer per pn_anim_step
   int ax, ay;
-  pn_anim_pos(&ax, &ay);
+  pn_anim_pos(0, &ax, &ay);
   CHECK(ax == 250 && ay == 20, "ball at %d,%d, not where the yaml put it", ax, ay);
-  panel_move_animation.execute(100, 40, 0);
+  panel_move_animation.execute("ball", 0, 100, 40, 0);
   ar = run_until(
       [&] {
-        pn_anim_pos(&ax, &ay);
+        pn_anim_pos(0, &ax, &ay);
         return ax == 100 && ay == 40 && settled();
       },
       100);
@@ -965,58 +977,109 @@ int main(int argc, char **argv) {
   CHECK(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
         panel_animation_status.state.c_str());
   size_t clamped = log_all.size();
-  panel_move_animation.execute(100, 40, 70000);  // ms only has 16 bits
+  panel_move_animation.execute("ball", 0, 100, 40, 70000);  // ms only has 16 bits
   run(3);
   CHECK(log_all.find("over 70000 ms is out of range, it goes to 100,40 over 65535 ms", clamped) != std::string::npos,
         "no warning about the glide time");
-  panel_drift_animation.execute(-20, 0);
+  panel_drift_animation.execute("ball", 0, -20, 0);
   ar = run_until([] { return panel_animation_status.state == "Shown: ball, drifting" && settled(); }, 100);
   pn_anim_step(100);
-  pn_anim_pos(&ax, &ay);
+  pn_anim_pos(0, &ax, &ay);
   CHECK(ar >= 0 && ax == 99 && ay == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
         panel_animation_status.state.c_str(), ax, ay);
-  panel_drift_animation.execute(0, 0);
+  panel_drift_animation.execute("ball", 0, 0, 0);
   ar = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 100);
   pn_anim_step(100);
-  pn_anim_pos(&ax, &ay);
+  pn_anim_pos(0, &ax, &ay);
   CHECK(ar >= 0 && ax == 99, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), ax);
+  panel_move_animation.execute("ball", 1, 0, 0, 0);  // no such copy
+  run(3);
+  CHECK(log_all.find("panel_move_animation: no copy 1 of animation 'ball' shown") != std::string::npos,
+        "no warning about the copy");
+
+  // more places: a copy in step, one with a frame of its own two frames ahead, and a second animation
+  panel_place_animation.execute("ball", 1, 10, 150, false, 0);
+  panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
+  ar = run_until([] { return panel_animation_status.state == "Shown: ball (3 copies)" && settled(); }, 100);
+  CHECK(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
+  pn_anim_pos(1, &ax, &ay);
+  int bx, by;
+  pn_anim_pos(2, &bx, &by);
+  CHECK(ax == 10 && ay == 150 && bx == 200 && by == 150, "copies at %d,%d and %d,%d", ax, ay, bx, by);
+  CHECK(pn_anim_used() == anim::find("ball")->frame() * 2 + anim::find("ball")->data.size(),
+        "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+        (unsigned) (anim::find("ball")->frame() * 2 + anim::find("ball")->data.size()));
+  // copy 1 shows what copy 0 shows, copy 2 started on frame 5 when it was placed, so it's out of step
+  int apart = 0;
+  for (int i = 0; i < 8; i++, pn_anim_step(100))
+    for (int f = 0; f < 8; f++)
+      if (same_anim("ball", f, 0)) {
+        CHECK(same_anim("ball", f, 1), "copy 1 isn't in step at frame %d", f);
+        apart += !same_anim("ball", f, 2);
+        break;
+      }
+  CHECK(apart, "copy 2 is in step with copy 0");
+  panel_drift_animation.execute("ball", 2, 0, 30);
+  run(3);
+  pn_anim_step(100);
+  pn_anim_pos(2, &bx, &by);
+  pn_anim_pos(0, &ax, &ay);
+  CHECK(bx == 200 && by == 151 && ax == 99 && ay == 40, "only copy 2 drifts: %d,%d and %d,%d", bx, by, ax, ay);
+  pn_shot(outdir, "esp_animation_copies");
+  // a second animation alongside, placed by the action. A frame alone is over ANIM_POOL at full size, so it's
+  // made at half size right away.
+  anim::add("big", {128, 100, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {
+                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + f) % 3) * 0x405060u;
+                    }});
+  size_t big_at = log_all.size();
+  anim::place("big", 0, 16, 16, false, 0);
+  ar = run_until([] { return panel_animation_status.state == "Shown: ball (3 copies), big" && settled(); }, 3000);
+  CHECK(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
+  CHECK(anim::find("big")->half && log_all.find("making it at half size", big_at) == std::string::npos,
+        "big: half %d, tried at full size first: %d", anim::find("big") && anim::find("big")->half,
+        log_all.find("making it at half size", big_at) != std::string::npos);
+  unsigned used = pn_anim_used();
+  CHECK(used == anim::used_by_others(nullptr) && used <= ANIM_POOL,
+        "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) anim::used_by_others(nullptr));
+  panel_remove_animation.execute("ball", 2);
+  run(3);
+  CHECK(!pn_anim_pos(2, &bx, &by) && pn_anim_used() == used - anim::find("ball")->frame() &&
+            panel_animation_status.state == "Shown: ball (2 copies), big",
+        "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_anim_used());
+  panel_clear_animation.execute("big");
+  run(3);
+  CHECK(!anim::find("big") && pn_anim_pos(0, &ax, &ay) && !pn_anim_pos(3, &ax, &ay) &&
+            panel_animation_status.state == "Shown: ball (2 copies)",
+        "clearing one animation: '%s'", panel_animation_status.state.c_str());
   panel_animation.control(0);
   run(3);
-  CHECK(!pn_anim_ready(), "the animation is still there after None");
+  CHECK(!pn_anim_ready() && !pn_anim_used(), "the animations are still there after None");
   panel_animation.control(2);  // noise
   ar = run_until(shown, 3000);
-  CHECK(ar >= 0 && flexit::panel::anim::A.half && flexit::panel::anim::A.scale == 2 && same_anim(0),
+  CHECK(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
         "noise not shown at half size: %s", panel_animation_status.state.c_str());
   // its drift_x from the yaml, 10 px/s left: half a pixel a step
   pn_anim_step(100);
-  pn_anim_pos(&ax, &ay);
+  pn_anim_pos(0, &ax, &ay);
   CHECK(panel_animation_status.state == "Shown: noise, drifting" && ax == 15 && ay == 16,
         "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), ax, ay);
-  CHECK(flexit::panel::anim::A.data.capacity() == flexit::panel::anim::A.data.size(), "%u bytes kept for %u",
-        (unsigned) flexit::panel::anim::A.data.capacity(), (unsigned) flexit::panel::anim::A.data.size());
+  CHECK(anim::find("noise")->data.capacity() == anim::find("noise")->data.size(), "%u bytes kept for %u",
+        (unsigned) anim::find("noise")->data.capacity(), (unsigned) anim::find("noise")->data.size());
   pn_restart();
   ar = run_until([&] { return pn_anim_ready() && shown(); }, 3000);
-  CHECK(ar >= 0 && same_anim(0), "the animation not sent again after a panel restart");
-  pn_anim_pos(&ax, &ay);
+  CHECK(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
+  pn_anim_pos(0, &ax, &ay);
   pn_anim_step(100);
   CHECK(ax == 16 && ay == 16 && panel_animation_status.state == "Shown: noise, drifting",
         "after the restart: at %d,%d, status '%s'", ax, ay, panel_animation_status.state.c_str());
-  pn_anim_pos(&ax, &ay);
+  pn_anim_pos(0, &ax, &ay);
   CHECK(ax == 15, "the drift wasn't sent again after a panel restart: at %d", ax);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
-  // a frame alone is over ANIM_POOL at full size, so it's made at half size right away
-  flexit::panel::anim::add("big", {128, 100, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {
-                                     return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + f) % 3) * 0x405060u;
-                                   }});
-  size_t big_at = log_all.size();
-  flexit::panel::anim::show("big");
+  flexit::panel::anim::show("big");  // not in the select, so it takes the picked one's place like the select would
   ar = run_until([] { return panel_animation_status.state == "Shown: big" && settled(); }, 3000);
-  CHECK(ar >= 0 && flexit::panel::anim::A.half && same_anim(0) &&
-            log_all.find("making it at half size", big_at) == std::string::npos,
-        "big: %s, half %d, tried at full size first: %d", panel_animation_status.state.c_str(),
-        flexit::panel::anim::A.half, log_all.find("making it at half size", big_at) != std::string::npos);
+  CHECK(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
+        panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
   {
-    namespace anim = flexit::panel::anim;
     auto noise = [](int f, int x, int y) -> uint32_t {
       return 0xFF000000u | ((uint32_t) (f * 4096 + y * 64 + x + 1) * 2654435761u) >> 8;
     };
@@ -1024,16 +1087,16 @@ int main(int argc, char **argv) {
     anim::add("edge", {62, 45, 8, 100, 258, 195, 1, noise});
     anim::show("edge");
     ar = run_until([] { return panel_animation_status.state == "Shown: edge" && settled(); }, 3000);
-    pn_anim_pos(&ax, &ay);
-    CHECK(ar >= 0 && anim::A.half && ax == 256 && ay == 194 && same_anim(0), "edge: %s, half %d, at %d,%d",
-          panel_animation_status.state.c_str(), anim::A.half, ax, ay);
+    pn_anim_pos(0, &ax, &ay);
+    CHECK(ar >= 0 && anim::find("edge")->half && ax == 256 && ay == 194 && same_anim("edge", 0),
+          "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, ax, ay);
     // the panel draws 2x at most, so scale 2 can't go to half size
     anim::add("noise2", {64, 64, 4, 100, 16, 16, 2, noise});
     anim::show("noise2");
-    ar = run_until([] { return anim::A.failed; }, 100);
+    ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
     CHECK(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
-              anim::A.scale == 2,
-          "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::A.scale);
+              anim::find("noise2")->scale == 2,
+          "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
     anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise});
     anim::show("scale3");
     run(1);
@@ -1051,15 +1114,41 @@ int main(int argc, char **argv) {
           "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
     // None while it's being made frees its buffers
     anim::show("edge");
+    anim::W.a = anim::find("edge");
     anim::start();
-    while (anim::A.phase == anim::COUNT)
+    while (anim::W.phase == anim::COUNT)
       anim::count();
     anim::make();
-    CHECK(anim::A.phase == anim::MAKE && anim::A.prev.capacity(), "edge isn't being made");
+    CHECK(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
     panel_animation.control(0);
     CHECK(
-        !anim::A.hist.capacity() && !anim::A.frame.capacity() && !anim::A.prev.capacity() && !anim::A.first.capacity(),
+        !anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
         "None kept the buffers");
+    // no room next to the others: ball and three big ones, the last one has to go at half size and is refused
+    anim::show("ball");
+    anim::place("big", 0, 16, 16, false, 0);
+    ar = run_until([] { return panel_animation_status.state == "Shown: ball, big" && settled(); }, 6000);
+    CHECK(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
+    anim::add("big2", anim::sources["big"]);
+    anim::add("big3", anim::sources["big"]);
+    anim::place("big2", 0, 16, 16, false, 0);
+    anim::place("big3", 0, 16, 16, false, 0);
+    ar = run_until([] { return anim::find("big3") && anim::find("big3")->state != anim::WANT && settled(); }, 9000);
+    CHECK(ar >= 0 && anim::find("big2")->state == anim::SENT && anim::find("big3")->state == anim::FAILED &&
+              panel_animation_status.state.rfind("Shown: ball, big, big2; big3: too big even at half size (over ", 0) ==
+                  0,
+          "four animations: '%s'", panel_animation_status.state.c_str());
+    CHECK(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
+          "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+          (unsigned) anim::used_by_others(nullptr));
+    anim::add("big4", anim::sources["big"]);
+    anim::place("big4", 0, 16, 16, false, 0);  // no fifth slot
+    run(1);
+    CHECK(!anim::find("big4") &&
+              log_all.find("No room for animation big4: the panel holds 4 at a time") != std::string::npos,
+          "a fifth animation: '%s'", panel_animation_status.state.c_str());
+    panel_animation.control(0);
+    run(3);
   }
   panel_animation.control(0);
   run(3);
@@ -1163,7 +1252,7 @@ int main(int argc, char **argv) {
     panel_picture.control(1);
     CHECK(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
     panel_animation.control(2);  // noise, big enough to take a while
-    int r = run_until([] { return anim::sending() && anim::A.pos > 0 && anim::A.pos < anim::A.data.size(); }, 3000);
+    int r = run_until([] { return anim::sending() && anim::W.pos > 0 && anim::W.pos < anim::W.a->data.size(); }, 3000);
     CHECK(r >= 0, "the animation never went out");
     panel_picture.control(0);
     r = run_until([] { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }, 3000);
@@ -1194,18 +1283,19 @@ int main(int argc, char **argv) {
     lose = 1;
     panel_animation.control(1);  // ball
     int r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
-    CHECK(r >= 0 && !lose && same_anim(0), "the animation not sent again: %s", panel_animation_status.state.c_str());
+    CHECK(r >= 0 && !lose && same_anim("ball", 0), "the animation not sent again: %s",
+          panel_animation_status.state.c_str());
     printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), r);
     lose = 3;  // gives up after three tries, tries again after a panel restart
     panel_animation.control(0);
     run(3);
     panel_animation.control(1);
-    r = run_until([] { return flexit::panel::anim::A.failed; }, 3000);
+    r = run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::FAILED; }, 3000);
     CHECK(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
           panel_animation_status.state.c_str());
     pn_restart();
     r = run_until([] { return panel_animation_status.state == "Shown: ball" && settled(); }, 3000);
-    CHECK(r >= 0 && pn_anim_ready() && same_anim(0), "not tried again after a panel restart: %s",
+    CHECK(r >= 0 && pn_anim_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
           panel_animation_status.state.c_str());
     h = real;
   }

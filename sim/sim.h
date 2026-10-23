@@ -51,8 +51,9 @@ unsigned sim_esp_send_picture(void);
 unsigned sim_esp_send_photo(int *quality);  // a photo-like picture, as a JPEG at the best quality that fits
 unsigned sim_esp_send_moon(int *y, int *count);
 void sim_esp_send_dawn(void);
-unsigned sim_esp_send_animation(int x, int y);
-void sim_esp_move_animation(int mode, int a, int b, int ms);  // K_ANIM_MOVE: a, b are x, y or vx, vy
+unsigned sim_esp_send_animation(int x, int y);  // into slot 0, placed at x, y
+void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start);
+void sim_esp_move_animation(int mode, int a, int b, int ms);  // K_ANIM_MOVE for place 0: a, b are x, y or vx, vy
 void sim_link_run(int cycles);                                // run that many CU60 cycles
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1
 void sim_esp_report(const char *what);

@@ -89,7 +89,7 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
     send_pic_ack();
   }
   // Picture or animation came or went, rebuild the screensaver. A new or failed picture drops the old.
-  if (pic_state() != was || key == K_PIC_CLEAR || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR ||
+  if (pic_state() != was || key == K_PIC_CLEAR || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR || key == K_ANIM_PLACE ||
       (ack >= 0 && ack >> 24 == PIC_DONE))
     ui_value_changed(V_SCREENSAVER);
   else if (key == K_PIC_BEGIN || key == K_PIC_PATCH)
@@ -167,6 +167,7 @@ static void got(void *u, uint16_t key, const uint8_t *b, int n) {
     case K_PIC_CLEAR:
     case K_ANIM_BEGIN:
     case K_ANIM_CLEAR:
+    case K_ANIM_PLACE:
     case K_ANIM_MOVE:
       pic_answer(key, b, n);
       return;

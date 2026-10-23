@@ -19,7 +19,7 @@ void pn_init(void) {
 
 void pn_restart(void) {  // a restart loses the link state and the picture, which only lives in RAM
   pic_msg(K_PIC_CLEAR, NULL, 0);
-  pic_msg(K_ANIM_CLEAR, NULL, 0);
+  anim_clear_all();
   M.esp_online = false;
   val_forget_esp();
   link_init();
@@ -95,40 +95,53 @@ int pn_pic(int *w, int *h) {
 }
 int pn_pic_format(void) { return pic_format(); }
 
-// Line y of the animation's frame from its decoder, 3 bytes per pixel, RGB565 then alpha. Returns the width, or 0
-// if there's no animation.
-int pn_anim_line(int y, uint8_t *out) {
-  lv_obj_t *o = anim_show(lv_scr_act());
-  if (!o)
-    return 0;
-  lv_img_decoder_dsc_t dsc;
+// anim_show() puts an image per place at the end of the screen, in place order. Takes them away again.
+static void unshow(uint32_t n0) {
+  while (lv_obj_get_child_cnt(lv_scr_act()) > n0)
+    lv_obj_del(lv_obj_get_child(lv_scr_act(), -1));
+}
+
+// Line y of place p's frame from its decoder, 3 bytes per pixel, RGB565 then alpha. Returns the width, or 0 if
+// there's no such place.
+int pn_anim_line(int p, int y, uint8_t *out) {
+  uint32_t n0 = lv_obj_get_child_cnt(lv_scr_act());
+  int16_t ax, ay, k = 0;
+  for (int i = 0; i < p; i++)
+    k += anim_pos(i, &ax, &ay);
   int w = 0;
-  if (lv_img_decoder_open(&dsc, lv_img_get_src(o), lv_color_black(), 0) == LV_RES_OK) {
-    w = dsc.header.w;
-    if (lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) y, (lv_coord_t) w, out) != LV_RES_OK)
-      w = 0;
-    lv_img_decoder_close(&dsc);
+  if (anim_show(lv_scr_act()) && anim_pos(p, &ax, &ay)) {
+    lv_img_decoder_dsc_t dsc;
+    lv_obj_t *o = lv_obj_get_child(lv_scr_act(), (int32_t) n0 + k);
+    if (lv_img_decoder_open(&dsc, lv_img_get_src(o), lv_color_black(), 0) == LV_RES_OK) {
+      w = dsc.header.w;
+      if (lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) y, (lv_coord_t) w, out) != LV_RES_OK)
+        w = 0;
+      lv_img_decoder_close(&dsc);
+    }
   }
-  lv_obj_del(o);
+  unshow(n0);
   return w;
 }
 
-// Let the animation play for ms.
+// Let the animations play for ms.
 void pn_anim_step(int ms) {
-  lv_obj_t *o = anim_show(lv_scr_act());
+  uint32_t n0 = lv_obj_get_child_cnt(lv_scr_act());
+  anim_show(lv_scr_act());
   lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
-  if (o)
-    lv_obj_del(o);
+  unshow(n0);
 }
 
 int pn_anim_ready(void) { return anim_ready(); }
-void pn_anim_pos(int *x, int *y) {
+int pn_anim_pos(int place, int *x, int *y) {
   int16_t ax, ay;
-  anim_pos(&ax, &ay);
+  if (!anim_pos(place, &ax, &ay))
+    return 0;
   *x = ax;
   *y = ay;
+  return 1;
 }
+unsigned pn_anim_used(void) { return anim_used(); }
 
 // Screenshot of the picture screensaver as DIR/NAME.ppm.
 void pn_shot(const char *dir, const char *name) {

@@ -55,7 +55,7 @@ void pic_reset(void) {
   if (IN.kind == IN_PICTURE)
     clear();
   if (IN.kind == IN_ANIM)
-    anim_clear();
+    anim_abort();
   IN.kind = IN_NONE;
 }
 
@@ -352,7 +352,10 @@ int32_t pic_msg(uint16_t key, const uint8_t *b, int n) {
     case K_ANIM_CLEAR:
       if (IN.kind == IN_ANIM)
         pic_reset();
-      anim_clear();
+      anim_clear(b, n);
+      return -1;
+    case K_ANIM_PLACE:
+      anim_place(b, n);
       return -1;
     case K_ANIM_MOVE:
       anim_move(b, n);
