@@ -276,6 +276,25 @@ static void close_check(lv_timer_t *t) {
   }
 }
 
+// While a whole new picture comes in under the screensaver the LCD keeps the old one. Nothing goes to it until the
+// transfer is over, another screen is up or HOLD_MS has passed.
+#define HOLD_MS 15000
+static uint32_t held_since;  // lv_tick_get() | 1, 0 = not held
+
+void ui_picture_coming(void) {
+  if (saver_picture())
+    held_since = lv_tick_get() | 1;
+}
+
+bool ui_held(void) { return held_since != 0; }
+
+static void hold_check(void) {
+  if (held_since && (ui_top() != &SCR_SAVER || pic_state() != PIC_RECEIVING || lv_tick_get() - held_since >= HOLD_MS)) {
+    held_since = 0;
+    lv_obj_invalidate(lv_scr_act());  // what was drawn meanwhile never got there
+  }
+}
+
 // The ESP sends all its items at once after a HELLO. Rebuilding for each one tripped the watchdog, so we
 // rebuild at most once per loop.
 static void rebuild_check(lv_timer_t *t) {
@@ -284,6 +303,7 @@ static void rebuild_check(lv_timer_t *t) {
     ui_rebuild();
   else if (refresh_due)
     ui_refresh();
+  hold_check();
 }
 
 // ---------------------------------------------------------------- bars

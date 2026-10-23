@@ -35,6 +35,9 @@ void ui_refresh(void);  // model changed
 void ui_second(void);   // 1 Hz: night theme, new alarms and messages, redraw
 // The OK light as the top screen wants it, -1 for its usual meaning
 int ui_ok_led(uint32_t ms);
+// A whole new picture is coming in over the one shown
+void ui_picture_coming(void);
+bool ui_held(void);  // the flush sends nothing to the LCD
 
 // ---------------------------------------------------------------- UI internals
 // Theme colours. The hex values for each theme are in ui_core.c.
@@ -173,3 +176,4 @@ const char *tile_name(int src);        // name of a dashboard tile source (TILE_
 int tile_used(val_t tile, int src);  // a dashboard tile (V_TILE1..4)
 int view_used(val_t v, int view);    // the start view
 int saver_used(val_t v, int mode);   // the screensaver
+bool saver_picture(void);            // the screensaver shows the picture

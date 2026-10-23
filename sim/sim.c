@@ -1156,15 +1156,28 @@ int main(int argc, char **argv) {
   M.screensaver = 4;
   ui_push(&SCR_SAVER, 0);
   shot("59c_saver_photo");
-  // the clock while a new picture comes and after a refused one
-  check(sim_pixel(4, 4), "the photo isn't shown");
+  // The LCD keeps the old picture while a new one comes, until it's in or HOLD_MS has passed. A refused one leaves
+  // the clock.
+  uint32_t was = sim_pixel(4, 4);
+  check(was, "the photo isn't shown");
   sim_esp_send_picture();
   sim_link_run(3);
   run(50);
-  check(pic_state() == PIC_RECEIVING && !sim_pixel(4, 4), "the saver kept the old picture while a new one came");
+  check(pic_state() == PIC_RECEIVING && ui_held() && sim_pixel(4, 4) == was,
+        "the screen went black while a new picture came");
   settle();
   run(50);
-  check(sim_pixel(4, 4), "the new picture isn't shown");
+  check(!ui_held() && sim_pixel(4, 4) && !sim_stale(), "the new picture isn't shown");
+  was = sim_pixel(4, 4);
+  sim_esp_send_picture();
+  sim_link_run(3);  // its start, then nothing for a while
+  run(14000);
+  check(ui_held() && sim_pixel(4, 4) == was, "the screen gave up on the new picture early");
+  run(1100);
+  check(!ui_held() && !sim_pixel(4, 4) && !sim_stale(), "the screen held on past 15 s");
+  settle();
+  run(50);
+  check(sim_pixel(4, 4) && !sim_stale(), "the late picture isn't shown");
   sim_esp_set(K_PIC_BEGIN, 0);  // one the panel refuses
   settle();
   run(50);

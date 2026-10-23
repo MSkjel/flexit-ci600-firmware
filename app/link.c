@@ -88,6 +88,8 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
     pic_ack = ack;
     send_pic_ack();
   }
+  if (was == PIC_READY && pic_state() == PIC_RECEIVING)
+    ui_picture_coming();
   // Picture or animation came or went, rebuild the screensaver. A new or failed picture drops the old.
   if (pic_state() != was || key == K_PIC_CLEAR || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR || key == K_ANIM_PLACE ||
       (ack >= 0 && ack >> 24 == PIC_DONE))

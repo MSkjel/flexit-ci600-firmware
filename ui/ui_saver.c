@@ -13,6 +13,7 @@ typedef struct {
   bool small;  // SAVER_TEXT_SMALL: time and temps in the corners, no date
 } saver_t;
 SCREEN_STATE(saver_t, saver);
+static bool shows_pic;  // the picture is on it. Not in saver_t, an overlay may reuse that
 
 static const str_t MONTHS[12] = {S_JANUARY, S_FEBRUARY, S_MARCH,     S_APRIL,   S_MAY,      S_JUNE,
                                  S_JULY,    S_AUGUST,   S_SEPTEMBER, S_OCTOBER, S_NOVEMBER, S_DECEMBER};
@@ -27,6 +28,8 @@ int saver_used(val_t v, int mode) {
   (void) v;
   return HAS(FEAT_ESP) ? mode : saver_plain(mode);
 }
+
+bool saver_picture(void) { return ui_top() == &SCR_SAVER && shows_pic; }
 
 // Clock, date and maybe temps on the band. Shadows are black, see-through and SHADOW px down and right.
 static void band_texts(lv_obj_t *band, lv_obj_t *l[3], bool temps, bool shadow) {
@@ -76,6 +79,7 @@ static void small_texts(lv_obj_t *b, bool temps) {
 static void saver_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
   memset(saver, 0, sizeof *saver);
+  shows_pic = false;
   if (M.screensaver == SAVER_OFF) {  // switched off from the ESP while it shows
     ui_close_after(0);
     return;
@@ -87,6 +91,7 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
   bool temps = mode == SAVER_CLOCK_TEMPS || mode == SAVER_PIC_ALL;
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
   if (pic) {
+    shows_pic = true;
     anim_show(b);
     if (mode != SAVER_PIC && M.saver_text == SAVER_TEXT_SMALL)
       small_texts(b, temps);

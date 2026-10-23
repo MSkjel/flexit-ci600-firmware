@@ -1,6 +1,7 @@
 // Runs LVGL on the PC with the display in memory, and saves screenshots.
 #include "plat.h"
 #include "sim.h"
+#include "ui.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,10 @@ unsigned long sim_px;
 static lv_color_t fb[W * H], draw_buf[W * 40];
 
 static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
+  if (ui_held()) {  // the LCD keeps what it has
+    lv_disp_flush_ready(d);
+    return;
+  }
   int w = a->x2 - a->x1 + 1;
   sim_px += (unsigned long) w * (unsigned long) (a->y2 - a->y1 + 1);
   for (int y = a->y1; y <= a->y2; y++)

@@ -40,7 +40,10 @@ uint32_t plat_entropy(void) { return board_entropy(); }
 static void flushed(void) { lv_disp_flush_ready(&drv); }
 
 static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
-  (void) d;
+  if (ui_held()) {
+    lv_disp_flush_ready(d);
+    return;
+  }
   lcd_draw(a->x1, a->y1, a->x2, a->y2, (const uint16_t *) px, flushed);
   flush_px += (uint32_t) (a->x2 - a->x1 + 1) * (uint32_t) (a->y2 - a->y1 + 1);
 }
