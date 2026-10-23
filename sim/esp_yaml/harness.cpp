@@ -31,6 +31,8 @@ int pn_anim_line(int place, int y, uint8_t *out);
 void pn_anim_step(int ms);
 int pn_anim_ready(void);
 int pn_anim_pos(int place, int *x, int *y);
+int pn_anim_angle(int place, int *deg, int *flip);
+int pn_anim_look(int place, int *size, int *opa);
 unsigned pn_anim_used(void);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
@@ -1072,6 +1074,99 @@ int main(int argc, char **argv) {
   pn_anim_pos(0, &ax, &ay);
   CHECK(bx == 200 && by == 151 && ax == 99 && ay == 40, "only copy 2 drifts: %d,%d and %d,%d", bx, by, ax, ay);
   pn_shot(outdir, "esp_animation_copies");
+  // Copy 2 turned and flipped as it drifts, a flip keeps a turn going, a spin and a stop, and a panel restart puts it
+  // back as it was. The panel turns it while it's shown.
+  auto shown_for = [](int ms) {
+    for (int t = 0; t < ms; t += 50)
+      pn_anim_step(50);
+  };
+  int deg, flip;
+  panel_turn_animation.execute("ball", 2, 450, 0);  // 90
+  panel_flip_animation.execute("ball", 2, true, false);
+  run(3);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg == 90 && flip == ANIM_FLIP_X && pn_anim_angle(0, &ax, &ay) && !ax && !ay,
+        "turned and flipped: %d degrees, flip %d", deg, flip);
+  panel_turn_animation.execute("ball", 2, 0, 2000);
+  run(3);
+  shown_for(1000);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg > 30 && deg < 60, "halfway through a turn: %d degrees", deg);
+  panel_flip_animation.execute("ball", 2, false, true);
+  run(3);
+  shown_for(2100);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg == 0 && flip == ANIM_FLIP_Y, "a flip halfway through a turn: %d, flip %d",
+        deg, flip);
+  panel_spin_animation.execute("ball", 2, -180);
+  run(3);
+  shown_for(500);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg > 180 && deg < 360, "spinning back: %d degrees", deg);
+  panel_spin_animation.execute("ball", 2, 0);
+  run(3);
+  pn_anim_angle(2, &bx, &flip);
+  shown_for(1000);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg == bx, "the spin didn't stop: %d then %d", bx, deg);
+  panel_turn_animation.execute("ball", 2, 180, 0);
+  run(3);
+  pn_restart();
+  run_until([] { return pn_online() && settled(); }, 3000);
+  run(5);
+  CHECK(pn_anim_angle(2, &deg, &flip) && deg == 180 && flip == ANIM_FLIP_Y, "after a panel restart: %d, flip %d", deg,
+        flip);
+  int size, opa;
+  CHECK(pn_anim_look(2, &size, &opa) && opa == 0, "placed again it fades in: opacity %d", opa);
+  shown_for(400);
+  CHECK(pn_anim_look(2, &size, &opa) && opa == 255, "faded in to %d", opa);
+  // copy 2 sized, faded and wandering, and back as it was after a restart
+  panel_size_animation.execute("ball", 2, 150, 0);
+  panel_fade_animation.execute("ball", 2, 50, 1000);
+  run(3);
+  shown_for(500);
+  CHECK(pn_anim_look(2, &size, &opa) && size == 1500 && opa > 128 && opa < 255, "size %d, opacity %d halfway", size,
+        opa);
+  shown_for(600);
+  CHECK(pn_anim_look(2, &size, &opa) && opa == 128, "opacity %d after the fade", opa);
+  panel_area_animation.execute("ball", 2, 100, 100, 300, 230, "bounce", "bounce");
+  panel_wander_animation.execute("ball", 2, 20, 60, 0, 180, 300, 900, 0, 0);
+  panel_face_animation.execute("ball", 2, 0, true, 0, 0, false);
+  run(3);
+  const anim::Anim *ball = anim::find("ball");
+  int bw = ball->w * ball->scale, bh = ball->h * ball->scale, zw = (bw * 1500 + 500) / 1000,
+      zh = (bh * 1500 + 500) / 1000;
+  auto wanders = [&](int steps) {
+    bool inside = true;
+    int lo = 999, hi = -999;
+    for (int i = 0; i < steps; i++) {
+      shown_for(50);
+      pn_anim_pos(2, &bx, &by);
+      int cx = bx + (bw - zw) / 2, cy = by + (bh - zh) / 2;
+      inside &= cx >= 100 && cx + zw <= 300 && cy >= 100 && cy + zh <= 230;
+      lo = std::min(lo, cx);
+      hi = std::max(hi, cx);
+    }
+    return inside && hi - lo > 40;
+  };
+  CHECK(wanders(200) && pn_anim_angle(2, &deg, &flip) && deg == 0 && ball->copies[2].motion == ANIM_WANDER,
+        "wandering in its area: at %d,%d, %d degrees", bx, by, deg);
+  pn_restart();
+  run_until([] { return pn_online() && settled(); }, 3000);
+  run(5);
+  shown_for(400);
+  CHECK(pn_anim_look(2, &size, &opa) && size == 1500 && opa == 128 && wanders(100),
+        "after a panel restart: size %d, opacity %d", size, opa);
+  // copy 3 plays one round from its first frame and goes, and the ESP hears so
+  panel_place_animation.execute("ball", 3, 20, 20, true, 0);
+  panel_rounds_animation.execute("ball", 3, 1);
+  run(3);
+  CHECK(pn_anim_pos(3, &ax, &ay) && panel_animation_status.state == "Shown: ball (4 copies)", "copy 3: '%s'",
+        panel_animation_status.state.c_str());
+  shown_for(3000);
+  run(5);
+  CHECK(!pn_anim_pos(3, &ax, &ay) && !ball->copies[3].used && panel_animation_status.state == "Shown: ball (3 copies)",
+        "after its round: '%s'", panel_animation_status.state.c_str());
+  panel_size_animation.execute("ball", 2, 100, 0);
+  panel_fade_animation.execute("ball", 2, 100, 0);
+  panel_move_animation.execute("ball", 2, 200, 150, 0);  // still, for what follows
+  run(3);
+  pn_anim_pos(2, &bx, &by);
   // a second animation alongside, placed by the action. A frame alone is over ANIM_POOL at full size, so it's
   // made at half size right away.
   anim::add("big", {128, 100, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {

@@ -571,7 +571,8 @@ static bool ghosts_shown(lv_obj_t *img, bool right, bool below) {
 static void test_anim_move(void) {
   uint8_t d[512];
   uint32_t n = anim_records(d, 5);
-  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT}, bad[8] = {0, ANIM_WANDER + 1};
+  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT},
+          bad[8] = {0, ANIM_WANDER + 1};
   put16(glide + 2, 100);
   put16(glide + 4, 50);
   put16(drift + 2, (unsigned) -40);           // 40 px/s left, 2 px a step
@@ -677,6 +678,495 @@ static void test_anim_move(void) {
   sim_run(15550);  // landed
   anim_pos(0, &gx, &gy);
   CHECK(gx == 32767 && gy == 10);
+  lv_obj_del(img);
+  anim_clear_msg(ANIM_ALL);
+}
+
+// The image's pixel at bx, by as the decoder gives it: its palette index, -1 where it's see-through
+static int anim_px(lv_obj_t *img, int bx, int by) {
+  lv_img_decoder_dsc_t dsc;
+  uint8_t line[PIC_MAX_W * LV_IMG_PX_SIZE_ALPHA_BYTE];
+  int w = lv_obj_get_width(img), k = -1;
+  if (bx >= w || lv_img_decoder_open(&dsc, lv_img_get_src(img), lv_color_black(), 0) != LV_RES_OK)
+    return -2;
+  if (lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) by, (lv_coord_t) w, line) == LV_RES_OK) {
+    const uint8_t *p = line + bx * LV_IMG_PX_SIZE_ALPHA_BYTE;
+    lv_color_t c;
+    memcpy(&c, p, sizeof c);
+    for (int i = 0; i < 16 && p[LV_IMG_PX_SIZE_ALPHA_BYTE - 1]; i++)
+      if (c.full == lv_color_hex(rgb(i)).full)
+        k = i;
+  }
+  lv_img_decoder_close(&dsc);
+  return k;
+}
+
+// The frame's pixel at ix, iy of the 16 x 8 it's drawn at, scale 2, as anim_px gives it
+static int frame_px(int ix, int iy) {
+  uint8_t b = an[0][iy / 2][ix / 4];
+  int k = ix / 2 & 1 ? b & 15 : b >> 4;
+  return k == 15 ? -1 : k;
+}
+
+// Whether every pixel of the image is the frame's at where(bx, by)
+static bool drawn_as(lv_obj_t *img, int w, int h, void (*where)(int bx, int by, int *ix, int *iy)) {
+  lv_obj_update_layout(img);
+  if (lv_obj_get_width(img) != w || lv_obj_get_height(img) != h)
+    return false;
+  for (int by = 0; by < h; by++)
+    for (int bx = 0; bx < w; bx++) {
+      int ix, iy;
+      where(bx, by, &ix, &iy);
+      if (anim_px(img, bx, by) != frame_px(ix, iy))
+        return false;
+    }
+  return true;
+}
+
+static void at_90(int bx, int by, int *ix, int *iy) {  // turned a quarter clockwise: the right side faces down
+  *ix = by;
+  *iy = 7 - bx;
+}
+static void at_180(int bx, int by, int *ix, int *iy) {
+  *ix = 15 - bx;
+  *iy = 7 - by;
+}
+static void at_flip_x(int bx, int by, int *ix, int *iy) {
+  *ix = 15 - bx;
+  *iy = by;
+}
+static void at_flip_x_90(int bx, int by, int *ix, int *iy) {  // mirrored, then turned
+  *ix = 15 - by;
+  *iy = 7 - bx;
+}
+
+// The same frame each time, nothing in it symmetric
+static void odd_frames(void) {
+  memset(an, 0xFF, sizeof an);
+  for (int f = 0; f < 4; f++) {
+    an[f][0][0] = 0x12;
+    an[f][1][1] = 0x3F;
+    an[f][3][3] = 0x45;
+  }
+}
+
+// K_ANIM_TURN: quarter turns and flips draw exactly, turns go the short way, spins add up, bad messages are ignored
+static void test_anim_turn(void) {
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 10, 10, 0, 0);
+  lv_obj_t *img = anim_show(lv_scr_act());
+  uint8_t to[7] = {0, ANIM_GLIDE}, spin[5] = {0, ANIM_DRIFT}, stop[3] = {0, ANIM_STOP};
+  int a, flip;
+  put16(to + 3, 90);
+  pic_msg(K_ANIM_TURN, to, sizeof to);  // at once
+  CHECK(anim_angle(0, &a, &flip) && a == 90 && !flip && drawn_as(img, 8, 16, at_90));
+  CHECK(lv_obj_get_x(img) == 14 && lv_obj_get_y(img) == 6);  // centred where the 16 x 8 frame was
+  put16(to + 3, 180);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  CHECK(drawn_as(img, 16, 8, at_180) && lv_obj_get_x(img) == 10 && lv_obj_get_y(img) == 10);
+  to[2] = ANIM_FLIP_X;
+  put16(to + 3, 0);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  CHECK(anim_angle(0, &a, &flip) && a == 0 && flip == ANIM_FLIP_X && drawn_as(img, 16, 8, at_flip_x));
+  put16(to + 3, 90);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  CHECK(drawn_as(img, 8, 16, at_flip_x_90));
+  // a turn over time goes the short way round: 90 to 350 is 100 back, not 260 on
+  to[2] = 0;
+  put16(to + 3, 350);
+  put16(to + 5, 1000);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  sim_run(500);
+  CHECK(anim_angle(0, &a, &flip) && a >= 38 && a <= 42);
+  sim_run(600);
+  CHECK(anim_angle(0, &a, &flip) && a == 350);
+  // a spin adds up past 360, and a stop keeps the angle
+  put16(spin + 3, 90);
+  pic_msg(K_ANIM_TURN, spin, sizeof spin);
+  sim_run(1000);
+  CHECK(anim_angle(0, &a, &flip) && a >= 75 && a <= 80);
+  pic_msg(K_ANIM_TURN, stop, sizeof stop);
+  sim_run(1000);
+  int b;
+  CHECK(anim_angle(0, &b, &flip) && b == a);
+  // the wrong length for the mode, a bad mode or flip, and no such place change nothing
+  uint8_t bad_mode[3] = {0, ANIM_FACE + 1}, bad_flip[3] = {0, ANIM_STOP, 4}, nowhere[3] = {5, ANIM_STOP, ANIM_FLIP_Y};
+  pic_msg(K_ANIM_TURN, to, 5);
+  pic_msg(K_ANIM_TURN, spin, 7);
+  pic_msg(K_ANIM_TURN, bad_mode, sizeof bad_mode);
+  pic_msg(K_ANIM_TURN, bad_flip, sizeof bad_flip);
+  pic_msg(K_ANIM_TURN, nowhere, sizeof nowhere);
+  pic_msg(K_ANIM_TURN, NULL, 0);
+  CHECK(anim_angle(0, &b, &flip) && b == a && !flip);
+  // placed again, it starts unturned
+  lv_obj_del(img);
+  place(0, 0, 10, 10, 0, 0);
+  img = anim_show(lv_scr_act());
+  CHECK(anim_angle(0, &a, &flip) && !a && !flip && lv_obj_get_width(img) == 16);
+  lv_obj_del(img);
+  anim_clear_msg(ANIM_ALL);
+}
+
+static void at_same(int bx, int by, int *ix, int *iy) {
+  *ix = bx;
+  *iy = by;
+}
+static void at_200(int bx, int by, int *ix, int *iy) {
+  *ix = bx / 2;
+  *iy = by / 2;
+}
+static void at_50(int bx, int by, int *ix, int *iy) {
+  *ix = 2 * bx + 1;
+  *iy = 2 * by + 1;
+}
+static void at_90_200(int bx, int by, int *ix, int *iy) {
+  *ix = by / 2;
+  *iy = 7 - bx / 2;
+}
+
+static int look_size(int place) {
+  int size, opa;
+  return anim_look(place, &size, &opa) ? size : -1;
+}
+static int look_opa(int place) {
+  int size, opa;
+  return anim_look(place, &size, &opa) ? opa : -1;
+}
+
+// K_ANIM_SIZE and K_ANIM_FADE: sizes draw exactly round the middle, sizes and fades get there over time, a place
+// can fade in and a clear can fade it out first
+static void test_anim_look(void) {
+  odd_frames();
+  uint8_t d[512], d2[ANIM_POOL];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 40, 40, 0, 0);
+  lv_obj_t *img = anim_show(lv_scr_act());
+  uint8_t size[5] = {0}, fade[4] = {0}, to[7] = {0, ANIM_GLIDE};
+  put16(size + 1, 200);
+  pic_msg(K_ANIM_SIZE, size, sizeof size);
+  CHECK(look_size(0) == 2000 && drawn_as(img, 32, 16, at_200) && lv_obj_get_x(img) == 32 && lv_obj_get_y(img) == 36);
+  put16(size + 1, 50);
+  pic_msg(K_ANIM_SIZE, size, sizeof size);
+  CHECK(drawn_as(img, 8, 4, at_50) && lv_obj_get_x(img) == 44 && lv_obj_get_y(img) == 42);
+  put16(to + 3, 90);  // a quarter turn at twice the size
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  put16(size + 1, 200);
+  pic_msg(K_ANIM_SIZE, size, sizeof size);
+  CHECK(drawn_as(img, 16, 32, at_90_200) && lv_obj_get_x(img) == 40 && lv_obj_get_y(img) == 28);
+  put16(to + 3, 0);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  put16(size + 1, 100);  // back over a second, then drawn straight again
+  put16(size + 3, 1000);
+  pic_msg(K_ANIM_SIZE, size, sizeof size);
+  sim_run(500);
+  CHECK(look_size(0) >= 1450 && look_size(0) <= 1550);
+  sim_run(600);
+  CHECK(look_size(0) == 1000 && drawn_as(img, 16, 8, at_same) && lv_obj_get_x(img) == 40);
+  uint8_t tiny[5] = {0}, huge[5] = {0};
+  put16(tiny + 1, 9);
+  put16(huge + 1, 401);
+  pic_msg(K_ANIM_SIZE, tiny, sizeof tiny);
+  pic_msg(K_ANIM_SIZE, huge, sizeof huge);
+  pic_msg(K_ANIM_SIZE, tiny, 4);
+  pic_msg(K_ANIM_SIZE, NULL, 0);
+  CHECK(look_size(0) == 1000);
+  // to see-through over a second, then opaque at once
+  put16(fade + 2, 1000);
+  pic_msg(K_ANIM_FADE, fade, sizeof fade);
+  sim_run(500);
+  CHECK(look_opa(0) >= 120 && look_opa(0) <= 135 && lv_obj_get_style_opa(img, LV_PART_MAIN) == look_opa(0));
+  sim_run(600);
+  int16_t x, y;
+  CHECK(look_opa(0) == 0 && anim_pos(0, &x, &y));
+  fade[1] = 255;
+  put16(fade + 2, 0);
+  pic_msg(K_ANIM_FADE, fade, sizeof fade);
+  CHECK(look_opa(0) == 255 && lv_obj_get_style_opa(img, LV_PART_MAIN) == 255);
+  fade[1] = 0;
+  pic_msg(K_ANIM_FADE, fade, 3);
+  CHECK(look_opa(0) == 255);
+  // placed fading in over 400 ms
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_PLACE_BIT | 0);
+  place_in(1, 0, 100, 40, 0, 0, 400);
+  img = anim_show(lv_scr_act());
+  CHECK(look_opa(1) == 0);
+  sim_run(200);
+  CHECK(look_opa(1) >= 120 && look_opa(1) <= 135);
+  sim_run(250);
+  CHECK(look_opa(1) == 255);
+  // cleared over 500 ms: it stays while it fades, then goes, with nothing to tell the ESP
+  anim_clear_msg(ANIM_PLACE_BIT | 1 | 500 << 8);
+  sim_run(250);
+  CHECK(anim_pos(1, &x, &y) && look_opa(1) >= 120 && look_opa(1) <= 135);
+  sim_run(300);
+  CHECK(!anim_pos(1, &x, &y) && anim_gone() == -1);
+  // a slot cleared over time goes with its last place, and gives back its room then
+  place(0, 0, 0, 0, 0, 0);
+  place(1, 0, 40, 0, 1, 0);
+  img = anim_show(lv_scr_act());
+  unsigned used = anim_used();
+  anim_clear_msg(0 | 300 << 8);
+  CHECK(anim_used() == used && anim_pos(0, &x, &y) && anim_pos(1, &x, &y));
+  place(2, 0, 80, 0, 0, 0);  // no new places for it
+  CHECK(!anim_pos(2, &x, &y));
+  sim_run(400);
+  CHECK(anim_used() == 0 && !anim_pos(0, &x, &y) && !anim_pos(1, &x, &y));
+  // but a new animation that needs the room takes it at once
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  lv_obj_clean(lv_scr_act());
+  place(0, 0, 0, 0, 0, 0);
+  img = anim_show(lv_scr_act());
+  anim_clear_msg(0 | 5000 << 8);
+  unsigned frame = AW / 2 * AH;
+  uint32_t n2 = anim_records(d2, 5), m = (ANIM_POOL - frame - n2) / 5;
+  for (uint32_t i = 0; i < m; i++)
+    memcpy(d2 + n2 + 5 * i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
+  n2 += 5 * m;
+  CHECK(status(anim_send(1, AW, n2, d2, plink_crc32(0, d2, n2))) == PIC_DONE && !anim_pos(0, &x, &y) &&
+        anim_used() == frame + n2);
+  // not shown, it goes at once
+  lv_obj_clean(lv_scr_act());
+  place(2, 1, 0, 0, 0, 0);
+  anim_clear_msg(ANIM_PLACE_BIT | 2 | 500 << 8);
+  CHECK(!anim_pos(2, &x, &y));
+  anim_clear_msg(ANIM_ALL);
+  CHECK(anim_used() == 0);
+}
+
+static void rounds_msg(int p, int rounds, int fade, int tag) {
+  uint8_t m[6] = {(uint8_t) p};
+  put16(m + 1, (unsigned) rounds);
+  put16(m + 3, (unsigned) fade);
+  m[5] = (uint8_t) tag;
+  pic_msg(K_ANIM_ROUNDS, m, sizeof m);
+}
+
+// K_ANIM_ROUNDS: plays to the end of its rounds, a frame of its own holds the last one while it fades, then it goes
+// and the panel says so
+static void test_anim_rounds(void) {
+  memset(an, 0xFF, sizeof an);
+  an[0][1][1] = 0x12;
+  an[1][2][2] = 0x34;
+  an[2][2][1] = 0x34;
+  an[3][0][0] = 0x56;
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);  // 50, 60, 70, 80 ms, and 90 for the first frame after that
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  while (anim_gone() >= 0)
+    ;
+  place(2, 0, 0, 10, 1, 0);
+  lv_obj_t *img = anim_show(lv_scr_act());
+  rounds_msg(2, 1, 200, 7);
+  sim_run(170);
+  CHECK(anim_shows(img, 2) && look_opa(2) == 255);
+  sim_run(20);
+  CHECK(anim_shows(img, 3));  // the end of its round
+  sim_run(100);
+  CHECK(anim_shows(img, 3) && look_opa(2) > 0 && look_opa(2) < 255 && anim_gone() == -1);
+  sim_run(200);
+  int16_t x, y;
+  CHECK(!anim_pos(2, &x, &y) && anim_gone() == (2 | 7 << 8) && anim_gone() == -1);
+  // in step with the slot, the round it's in counts
+  lv_obj_clean(lv_scr_act());
+  place(0, 0, 0, 40, 0, 0);
+  img = anim_show(lv_scr_act());
+  rounds_msg(0, 2, 0, 9);
+  sim_run(250);
+  CHECK(anim_pos(0, &x, &y) && anim_gone() == -1);
+  sim_run(450);
+  CHECK(!anim_pos(0, &x, &y) && anim_gone() == (0 | 9 << 8));
+  // placed again before the ESP heard, there's nothing to tell
+  place(3, 0, 0, 60, 1, 0);
+  img = anim_show(lv_scr_act());
+  rounds_msg(3, 1, 0, 1);
+  sim_run(400);
+  CHECK(!anim_pos(3, &x, &y));
+  place(3, 0, 0, 60, 1, 0);
+  CHECK(anim_gone() == -1);
+  // 0 plays on
+  lv_obj_clean(lv_scr_act());
+  img = anim_show(lv_scr_act());
+  rounds_msg(3, 1, 0, 2);
+  rounds_msg(3, 0, 0, 2);
+  pic_msg(K_ANIM_ROUNDS, (uint8_t[]) {3, 1, 0, 0, 0}, 5);  // the wrong length
+  sim_run(1000);
+  CHECK(anim_pos(3, &x, &y) && anim_gone() == -1);
+  // a single frame shows for its frame time each round
+  uint8_t one[64];
+  uint32_t n1 = plink_anim_record(NULL, &an[0][0][0], AW, AH, 10, one);
+  CHECK(status(anim_send(1, AW, n1, one, plink_crc32(0, one, n1))) == PIC_DONE);
+  lv_obj_clean(lv_scr_act());
+  place(4, 1, 100, 100, 0, 0);
+  img = anim_show(lv_scr_act());
+  rounds_msg(4, 3, 0, 2);
+  sim_run(250);
+  CHECK(anim_pos(4, &x, &y));
+  sim_run(150);
+  CHECK(!anim_pos(4, &x, &y) && anim_gone() == (4 | 2 << 8));
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_ALL);
+}
+
+static void area_msg(int x0, int y0, int x1, int y1, int ex, int ey) {
+  uint8_t m[11] = {0};
+  put16(m + 1, (unsigned) x0);
+  put16(m + 3, (unsigned) y0);
+  put16(m + 5, (unsigned) x1);
+  put16(m + 7, (unsigned) y1);
+  m[9] = (uint8_t) ex;
+  m[10] = (uint8_t) ey;
+  pic_msg(K_ANIM_AREA, m, sizeof m);
+}
+
+static void drift_msg(int vx, int vy) {
+  uint8_t m[6] = {0, ANIM_DRIFT};
+  put16(m + 2, (unsigned) vx);
+  put16(m + 4, (unsigned) vy);
+  pic_msg(K_ANIM_MOVE, m, sizeof m);
+}
+
+static void jump_msg(int x, int y) {
+  uint8_t m[8] = {0, ANIM_GLIDE};
+  put16(m + 2, (unsigned) x);
+  put16(m + 4, (unsigned) y);
+  pic_msg(K_ANIM_MOVE, m, sizeof m);
+}
+
+static void wander_msg(int s0, int s1, int heading, int spread, int l0, int l1, int r0, int r1) {
+  uint8_t m[18] = {0, ANIM_WANDER};
+  int v[8] = {s0, s1, heading, spread, l0, l1, r0, r1};
+  for (int i = 0; i < 8; i++)
+    put16(m + 2 + 2 * i, (unsigned) v[i]);
+  pic_msg(K_ANIM_MOVE, m, sizeof m);
+}
+
+static void face_msg(int flags, int facing, int tilt, int rate, int len) {
+  uint8_t m[10] = {0, ANIM_FACE, 0, (uint8_t) flags};
+  put16(m + 4, (unsigned) facing);
+  put16(m + 6, (unsigned) tilt);
+  put16(m + 8, (unsigned) rate);
+  pic_msg(K_ANIM_TURN, m, len);
+}
+
+// How far a run of steps went, whether it kept to x0..x1, y0..y1 with its 16 x 8, and how often it stood still
+typedef struct {
+  int lo_x, hi_x, lo_y, hi_y, rests;
+  bool inside;
+} trail_t;
+
+static trail_t trail(int steps, int x0, int y0, int x1, int y1) {
+  trail_t t = {999, -999, 999, -999, 0, true};
+  int16_t x, y, px = -1, py = -1;
+  int still = 0;
+  for (int i = 0; i < steps; i++) {
+    sim_run(50);
+    anim_pos(0, &x, &y);
+    t.inside &= x >= x0 && x + 16 <= x1 && y >= y0 && y + 8 <= y1;
+    t.lo_x = LV_MIN(t.lo_x, x);
+    t.hi_x = LV_MAX(t.hi_x, x);
+    t.lo_y = LV_MIN(t.lo_y, y);
+    t.hi_y = LV_MAX(t.hi_y, y);
+    still = x == px && y == py ? still + 1 : 0;
+    t.rests += still == 3;
+    px = x;
+    py = y;
+  }
+  return t;
+}
+
+// K_ANIM_AREA, ANIM_WANDER and ANIM_FACE: a drift bounces inside its area or crosses out and back in, a wander keeps
+// to its area, rests, and turns back off the edges, and a place can face where it goes
+static void test_anim_paths(void) {
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 100, 100, 0, 0);
+  lv_obj_t *img = anim_show(lv_scr_act());
+  area_msg(50, 80, 200, 140, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
+  drift_msg(100, 37);
+  trail_t t = trail(400, 50, 80, 200, 140);
+  CHECK(t.inside && t.lo_x == 50 && t.hi_x == 184 && t.lo_y == 80 && t.hi_y == 132);
+  // out across the right edge and in at the left, and back
+  area_msg(50, 80, 200, 140, ANIM_EDGE_CROSS, ANIM_EDGE_BOUNCE);
+  jump_msg(180, 100);
+  drift_msg(100, 0);
+  int xs[5], want[5] = {185, 190, 195, 34, 39};
+  int16_t x, y;
+  for (int i = 0; i < 5; i++) {
+    sim_run(50);
+    anim_pos(0, &x, &y);
+    xs[i] = x;
+  }
+  CHECK(!memcmp(xs, want, sizeof xs));
+  drift_msg(-100, 0);
+  sim_run(50);
+  CHECK(anim_pos(0, &x, &y) && x == 200);
+  sim_run(50);
+  CHECK(anim_pos(0, &x, &y) && x == 195);
+  // a wander about its area, resting now and then
+  area_msg(60, 40, 260, 200, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
+  wander_msg(20, 60, 0, 180, 200, 800, 0, 300);
+  t = trail(1200, 60, 40, 260, 200);
+  CHECK(t.inside && t.hi_x - t.lo_x > 100 && t.hi_y - t.lo_y > 60 && t.rests > 0);
+  // heading right with little spread, it turns back off the right edge and goes all the way left
+  wander_msg(100, 100, 0, 10, 300, 300, 0, 0);
+  t = trail(200, 60, 40, 260, 200);
+  CHECK(t.inside && t.lo_x == 60 && t.hi_x == 244 && !t.rests);
+  // a bad area or wander changes nothing
+  area_msg(60, 40, 60, 200, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
+  area_msg(60, 40, 260, 200, ANIM_EDGE_BOUNCE + 1, ANIM_EDGE_BOUNCE);
+  pic_msg(K_ANIM_AREA, (uint8_t[]) {0, 0, 0, 0, 0, 1, 0, 1, 0, 0}, 10);
+  t = trail(200, 60, 40, 260, 200);
+  CHECK(t.inside);
+
+  // frames that face right, mirrored to face left, leaning up to 30 degrees, upright when it stops
+  area_msg(0, 0, PIC_MAX_W, PIC_MAX_H, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
+  jump_msg(150, 100);
+  face_msg(ANIM_FACE_MIRROR | ANIM_FACE_LEVEL, 0, 30, 0, 10);
+  int a, flip;
+  drift_msg(-50, 0);
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 0 && flip == ANIM_FLIP_X);
+  drift_msg(-50, 50);  // down to the left
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 330 && flip == ANIM_FLIP_X);
+  drift_msg(50, 50);  // down to the right: unmirrored, the same lean the other way
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 30 && !flip);
+  uint8_t stop[2] = {0, ANIM_STOP};
+  pic_msg(K_ANIM_MOVE, stop, sizeof stop);
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 0 && !flip);
+  // 90 degrees a second
+  face_msg(ANIM_FACE_MIRROR, 0, 30, 90, 10);
+  drift_msg(50, -50);
+  sim_run(100);
+  CHECK(anim_angle(0, &a, &flip) && a == 351);
+  sim_run(500);
+  CHECK(anim_angle(0, &a, &flip) && a == 330);
+  // frames that face up turn all the way round toward where it goes
+  face_msg(0, 270, 180, 0, 10);
+  drift_msg(50, 0);
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 90 && !flip);
+  face_msg(0, 270, 181, 0, 10);
+  face_msg(ANIM_FACE_LEVEL << 1, 270, 0, 0, 10);
+  face_msg(0, 270, 0, -1, 10);
+  face_msg(0, 270, 0, 0, 9);
+  drift_msg(0, 50);
+  sim_run(50);
+  CHECK(anim_angle(0, &a, &flip) && a == 180);
+  uint8_t to[7] = {0, ANIM_GLIDE};  // a turn takes over
+  put16(to + 3, 45);
+  pic_msg(K_ANIM_TURN, to, sizeof to);
+  sim_run(200);
+  CHECK(anim_angle(0, &a, &flip) && a == 45);
   lv_obj_del(img);
   anim_clear_msg(ANIM_ALL);
 }
@@ -1773,6 +2263,10 @@ int main(void) {
   test_anim();
   test_anim_slots();
   test_anim_move();
+  test_anim_turn();
+  test_anim_look();
+  test_anim_rounds();
+  test_anim_paths();
   test_formats();
   test_values();
   test_items();

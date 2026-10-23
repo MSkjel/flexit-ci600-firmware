@@ -142,6 +142,8 @@ int pn_anim_pos(int place, int *x, int *y) {
   return 1;
 }
 unsigned pn_anim_used(void) { return anim_used(); }
+int pn_anim_angle(int place, int *deg, int *flip) { return anim_angle(place, deg, flip); }
+int pn_anim_look(int place, int *size, int *opa) { return anim_look(place, size, opa); }
 
 // Screenshot of the picture screensaver as DIR/NAME.ppm.
 void pn_shot(const char *dir, const char *name) {
