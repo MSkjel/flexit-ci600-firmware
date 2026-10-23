@@ -7,9 +7,12 @@ on:
 env:
   ESP_REF: panel  # the esphome-flexit-modbus-server branch the link is tested against
 
+# The apt packages and ccache's objects come from the cache, LVGL comes without its history. The timeouts stop a
+# stalled package mirror early.
 jobs:
   format:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: pip install clang-format==23.1.3 ruff==0.17.1
@@ -19,14 +22,20 @@ jobs:
 
   firmware:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 0  # the tags, for the version
-      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - run: git submodule update --init --depth 1
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: gcc-arm-none-eabi ccache
+      - uses: ./.github/actions/ccache
+        with:
+          key: firmware
       - run: make -C hw
       - name: The update stream, built and read back
         if: env.CI600_FXUP_KEY != ''  # pull requests from forks don't get the secret
@@ -34,34 +43,66 @@ jobs:
           pip install cryptography
           python3 tools/mkupdate.py hw/build/ci600.bin hw/build/ci600.fxup
           python3 tools/mkupdate.py --verify hw/build/ci600.fxup hw/build/ci600.bin
+      - run: ccache --show-stats
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 0  # the tags, for the version
+      - run: git submodule update --init --depth 1
       - uses: actions/checkout@v4
         with:
           repository: MSkjel/esphome-flexit-modbus-server
           ref: ${{ env.ESP_REF }}
           path: esp
-      - run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: gcc-multilib g++-multilib ccache
       - run: pip install pyyaml pillow
+      - uses: ./.github/actions/ccache
+        with:
+          key: test
       - run: make -C sim check ESP_REPO=$GITHUB_WORKSPACE/esp
       - run: make -C sim gallery ESP_REPO=$GITHUB_WORKSPACE/esp
       - uses: actions/upload-artifact@v4
         with:
           name: screens
           path: sim/build/out/gallery
+      - run: ccache --show-stats
+
+  # The same checks with ASan and UBSan, alongside test
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the tags, for the version
+      - run: git submodule update --init --depth 1
+      - uses: actions/checkout@v4
+        with:
+          repository: MSkjel/esphome-flexit-modbus-server
+          ref: ${{ env.ESP_REF }}
+          path: esp
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: gcc-multilib g++-multilib ccache
+      - run: pip install pyyaml pillow
+      - uses: ./.github/actions/ccache
+        with:
+          key: sanitizers
       - run: make -C sim check SAN=1 ESP_REPO=$GITHUB_WORKSPACE/esp
+      - run: ccache --show-stats
 
   # Pushes the test job's gallery as the only commit on the screens branch, where the README gets its screens
   screens:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     concurrency:

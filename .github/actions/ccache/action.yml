@@ -1,0 +1,23 @@
+# ccache in front of gcc, g++ and arm-none-eabi-gcc, so the Makefiles and their flags stay as they are. Its cache
+# is kept between runs, one per job.
+name: ccache
+description: Compiler cache, kept between runs
+inputs:
+  key:
+    description: Cache name, one per job
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ inputs.key }}-${{ github.sha }}
+        restore-keys: ccache-${{ inputs.key }}-
+    - shell: bash
+      run: |
+        mkdir -p ~/ccache-bin
+        for c in gcc g++ arm-none-eabi-gcc; do ln -sf "$(command -v ccache)" ~/ccache-bin/$c; done
+        echo ~/ccache-bin >> "$GITHUB_PATH"
+        echo "CCACHE_DIR=$HOME/.cache/ccache" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=300M" >> "$GITHUB_ENV"

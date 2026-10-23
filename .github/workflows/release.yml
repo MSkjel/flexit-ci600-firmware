@@ -15,17 +15,21 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
+  # Built without ccache, the toolchain from the same cache as ci.yml's firmware job
   release:
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 0  # all of history and the tags, for the changelog
-      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - run: git submodule update --init --depth 1
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: gcc-arm-none-eabi ccache
       - run: make -C hw
       - run: |
           pip install cryptography
