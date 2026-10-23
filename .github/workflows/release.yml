@@ -29,7 +29,7 @@ jobs:
       - run: git submodule update --init --depth 1
       - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
-          packages: gcc-arm-none-eabi ccache
+          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache  # newlib is only recommended, the cache skips that
       - run: make -C hw
       - run: |
           pip install cryptography
