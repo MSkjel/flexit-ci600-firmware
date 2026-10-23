@@ -1,0 +1,33 @@
+# apt packages from .debs cached for this runner image, so the package mirror is only asked when the image
+# changes. apt-get with timeouts and retries, so a stalled mirror recovers or fails in minutes. Without the
+# recommended packages, which for the ARM toolchain is a 440 MB C++ library, so list everything needed.
+name: apt
+description: Install apt packages, the .debs kept between runs
+inputs:
+  packages:
+    description: Packages to install
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: echo "key=apt-$ImageOS-$ImageVersion-$(echo "$PACKAGES" | md5sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v6
+      with:
+        path: ~/apt-debs
+        key: ${{ steps.key.outputs.key }}
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        apt="sudo apt-get -q -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        if ! ls ~/apt-debs/*.deb > /dev/null 2>&1; then
+          mkdir -p ~/apt-debs/partial
+          $apt update
+          $apt install -y --download-only --no-install-recommends -o Dir::Cache::archives="$HOME/apt-debs" $PACKAGES
+          sudo rm -rf ~/apt-debs/partial ~/apt-debs/lock
+        fi
+        sudo dpkg -i ~/apt-debs/*.deb

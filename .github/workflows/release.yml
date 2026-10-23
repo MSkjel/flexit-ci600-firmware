@@ -15,7 +15,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
-  # Built without ccache, the toolchain from the same cache as ci.yml's firmware job
+  # Built without ccache, the toolchain from the same .debs as ci.yml's firmware job
   release:
     needs: ci
     runs-on: ubuntu-latest
@@ -23,13 +23,13 @@ jobs:
     env:
       CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # all of history and the tags, for the changelog
       - run: git submodule update --init --depth 1
-      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+      - uses: ./.github/actions/apt
         with:
-          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache  # newlib is only recommended, the cache skips that
+          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache
       - run: make -C hw
       - run: |
           pip install cryptography
@@ -44,14 +44,14 @@ jobs:
           git log --no-merges --format='- %s' ${prev:+$prev..}HEAD > notes.md
           cat notes.md
       - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: notes.md
           files: |
             ci600.fxup
             ci600.bin
       - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci600-firmware
           path: |

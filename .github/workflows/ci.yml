@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: pip install clang-format==23.1.3 ruff==0.17.1
       - run: clang-format --dry-run --Werror $(git ls-files '*.c' '*.h' '*.cpp')
       - run: ruff format --check
@@ -26,13 +26,13 @@ jobs:
     env:
       CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the tags, for the version
       - run: git submodule update --init --depth 1
-      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+      - uses: ./.github/actions/apt
         with:
-          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache  # newlib is only recommended, the cache skips that
+          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache
       - uses: ./.github/actions/ccache
         with:
           key: firmware
@@ -49,16 +49,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the tags, for the version
       - run: git submodule update --init --depth 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: MSkjel/esphome-flexit-modbus-server
           ref: ${{ env.ESP_REF }}
           path: esp
-      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+      - uses: ./.github/actions/apt
         with:
           packages: gcc-multilib g++-multilib ccache
       - run: pip install pyyaml pillow
@@ -67,7 +67,7 @@ jobs:
           key: test
       - run: make -C sim check ESP_REPO=$GITHUB_WORKSPACE/esp
       - run: make -C sim gallery ESP_REPO=$GITHUB_WORKSPACE/esp
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screens
           path: sim/build/out/gallery
@@ -78,16 +78,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the tags, for the version
       - run: git submodule update --init --depth 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: MSkjel/esphome-flexit-modbus-server
           ref: ${{ env.ESP_REF }}
           path: esp
-      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+      - uses: ./.github/actions/apt
         with:
           packages: gcc-multilib g++-multilib ccache
       - run: pip install pyyaml pillow
@@ -109,7 +109,7 @@ jobs:
       group: screens
       cancel-in-progress: true
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: screens
           path: screens
