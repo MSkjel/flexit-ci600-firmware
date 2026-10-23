@@ -22,13 +22,15 @@ $(AUTHORS_H): FORCE
 	else mkdir -p $(dir $@) && { echo '#define AUTHORS_N 0' | cmp -s - $@ || echo '#define AUTHORS_N 0' > $@; }; fi
 FORCE:
 .PHONY: FORCE
-APP_SRC  := $(wildcard $(ROOT)/app/*.c $(ROOT)/ui/*.c $(ROOT)/ui/fonts/*.c $(ROOT)/proto/*.c $(ROOT)/lib/tjpgd/*.c)
+# Sources in sorted order, so they link in the same order everywhere and the firmware comes out byte for byte the
+# same. find goes by the order on disk, and wildcard by the locale.
+APP_SRC  := $(sort $(wildcard $(ROOT)/app/*.c $(ROOT)/ui/*.c $(ROOT)/ui/fonts/*.c $(ROOT)/proto/*.c $(ROOT)/lib/tjpgd/*.c))
 # lib/lvgl stays as LVGL released it. The files lvgl-ci600.patch changes are copied into the build, patched there
 # and built instead of the originals.
 LV_PATCH     := $(ROOT)/lib/lvgl-ci600.patch
 LV_CHANGED   := $(shell sed -n 's|^+++ b/||p' $(LV_PATCH))
 LV_COPY      := $(BUILD)/lvgl-ci600
-LV_SRC       := $(filter-out $(addprefix $(LVGL)/,$(LV_CHANGED)),$(shell find $(LVGL)/src -name '*.c'))
+LV_SRC       := $(sort $(filter-out $(addprefix $(LVGL)/,$(LV_CHANGED)),$(shell find $(LVGL)/src -name '*.c')))
 LV_COPY_SRC  := $(addprefix $(LV_COPY)/,$(LV_CHANGED))
 LVGL_PATCHED := $(LV_COPY)/.patched
 $(LVGL_PATCHED): $(LV_PATCH) $(addprefix $(LVGL)/,$(LV_CHANGED))  # the originals too, for a submodule bump

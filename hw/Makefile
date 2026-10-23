@@ -15,7 +15,7 @@ CFLAGS  := $(ARCH) -Os -g -std=gnu11 $(WARN) -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -T $(BUILD)/ci600.ld -nostartfiles -Wl,--gc-sections -Wl,-Map=$(BUILD)/ci600.map --specs=nano.specs \
            -Wl,--no-warn-rwx-segments
 
-OBJ := $(patsubst $(ROOT)/%.c,$(BUILD)/%.o,$(wildcard $(ROOT)/hw/*.c) $(APP_SRC) $(LV_SRC)) $(LV_COPY_SRC:.c=.o)
+OBJ := $(patsubst $(ROOT)/%.c,$(BUILD)/%.o,$(sort $(wildcard $(ROOT)/hw/*.c)) $(APP_SRC) $(LV_SRC)) $(LV_COPY_SRC:.c=.o)
 
 all: $(BUILD)/ci600.bin
 	@echo "ci600 $(VERSION)"
