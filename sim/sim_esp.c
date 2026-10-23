@@ -163,7 +163,7 @@ static uint32_t photo_px(void *ctx, int x, int y) {
 static unsigned photo_jpeg(int q) {
   pjpeg_t j;
   pjpeg_begin(&j, 320, 240, q, comp, PIC_POOL);
-  while (pjpeg_row(&j, photo_px, NULL)) {
+  while (pjpeg_mcu(&j, photo_px, NULL)) {
   }
   return pjpeg_end(&j);
 }

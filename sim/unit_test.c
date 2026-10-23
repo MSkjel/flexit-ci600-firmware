@@ -256,7 +256,7 @@ static void test_jpeg(void) {
   static uint8_t j[8192];
   pjpeg_t e;
   pjpeg_begin(&e, JW, JH, 90, j, sizeof j);
-  while (pjpeg_row(&e, photo, NULL)) {
+  while (pjpeg_mcu(&e, photo, NULL)) {
   }
   uint32_t n = pjpeg_end(&e);
   CHECK(n > 600 && pjpeg_mse(&e) > 0 && pjpeg_mse(&e) < 20);
