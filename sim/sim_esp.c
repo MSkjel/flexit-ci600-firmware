@@ -5,6 +5,7 @@
 #include "link.h"
 #include "plink.h"
 #include "pbulk.h"
+#include "pdeflate.h"
 #include "pjpeg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,8 +77,8 @@ static void cu60_cycle(void) {
 }
 
 // ---------------------------------------------------------------- sending pictures, as the ESP does
-static uint8_t comp[PIC_POOL + 1024];
-static unsigned comp_len, comp_pos;
+static uint8_t comp[PIC_POOL + 1024], wire[PIC_POOL + 2048];  // the bytes, and how they go in DATA
+static unsigned comp_len, comp_pos, wire_len;
 static bool pic_sending, place_after;  // place_after: an animation, place it at place_x, place_y after END
 static int place_x, place_y;
 static uint8_t pic_id;
@@ -87,6 +88,22 @@ static unsigned pack_rows(const uint8_t rows[][TP_W / 2], int y, int count) {
   for (int r = y; r < y + count; r++)
     n += plink_pack_row(rows[r], TP_W / 2, comp + n);
   return n;
+}
+
+// DATA for comp: 16 colours as pzip pieces, deflated only against themselves here, the rest as they are
+static void send_data(bool pieces) {
+  wire_len = 0;
+  if (pieces) {
+    static uint16_t table[PZIP_TABLE];
+    pzip_t z = {.data = comp, .n = comp_len, .table = table};
+    for (unsigned m; (m = pzip(&z, wire + wire_len));)
+      wire_len += m;
+  } else {
+    memcpy(wire, comp, comp_len);
+    wire_len = comp_len;
+  }
+  comp_pos = 0;
+  pic_sending = true;
 }
 
 static void put16(uint8_t *b, unsigned v) {
@@ -116,8 +133,7 @@ unsigned sim_esp_send_picture(void) {
   put32(h + 6, comp_len);
   put_palette(h + 10, tp_palette);
   send(K_PIC_BEGIN, h, sizeof h);
-  comp_pos = 0;
-  pic_sending = true;
+  send_data(true);
   return comp_len;
 }
 
@@ -184,8 +200,7 @@ unsigned sim_esp_send_photo(int *quality) {
   put16(h + 4, 240);
   put32(h + 6, comp_len);
   send(K_PIC_BEGIN, h, sizeof h);
-  comp_pos = 0;
-  pic_sending = true;
+  send_data(false);
   return comp_len;
 }
 
@@ -204,8 +219,7 @@ unsigned sim_esp_send_moon(int *y_out, int *count_out) {
   put16(h + 3, (unsigned) (y1 - y0 + 1));
   put32(h + 5, comp_len);
   send(K_PIC_PATCH, h, sizeof h);
-  comp_pos = 0;
-  pic_sending = true;
+  send_data(true);
   *y_out = y0;
   *count_out = y1 - y0 + 1;
   return comp_len;
@@ -263,8 +277,7 @@ unsigned sim_esp_send_animation(int x, int y) {
   put32(h + 8, comp_len);
   put_palette(h + 12, PAL);
   send(K_ANIM_BEGIN, h, sizeof h);
-  comp_pos = 0;
-  pic_sending = true;
+  send_data(false);
   place_x = x;
   place_y = y;
   place_after = true;
@@ -291,7 +304,7 @@ void sim_esp_move_animation(int mode, int a, int b, int ms) {
 
 static void esp_pump(void) {
   while (pic_sending && pbulk_esp_room(&FL) > 128) {
-    if (comp_pos >= comp_len) {
+    if (comp_pos >= wire_len) {
       send_number(K_PIC_END, plink_crc32(0, comp, comp_len));
       pic_sending = false;
       if (place_after)
@@ -300,8 +313,8 @@ static void esp_pump(void) {
       break;
     }
     uint8_t b[64] = {0};  // DATA is padded to a multiple of 4 bytes
-    unsigned n = comp_len - comp_pos < sizeof b ? comp_len - comp_pos : sizeof b;
-    memcpy(b, comp + comp_pos, n);
+    unsigned n = wire_len - comp_pos < sizeof b ? wire_len - comp_pos : sizeof b;
+    memcpy(b, wire + comp_pos, n);
     send(K_PIC_DATA, b, (int) (n + 3) & ~3);
     comp_pos += n;
   }

@@ -12,6 +12,7 @@
 #include "ui.h"
 #include "unit.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 model_t M;
@@ -125,16 +126,32 @@ static int32_t rest(int32_t a, const uint8_t *b, unsigned len, unsigned piece, u
   return end(crc);
 }
 
+// b[n] as the ESP sends it, pzip pieces against the hist bytes the panel has before where b goes
+static unsigned zip(const uint8_t *b, unsigned n, const uint8_t *hist, unsigned nh, uint8_t *out) {
+  static uint16_t table[PZIP_TABLE];
+  pzip_t z = {.hist = hist, .nh = nh, .data = b, .n = n, .table = table};
+  unsigned k = 0, m;
+  while ((m = pzip(&z, out + k)))
+    k += m;
+  return k;
+}
+
+// A patch or picture header got answer a, then b[n] goes as pieces against hist
+static int32_t rest_zip(int32_t a, const uint8_t *b, unsigned n, const uint8_t *hist, unsigned nh, unsigned piece) {
+  uint8_t z[1024];
+  return rest(a, z, zip(b, n, hist, nh, z), piece, plink_crc32(0, b, n));
+}
+
 static int32_t send_picture(unsigned piece) {
   uint8_t b[512];
   unsigned n = pack(0, H, b);
-  return rest(begin(W, H, n), b, n, piece, plink_crc32(0, b, n));
+  return rest_zip(begin(W, H, n), b, n, NULL, 0, piece);
 }
 
 static int32_t send_patch(int y, int count, bool pal) {
   uint8_t b[512];
   unsigned n = pack(y, count, b);
-  return rest(patch(y, count, n, pal), b, n, 7, plink_crc32(0, b, n));
+  return rest_zip(patch(y, count, n, pal), b, n, NULL, 0, 7);
 }
 
 // Whether the panel draws px
@@ -169,24 +186,24 @@ static void test_picture(void) {
   CHECK(shows());
 
   // a patch cut off by a new picture. The new one goes to the start of the pool, not behind the old.
-  uint8_t b[512];
+  uint8_t b[512], z[1024];
   unsigned n = pack(0, 2, b);
   patch(0, 2, n, false);
-  data(b, n / 2);
+  data(z, zip(b, n, NULL, 0, z) / 2);
   fill(0, H, 40);
   CHECK(status(send_picture(64)) == PIC_DONE);
   CHECK(shows());
 
   // a bad patch with a run across a row end is refused and leaves the picture alone
   uint8_t bad[] = {126 + 7, 0x11, 0, 0x22, 0, 0x33, 0, 0x44};  // a 7-byte repeat in a 5-byte row
-  CHECK(status(rest(patch(1, 1, sizeof bad, false), bad, sizeof bad, 8, plink_crc32(0, bad, sizeof bad))) == PIC_BAD);
+  CHECK(status(rest_zip(patch(1, 1, sizeof bad, false), bad, sizeof bad, NULL, 0, 8)) == PIC_BAD);
   CHECK(shows());
   // and so are bytes after the last row
   n = pack(1, 1, b);
   b[n] = 0;
   b[n + 1] = 0x55;
-  CHECK(status(rest(patch(1, 1, n + 2, false), b, n + 2, 8, plink_crc32(0, b, n + 2))) == PIC_BAD && shows());
-  CHECK(status(rest(patch(1, 0, 2, false), b, 2, 8, plink_crc32(0, b, 2))) == PIC_BAD && shows());
+  CHECK(status(rest_zip(patch(1, 1, n + 2, false), b, n + 2, NULL, 0, 8)) == PIC_BAD && shows());
+  CHECK(status(rest_zip(patch(1, 0, 2, false), b, 2, NULL, 0, 8)) == PIC_BAD && shows());
   // and the next patch is still spliced in at the right length
   fill(5, 1, 70);
   CHECK(status(send_patch(5, 1, true)) == PIC_DONE);
@@ -201,7 +218,7 @@ static void test_picture(void) {
 
   // A wrong CRC changes nothing. A patch has to fit in the pool behind the picture, and its rows in the picture.
   n = pack(1, 1, b);
-  CHECK(status(rest(patch(1, 1, n, false), b, n, 4, 12345)) == PIC_BAD_CRC);
+  CHECK(status(rest(patch(1, 1, n, false), z, zip(b, n, NULL, 0, z), 4, 12345)) == PIC_BAD_CRC);
   CHECK(shows());
   CHECK(status(patch(1, 1, PIC_POOL, false)) == PIC_NO_ROOM);
   CHECK(status(patch(1, 1, UINT32_MAX, false)) == PIC_NO_ROOM);  // doesn't wrap round to fit
@@ -227,6 +244,25 @@ static void test_picture(void) {
   // a big one, with progress every KiB
   fill(0, H, 3);
   CHECK(status(send_picture(1)) == PIC_DONE && shows());
+
+  // A patch deflated against the picture the panel has: rows copied from others come as matches into it, so it
+  // takes fewer bytes than the rows themselves
+  uint8_t old[512];
+  unsigned no = pack(0, H, old);
+  memcpy(px[2], px[5], sizeof px[2]);
+  memcpy(px[3], px[0], sizeof px[3]);
+  n = pack(2, 2, b);
+  unsigned k = zip(b, n, old, no, z);
+  CHECK(k < n && status(rest(patch(2, 2, n, false), z, k, 5, plink_crc32(0, b, n))) == PIC_DONE && shows());
+  // Pieces that are too long, make too much, or reach back past the pool are refused
+  n = pack(0, H, b);
+  k = zip(b, n, NULL, 0, z);
+  z[0] = PZIP_MAX - PZIP_HEAD + 1;
+  CHECK(status(rest(begin(W, H, n), z, k, 64, plink_crc32(0, b, n))) == PIC_BAD);
+  k = zip(b, n, NULL, 0, z);
+  CHECK(status(rest(begin(W, H, n - 1), z, k, 64, plink_crc32(0, b, n))) == PIC_BAD);
+  k = zip(b, n, old, no, z);  // as if the panel had a picture before it, which a whole one can't reach
+  CHECK(status(rest(begin(W, H, n), z, k, 64, plink_crc32(0, b, n))) == PIC_BAD);
   pic_msg(K_PIC_CLEAR, NULL, 0);
   CHECK(!shows());
 }
@@ -642,6 +678,11 @@ static void test_anim_move(void) {
 }
 
 // ---------------------------------------------------------------- deflate
+static int32_t like_test(void *ctx, uint32_t i) {  // where data byte i came from
+  (void) ctx;
+  return (int32_t) (1000 + i);
+}
+
 static void test_deflate(void) {
   // zlib's output inflates, a dynamic block, a fixed one and a stored one
   static const char TXT[] = "Clear sky over the hills, a red cabin and a flag. Clear sky over the hills, a red cabin "
@@ -660,15 +701,15 @@ static void test_deflate(void) {
   enum { N = sizeof TXT - 1 };
   uint8_t out[N], stored[5 + N] = {1, N, 0, (uint8_t) ~N, 0xFF};
   memcpy(stored + 5, TXT, N);
-  CHECK(pinflate(DYN, sizeof DYN, out, N, N, N) == sizeof DYN && !memcmp(out, TXT, N));
-  CHECK(pinflate(FIX, sizeof FIX, out, N, N, N) == sizeof FIX && !memcmp(out, TXT, N));
-  CHECK(pinflate(stored, sizeof stored, out, N, N, N) == sizeof stored && !memcmp(out, TXT, N));
-  CHECK(pinflate(DYN, sizeof DYN, NULL, N, N, N) == sizeof DYN);  // only checking
+  CHECK(pinflate(DYN, sizeof DYN, out, N, N, N, 0) == sizeof DYN && !memcmp(out, TXT, N));
+  CHECK(pinflate(FIX, sizeof FIX, out, N, N, N, 0) == sizeof FIX && !memcmp(out, TXT, N));
+  CHECK(pinflate(stored, sizeof stored, out, N, N, N, 0) == sizeof stored && !memcmp(out, TXT, N));
+  CHECK(pinflate(DYN, sizeof DYN, NULL, N, N, N, 0) == sizeof DYN);  // only checking
   // wrong length, cut short and a damaged code are refused
-  CHECK(!pinflate(DYN, sizeof DYN, out, N, N, N - 1) && !pinflate(DYN, sizeof DYN, out, N, N, N + 1));
-  CHECK(!pinflate(DYN, sizeof DYN - 1, out, N, N, N) && !pinflate(stored, sizeof stored - 1, out, N, N, N));
+  CHECK(!pinflate(DYN, sizeof DYN, out, N, N, N - 1, 0) && !pinflate(DYN, sizeof DYN, out, N, N, N + 1, 0));
+  CHECK(!pinflate(DYN, sizeof DYN - 1, out, N, N, N, 0) && !pinflate(stored, sizeof stored - 1, out, N, N, N, 0));
   stored[3] ^= 1;
-  CHECK(!pinflate(stored, sizeof stored, out, N, N, N));
+  CHECK(!pinflate(stored, sizeof stored, out, N, N, N, 0));
 
   // our own round trip, also from and into a rectangle of a bigger buffer
   uint8_t big[40][24], back[40][24], c[PDEFLATE_BOUND(sizeof big)];
@@ -676,17 +717,75 @@ static void test_deflate(void) {
     for (int x = 0; x < 24; x++)
       big[y][x] = (uint8_t) ((x / 3 + y / 5) % 4 * 0x11);
   uint32_t k = pdeflate(&big[0][0], sizeof big, sizeof big, sizeof big, c, sizeof c);
-  CHECK(k > 0 && k < sizeof big / 4 && pinflate(c, k, &back[0][0], sizeof back, sizeof back, sizeof back) == k);
+  CHECK(k > 0 && k < sizeof big / 4 && pinflate(c, k, &back[0][0], sizeof back, sizeof back, sizeof back, 0) == k);
   CHECK(!memcmp(big, back, sizeof big));
   memset(back, 0xAB, sizeof back);
   k = pdeflate(&big[3][5], 10, 24, 10 * 20, c, sizeof c);  // 10 x 20 from (5, 3)
-  CHECK(k > 0 && pinflate(c, k, &back[7][2], 10, 24, 10 * 20) == k);
+  CHECK(k > 0 && pinflate(c, k, &back[7][2], 10, 24, 10 * 20, 0) == k);
   bool same = true;
   for (int y = 0; y < 40; y++)
     for (int x = 0; x < 24; x++)
       same &= back[y][x] == (y >= 7 && y < 27 && x >= 2 && x < 12 ? big[y - 4][x + 3] : 0xAB);
   CHECK(same);
   CHECK(pdeflate(&big[0][0], sizeof big, sizeof big, sizeof big, c, 10) == 0);  // doesn't fit
+
+  // pzip: pieces that inflate one by one into place, matching what's before them and the near bytes too
+  static uint8_t pool[6000], data[3000], z[4000];
+  static uint16_t table[PZIP_TABLE];
+  uint32_t seed = 7;
+  for (unsigned i = 0; i < sizeof pool; i++) {
+    seed = seed * 1103515245u + 12345u;
+    pool[i] = (uint8_t) (seed >> 16);
+  }
+  for (unsigned i = 0; i < sizeof data; i++)  // runs from the history, its own repeats, and noise
+    data[i] = i % 100 < 40 ? pool[1000 + i] : i % 100 < 70 ? (uint8_t) (i / 7) : (uint8_t) (i * 131);
+  for (int round = 0; round < 4; round++) {  // no history, history, like() too, like() without a table
+    uint32_t nh = round == 0 ? 0 : 4000;
+    pzip_t zp = {.hist = pool, .nh = nh, .data = data, .n = sizeof data, .table = round < 3 ? table : NULL};
+    if (round >= 2)
+      zp.like = like_test;
+    static uint8_t outp[6000 + 3000];
+    memcpy(outp, pool, nh);
+    unsigned zn = 0, made = 0, m;
+    bool ok = true;
+    while ((m = pzip(&zp, z + zn))) {
+      unsigned clen = z[zn], olen = z[zn + 1] | z[zn + 2] << 8;
+      ok &= m <= PZIP_MAX && clen == m - PZIP_HEAD &&
+            pinflate(z + zn + PZIP_HEAD, clen, outp + nh + made, olen, olen, olen, nh + made) == clen;
+      made += olen;
+      zn += m;
+    }
+    CHECK(ok && made == sizeof data && !memcmp(outp + nh, data, sizeof data));
+    CHECK(round == 2 ? zn < sizeof data * 2 / 3 : zn < sizeof data);  // like() finds the history far back
+  }
+  // noise goes stored, a little over its size, and nothing at all is no piece
+  for (unsigned i = 0; i < sizeof data; i++) {
+    seed = seed * 1103515245u + 12345u;
+    data[i] = (uint8_t) (seed >> 16);
+  }
+  pzip_t zr = {.data = data, .n = sizeof data, .table = table};
+  unsigned zn = 0, m;
+  while ((m = pzip(&zr, z + zn)))
+    zn += m;
+  CHECK(zn <= sizeof data + sizeof data / (PZIP_MAX - PZIP_HEAD - 5) * (PZIP_HEAD + 5) + PZIP_HEAD + 5);
+  pzip_t none = {.data = data, .n = 0, .table = table};
+  CHECK(pzip(&none, z) == 0);
+  // a run to the very end, like() too: nothing read past it
+  uint8_t *run = malloc(600), *got = malloc(600);
+  memset(run, 0x5A, 600);
+  pzip_t zt = {.hist = pool, .nh = 4000, .data = run, .n = 600, .table = table, .like = like_test};
+  zn = 0;
+  unsigned made = 0;
+  bool ok = true;
+  while ((m = pzip(&zt, z + zn))) {
+    unsigned olen = z[zn + 1] | z[zn + 2] << 8;
+    ok &= pinflate(z + zn + PZIP_HEAD, z[zn], got + made, olen, olen, olen, made) == z[zn];
+    made += olen;
+    zn += m;
+  }
+  CHECK(ok && made == 600 && !memcmp(run, got, 600) && zn < 40);
+  free(run);
+  free(got);
 }
 
 // ---------------------------------------------------------------- number and time formatting

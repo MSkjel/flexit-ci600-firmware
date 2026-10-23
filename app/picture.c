@@ -1,6 +1,7 @@
 // Screensaver picture, see picture.h
 #include "picture.h"
 #include "anim.h"
+#include "pdeflate.h"
 #include "plink.h"
 #include "tjpgd/tjpgd.h"
 #include <string.h>
@@ -45,6 +46,8 @@ static struct {
   uint16_t rep;                   // length of that repeat
   bool new_pal;                   // patch comes with a new palette in pal
   lv_color_t pal[16];
+  uint8_t piece[PZIP_MAX];  // a 16-colour picture's pzip piece as it comes
+  uint8_t pn;
 } IN;
 
 static uint32_t row_bytes(void) { return (P.w + 1u) / 2u; }
@@ -180,13 +183,27 @@ static int32_t data(const uint8_t *b, int n) {
     return IN.got - IN.acked >= 1024 ? ack(PIC_PROGRESS) : -1;
   }
   uint8_t *dst = IN.kind == IN_PATCH ? pool + P.len : pool;
-  for (int i = 0; i < n && IN.got < IN.len; i++) {
-    dst[IN.got] = b[i];
-    IN.crc = plink_crc32(IN.crc, &b[i], 1);
-    if (P.format == PIC_JPEG)
-      IN.got++;  // checked as a whole at the end
-    else if (!parse(b[i]))
+  if (P.format == PIC_JPEG) {  // checked as a whole at the end
+    uint32_t k = IN.len - IN.got < (uint32_t) n ? IN.len - IN.got : (uint32_t) n;
+    memcpy(dst + IN.got, b, k);
+    IN.crc = plink_crc32(IN.crc, b, k);
+    IN.got += k;
+  }
+  for (int i = 0; P.format == PIC_PALETTE && i < n && IN.got < IN.len; i++) {  // each piece inflated into place
+    IN.piece[IN.pn++] = b[i];
+    if (IN.piece[0] > PZIP_MAX - PZIP_HEAD)
       return fail(PIC_BAD);
+    if (IN.pn < PZIP_HEAD + IN.piece[0])
+      continue;
+    IN.pn = 0;
+    uint32_t made = get16(IN.piece + 1);
+    if (!made || made > IN.len - IN.got ||
+        !pinflate(IN.piece + PZIP_HEAD, IN.piece[0], dst + IN.got, made, made, made, (uint32_t) (dst - pool) + IN.got))
+      return fail(PIC_BAD);
+    IN.crc = plink_crc32(IN.crc, dst + IN.got, made);
+    while (made--)
+      if (!parse(dst[IN.got]))
+        return fail(PIC_BAD);
   }
   return IN.got - IN.acked >= 1024 ? ack(PIC_PROGRESS) : -1;
 }
@@ -301,7 +318,7 @@ static bool jpeg_check(void) {
   return ok;
 }
 
-// END, with the CRC-32 of the compressed bytes
+// END, with the CRC-32 of the len bytes
 static int32_t finish(uint32_t crc) {
   if (IN.kind == IN_ANIM) {
     if (IN.got != IN.len)

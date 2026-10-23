@@ -232,7 +232,7 @@ static uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *
   uint32_t n = 0;
   if (r[3]) {
     n = pinflate(r + 5, (uint32_t) (end - r - 5), frame ? frame + r[2] * rb + r[1] : NULL, r[3], rb,
-                 (uint32_t) r[3] * r[4]);
+                 (uint32_t) r[3] * r[4], 0);
     if (!n)
       return 0;
   }
