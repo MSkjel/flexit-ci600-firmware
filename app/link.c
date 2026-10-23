@@ -1,6 +1,7 @@
 // ESP link, see link.h
 #include "link.h"
 #include "ui.h"
+#include "anim.h"
 #include "clock.h"
 #include "input.h"
 #include "plat.h"
@@ -171,6 +172,11 @@ static void got(void *u, uint16_t key, const uint8_t *b, int n) {
     case K_ANIM_CLEAR:
     case K_ANIM_PLACE:
     case K_ANIM_MOVE:
+    case K_ANIM_TURN:
+    case K_ANIM_AREA:
+    case K_ANIM_SIZE:
+    case K_ANIM_FADE:
+    case K_ANIM_ROUNDS:
       pic_answer(key, b, n);
       return;
     case K_NOTIFY:
@@ -254,6 +260,9 @@ void link_poll(void) {
   while ((n = pbulk_panel_take(&B, p)) > 0)
     pbulk_parse(p, n, got, NULL);
   send_pic_ack();
+  int32_t gone = link_compatible() && plink_room(&L) ? anim_gone() : -1;
+  if (gone >= 0)
+    plink_send(&L, K_ANIM_GONE, (uint32_t) gone);
   // After a HELLO, send our own settings a few at a time so user changes still get through. Not the CU60's
   // values or the ESP's items. From us those mean "change it", and right after a start we may not know them yet.
   while (sync_next && plink_room(&L) > 8) {

@@ -366,18 +366,22 @@ static int32_t anim_send(int slot, int w, uint32_t len, const uint8_t *data, uin
   return rest(pic_msg(K_ANIM_BEGIN, h, sizeof h), data, len, 5, crc);
 }
 
-// ANIM_PLACE: place, slot, x, y, own, start
-static void place(int p, int slot, int x, int y, int own, int start) {
-  uint8_t m[8] = {(uint8_t) p, (uint8_t) slot};
+// ANIM_PLACE: place, slot, x, y, own, start, fade
+static void place_in(int p, int slot, int x, int y, int own, int start, int fade) {
+  uint8_t m[10] = {(uint8_t) p, (uint8_t) slot};
   put16(m + 2, (unsigned) x);
   put16(m + 4, (unsigned) y);
   m[6] = (uint8_t) own;
   m[7] = (uint8_t) start;
+  put16(m + 8, (unsigned) fade);
   pic_msg(K_ANIM_PLACE, m, sizeof m);
 }
 
+static void place(int p, int slot, int x, int y, int own, int start) { place_in(p, slot, x, y, own, start, 0); }
+
 static void anim_clear_msg(unsigned v) {
-  uint8_t m[4] = {(uint8_t) v};
+  uint8_t m[4];
+  put32(m, v);
   pic_msg(K_ANIM_CLEAR, m, 4);
 }
 
@@ -567,7 +571,7 @@ static bool ghosts_shown(lv_obj_t *img, bool right, bool below) {
 static void test_anim_move(void) {
   uint8_t d[512];
   uint32_t n = anim_records(d, 5);
-  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT}, bad[8] = {0, 3};
+  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT}, bad[8] = {0, ANIM_WANDER + 1};
   put16(glide + 2, 100);
   put16(glide + 4, 50);
   put16(drift + 2, (unsigned) -40);           // 40 px/s left, 2 px a step

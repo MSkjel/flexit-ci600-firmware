@@ -377,6 +377,21 @@ int32_t pic_msg(uint16_t key, const uint8_t *b, int n) {
     case K_ANIM_MOVE:
       anim_move(b, n);
       return -1;
+    case K_ANIM_TURN:
+      anim_turn(b, n);
+      return -1;
+    case K_ANIM_AREA:
+      anim_area(b, n);
+      return -1;
+    case K_ANIM_SIZE:
+      anim_size(b, n);
+      return -1;
+    case K_ANIM_FADE:
+      anim_fade(b, n);
+      return -1;
+    case K_ANIM_ROUNDS:
+      anim_rounds(b, n);
+      return -1;
     case K_PIC_CLEAR:
       pic_reset();
       clear();

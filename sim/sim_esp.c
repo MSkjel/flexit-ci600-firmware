@@ -284,9 +284,9 @@ unsigned sim_esp_send_animation(int x, int y) {
   return comp_len;
 }
 
-// ANIM_PLACE: place, slot, x, y, own, start
+// ANIM_PLACE: place, slot, x, y, own, start, fade
 void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start) {
-  uint8_t m[8] = {(uint8_t) place, (uint8_t) slot};
+  uint8_t m[10] = {(uint8_t) place, (uint8_t) slot};
   put16(m + 2, (unsigned) x);
   put16(m + 4, (unsigned) y);
   m[6] = (uint8_t) own;
