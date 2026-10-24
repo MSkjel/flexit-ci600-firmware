@@ -10,7 +10,7 @@
 // the VALUES() table, by value id
 static const val_def_t DEFS[V_FEAT_FIRST] = {
 #define X(id, k, field, lo, hi, fl, reg, sc) \
-  [V_##id] = {.min = lo, .max = hi, .key = k, .flags = fl, .cu60 = reg, .scale = sc},
+  [V_##id] = {.min = lo, .max = hi, .key = k, .flags = fl, .cx60 = reg, .scale = sc},
     VALUES(X)
 #undef X
 };
@@ -46,15 +46,15 @@ val_def_t val_def(val_t v) {
   return (val_def_t) {0};
 }
 
-uint16_t val_cu60_reg(val_t v) {
+uint16_t val_cx60_reg(val_t v) {
   val_def_t d = val_def(v);
-  return (uint16_t) (d.cu60 + ((d.flags & VF_PER_PANEL) ? M.bus_addr - 1u : 0u));
+  return (uint16_t) (d.cx60 + ((d.flags & VF_PER_PANEL) ? M.bus_addr - 1u : 0u));
 }
 
-// Linear search, a few microseconds per register the CU60 changed
-val_t val_by_cu60(uint16_t reg) {
+// Linear search, a few microseconds per register the CX60 changed
+val_t val_by_cx60(uint16_t reg) {
   for (int v = V_NONE + 1; v < V_FEAT_FIRST; v++)
-    if ((DEFS[v].flags & (VF_CU60 | VF_CMD)) == VF_CU60 && val_cu60_reg((val_t) v) == reg)
+    if ((DEFS[v].flags & (VF_CX60 | VF_CMD)) == VF_CX60 && val_cx60_reg((val_t) v) == reg)
       return (val_t) v;
   return V_NONE;
 }
@@ -139,7 +139,7 @@ static void apply(val_t v, int32_t x, source_t from) {
     return;
   bool item = v >= V_ITEM_FIRST && v <= V_ITEM_LAST;
   int32_t want = x;
-  // The ESP's items are taken as they are, and so is what the CU60 holds: its limits are wider than the editors'
+  // The ESP's items are taken as they are, and so is what the CX60 holds: its limits are wider than the editors'
   if (!(item && from == FROM_ESP) && from != FROM_BUS)
     x = x < d.min ? d.min : x > d.max ? d.max : x;
   // a button press counts even when the value is the same
@@ -161,8 +161,8 @@ static void apply(val_t v, int32_t x, source_t from) {
   if (from == FROM_USER) {
     plat_value_changed(v);
     link_value_changed(v);
-  } else if (from == FROM_ESP && !(d.flags & VF_CU60)) {
-    plat_value_changed(v);  // not for CU60 values, the ESP has already written those to the CU60
+  } else if (from == FROM_ESP && !(d.flags & VF_CX60)) {
+    plat_value_changed(v);  // not for CX60 values, the ESP has already written those to the CX60
     if (x != want)
       link_value_changed(v);  // clamped, so tell the ESP what we actually stored
   }

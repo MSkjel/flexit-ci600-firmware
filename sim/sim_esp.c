@@ -1,4 +1,4 @@
-// Fake ESP at address 1 running the real pbulk code, talking to app/link.c over a fake CU60 bus.
+// Fake ESP at address 1 running the real pbulk code, talking to app/link.c over a fake CX60 bus.
 // One transaction per cycle, in the quiet after the status broadcast.
 #include "ui.h"
 #include "sim.h"
@@ -15,7 +15,7 @@
 static pbulk_esp_t FL;  // the ESP's end of the link
 unsigned long sim_cycles;
 static uint32_t now_us;                           // bus time
-static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8];  // the CU60's status broadcast and its poll of the panel
+static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8];  // the CX60's status broadcast and its poll of the panel
 
 // Waits for room in the queue like a real sender, running the link meanwhile.
 static void send(uint16_t key, const void *b, int n) {
@@ -58,9 +58,9 @@ static void fin(uint8_t *f, int n) {
   f[n - 1] = c >> 8;
 }
 
-// One 110 ms CU60 cycle. Status broadcast, the ESP's frame at most 1.5 ms after it and the panel's answer,
-// then the CU60 polls the panel 14 ms after the broadcast.
-static void cu60_cycle(void) {
+// One 110 ms CX60 cycle. Status broadcast, the ESP's frame at most 1.5 ms after it and the panel's answer,
+// then the CX60 polls the panel 14 ms after the broadcast.
+static void cx60_cycle(void) {
   uint32_t t0 = now_us, end = t0 + PBUS_STATUS_LEN * PBUS_BYTE_US;
   link_bus(STATUS, PBUS_STATUS_LEN, t0, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
@@ -345,7 +345,7 @@ void sim_link_run(int cycles) {
   for (int i = 0; i < cycles; i++) {
     link_poll();
     esp_pump();
-    cu60_cycle();
+    cx60_cycle();
   }
 }
 

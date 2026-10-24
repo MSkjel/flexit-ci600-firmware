@@ -1,6 +1,6 @@
-// The ESP link on a simulated bus, with the CU60's schedule as its firmware runs it. Fails if a link frame
-// ever overlaps the CU60, the CU60 gets more than 256 bytes at once, or a picture arrives damaged.
-//   build/bulk_test [seconds] [cu60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2]
+// The ESP link on a simulated bus, with the CX60's schedule as its firmware runs it. Fails if a link frame
+// ever overlaps the CX60, the CX60 gets more than 256 bytes at once, or a picture arrives damaged.
+//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2]
 #include "pbulk.h"
 #include "plink.h"
 #include <stdint.h>
@@ -31,8 +31,8 @@ static uint32_t rnd(void) {
 static ns_t between(ns_t a, ns_t b) { return a + (ns_t) (rnd() % (uint32_t) (b - a + 1)); }
 
 // ---------------------------------------------------------------- the bus
-enum { CU60, PANEL, ESP, PANEL2, NDEV };
-static const char *NAME[NDEV] = {"CU60", "panel", "ESP", "panel 2"};
+enum { CX60, PANEL, ESP, PANEL2, NDEV };
+static const char *NAME[NDEV] = {"CX60", "panel", "ESP", "panel 2"};
 
 typedef struct {  // what a device is sending, bulk = a link frame
   uint8_t b[300];
@@ -50,7 +50,7 @@ typedef struct {  // what a device is receiving
 } burst_t;
 
 static struct {
-  long frames, bulk, collisions, cu60_hit, answers_hit;
+  long frames, bulk, collisions, cx60_hit, answers_hit;
   bool status_quiet;  // nothing but the link since the status broadcast ended
 } BUS;
 
@@ -62,11 +62,11 @@ static void start_tx(int dev, const uint8_t *b, int n, bool bulk) {
       BUS.collisions++;
       if (!bulk && !TX[d].bulk)
         continue;
-      if (dev != CU60 && d != CU60) {  // the panel answering into the ESP's driver, which loses the answer
+      if (dev != CX60 && d != CX60) {  // the panel answering into the ESP's driver, which loses the answer
         BUS.answers_hit++;
         continue;
       }
-      BUS.cu60_hit++;
+      BUS.cx60_hit++;
       printf("  COLLISION at %.3f ms: %s (%s) starts while %s (%s) is on the bus\n", now / 1e6, NAME[dev],
              bulk ? "link" : "modbus", NAME[d], TX[d].bulk ? "link" : "modbus");
     }
@@ -115,7 +115,7 @@ static int fin(uint8_t *f, int n) {
   return n + 2;
 }
 
-// ---------------------------------------------------------------- the CU60, modelled on its firmware
+// ---------------------------------------------------------------- the CX60, modelled on its firmware
 // a frame the main loop queued, J_STATUS = the status broadcast
 enum { J_SEND, J_STATUS };
 typedef struct {
@@ -150,7 +150,7 @@ static uint8_t STATUS[PBUS_STATUS_LEN];
 static ns_t status_end_true;  // when the last status broadcast ended on the wire
 
 static void cu_tx(const uint8_t *f, int n) {
-  start_tx(CU60, f, n, false);
+  start_tx(CX60, f, n, false);
   C.rx_en = false;
   C.rx_done = false;
 }
@@ -210,7 +210,7 @@ static void run_job(void) {
   C.waiting = true;
 }
 
-// Coils flagged in a poll's reply, which the CU60 reads right away. All of them after the settings poll, the
+// Coils flagged in a poll's reply, which the CX60 reads right away. All of them after the settings poll, the
 // first 20 after the counters poll, like mb_poll_panel_settings and mb_poll_panel_counters.
 static int flagged(bool settings, int *first) {
   int bits = settings ? 0x14C : 20, n = 0;
@@ -260,7 +260,7 @@ static void poll(int p, bool settings) {
   C.state = C.state == 6 ? 0 : C.state + 1;
 }
 
-static void cu60_step(void) {  // one TMR_IO step of main_loop's state machine
+static void cx60_step(void) {  // one TMR_IO step of main_loop's state machine
   switch (C.state) {
     case 0:
       if (!C.bc_busy) {
@@ -302,12 +302,12 @@ static void cu60_step(void) {  // one TMR_IO step of main_loop's state machine
   }
 }
 
-static void cu60(void) {
+static void cx60(void) {
   if (now >= C.next_tick) {
     C.next_tick += MS;
     tick();
   }
-  if (now < C.busy_until || TX[CU60].on)
+  if (now < C.busy_until || TX[CX60].on)
     return;
   if (C.waiting) {  // the synchronous waits in the coil loops
     if (!C.rx_done && !expired(&C.mb_x))
@@ -329,10 +329,10 @@ static void cu60(void) {
     return;
   }
   if (expired(&C.io_x))
-    cu60_step();
+    cx60_step();
 }
 
-// A panel's or the ESP's reply to an FC1 poll or FC3 read from the CU60, with `flags` coils flagged.
+// A panel's or the ESP's reply to an FC1 poll or FC3 read from the CX60, with `flags` coils flagged.
 static int reply_to(const uint8_t *q, uint8_t *f, int flags) {
   f[0] = q[0];
   if (q[1] != 1) {
@@ -529,7 +529,7 @@ static struct {
   int prev_k;  // how much of a status frame the previous loop had read
   bool status_new, status_last;
   int reply;                     // a request to us needs a reply
-  bool replied, replied_before;  // this loop answered the CU60, the loop before did
+  bool replied, replied_before;  // this loop answered the CX60, the loop before did
   long windows, sent, gap_frames;
   ns_t tx_at;
   uint8_t txbuf[300];
@@ -619,7 +619,7 @@ static void esp_got(void *u, uint16_t key, const uint8_t *b, int len) {
   esp_heard++;
 }
 
-static uint8_t esp_req[8];  // the CU60's request to the ESP, to answer
+static uint8_t esp_req[8];  // the CX60's request to the ESP, to answer
 
 // The component's frame callback, frames in bus order. We only know roughly when a frame ended, after the
 // previous loop read the UART and before now.
@@ -713,7 +713,7 @@ static void esp(void) {
   // Like panel_link.h's gap(): an answer starts within PBUS_TURN_US, nothing on the way well after that means none
   if (ETX.sent && now - E.link_end > (PBUS_TURN_US + 1000) * US && !E.fifo && !E.ring && !E.open && E.first >= E.next)
     pbulk_esp_no_answer(&ETX);
-  if (E.reply) {  // the Modbus library answers the CU60 first
+  if (E.reply) {  // the Modbus library answers the CX60 first
     int n = reply_to(esp_req, E.txbuf, flags_for(esp_req, 50));
     E.txn = n;
     E.tx_bulk = false;
@@ -791,7 +791,7 @@ static void rx_byte(int dev, uint8_t c, int src) {
     return;
   }
   if (!C.rx_en)
-    return;  // the CU60 listens from the end of its frame until the line goes idle
+    return;  // the CX60 listens from the end of its frame until the line goes idle
   if (!C.rx_len)
     C.rx_src = src;
   else if (C.rx_src != src)
@@ -808,17 +808,17 @@ static void rx_byte(int dev, uint8_t c, int src) {
 static ns_t cu_rx_last;
 static int cu_rx_seen;
 
-static void cu60_rx(void) {
+static void cx60_rx(void) {
   static bool was_on;
-  if (was_on && !TX[CU60].on) {  // its frame is out, start listening
+  if (was_on && !TX[CX60].on) {  // its frame is out, start listening
     C.rx_en = true;
     C.rx_len = cu_rx_seen = 0;
-    if (TX[CU60].n == PBUS_STATUS_LEN) {
+    if (TX[CX60].n == PBUS_STATUS_LEN) {
       status_end_true = now;
       BUS.status_quiet = true;
     }
   }
-  was_on = TX[CU60].on;
+  was_on = TX[CX60].on;
   if (!C.rx_en)
     return;
   if (C.rx_len != cu_rx_seen) {
@@ -865,8 +865,8 @@ int main(int argc, char **argv) {
   ns_t worst_end = 0;  // the latest a link frame ended after a status frame
   for (now = 0; now < end; now += STEP) {
     step_tx();
-    cu60_rx();
-    cu60();
+    cx60_rx();
+    cx60();
     panel();
     esp();
     if (PRESENT[2])
@@ -878,11 +878,11 @@ int main(int argc, char **argv) {
       panel_coils = 3;
   }
 
-  printf("%.0f s simulated, CU60 control_tick %.1f ms, ESP RX threshold %d: %ld frames on the bus, %ld the link's\n",
+  printf("%.0f s simulated, CX60 control_tick %.1f ms, ESP RX threshold %d: %ld frames on the bus, %ld the link's\n",
          seconds, ctl_ms, esp_threshold, BUS.frames, BUS.bulk);
-  printf("  CU60: %ld status broadcasts, longest burst it was handed %ld bytes, %ld overflows\n", C.status_n, C.longest,
+  printf("  CX60: %ld status broadcasts, longest burst it was handed %ld bytes, %ld overflows\n", C.status_n, C.longest,
          C.overflows);
-  printf("  CU60 quiet after a status frame, shortest the panel saw: %.1f ms\n", PBUS.quiet_min_us / 1000.0);
+  printf("  CX60 quiet after a status frame, shortest the panel saw: %.1f ms\n", PBUS.quiet_min_us / 1000.0);
   printf("  ESP: %ld windows, %u frames with messages, %u polls, %u answered, %u missed, %u too short%s\n", E.windows,
          ETX.frames, ETX.polls, ETX.answered, ETX.missed, ETX.short_windows, ETX.refused ? ", refused" : "");
   printf(
@@ -900,12 +900,12 @@ int main(int argc, char **argv) {
     help_wait = now - help_queued;  // still waiting
   printf("  help texts of %d bytes: %ld queued, %ld arrived, the longest wait %.1f s; one byte longer: %s\n",
          PBULK_MSG_MAX, helps_sent, helps_got, help_wait / 1e9, refused_long ? "refused" : "ACCEPTED");
-  printf("  collisions: %ld of the link with the CU60, %ld answers lost to the ESP's driver staying on,\n"
-         "              %ld without the link (the ESP answering the CU60 after it gave up)\n",
-         BUS.cu60_hit, BUS.answers_hit, BUS.collisions - BUS.cu60_hit - BUS.answers_hit);
-  // The gaps go off when the CU60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
+  printf("  collisions: %ld of the link with the CX60, %ld answers lost to the ESP's driver staying on,\n"
+         "              %ld without the link (the ESP answering the CX60 after it gave up)\n",
+         BUS.cx60_hit, BUS.answers_hit, BUS.collisions - BUS.cx60_hit - BUS.answers_hit);
+  // The gaps go off when the CX60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
   // busy that long at a step. So they only have to stay on with control_tick <= 2.5 ms.
-  bool ok = !BUS.cu60_hit && !C.overflows && !PW.overruns && worst_end <= PBUS_END_MAX_US * US &&
+  bool ok = !BUS.cx60_hit && !C.overflows && !PW.overruns && worst_end <= PBUS_END_MAX_US * US &&
             (ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off)) && !pics_bad && !esp_heard_wrong &&
             panel_said - esp_heard < 20 && (ETX.refused || pics_ok > 0) && refused_long &&
             (ETX.refused || help_wait < HELP_WAIT_MAX);

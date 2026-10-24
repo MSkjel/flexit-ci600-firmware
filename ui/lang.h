@@ -323,13 +323,13 @@
   X(ABOUT_HELP, "Versions and what is installed.") \
   X(EQUIPMENT_HELP, "What is connected. Settings and views for missing equipment are hidden.") \
   X(BUS, "Bus") \
-  X(BUS_HELP, "Modbus traffic between this panel and the CU60.") \
+  X(BUS_HELP, "Modbus traffic between this panel and the CX60.") \
   X(DIAGNOSTICS, "Diagnostics") \
   X(DIAGNOSTICS_HELP, "Uptime, restarts, memory and other numbers for finding faults.") \
   X(PANEL_ADDRESS, "Panel address") \
   X(PANEL_ADDRESS_HELP, \
     "Use 3 if an ESP is at address 1, otherwise 1. Only the lowest address can change the setpoint and NORMAL fan " \
-    "speeds. Restart the unit after changing this, since the CU60 only looks for panels when it starts.") \
+    "speeds. Restart the unit after changing this, since the CX60 only looks for panels when it starts.") \
   X(KEY_LOCK, "Key lock") \
   X(KEY_LOCK_HELP, "Hold ? for 3 s to lock or unlock the keys.") \
   X(LOCK_WHEN_IDLE, "Lock when idle") \
@@ -340,7 +340,7 @@
   X(RESET_PANEL_SETTINGS_HELP, \
     "Restores this panel's settings to the defaults and restarts it. The address and equipment settings are kept.") \
   X(FACTORY_RESET_UNIT, "Factory reset unit") \
-  X(FACTORY_RESET_UNIT_HELP, "Restores all settings in the unit (CU60) to the factory defaults.") \
+  X(FACTORY_RESET_UNIT_HELP, "Restores all settings in the unit (CX60) to the factory defaults.") \
   X(NOTHING_YET, "Nothing yet") \
   X(ESP_OFFLINE, "ESP offline") \
   X(N_ITEM, "%d item") \
@@ -351,7 +351,7 @@
   X(ALL_CLEAR, "All clear") \
   X(HOURS_TOTAL, "%s total") \
   X(NO_CONTACT, "No contact") \
-  X(ADDRESS_CU60, "Address %d, CU60 %d.%02d") \
+  X(ADDRESS_CX60, "Address %d, CX60 %d.%02d") \
   X(ADDRESS, "Address %d") \
   X(MENU, "Menu") \
   X(START, "Start") \
@@ -439,7 +439,7 @@
   X(ACTIVE_SINCE, "Active since") \
   X(LOGGED, "Logged") \
   X(SINCE, "Since") \
-  X(ALARM_HISTORY_HELP, "The last alarms the CU60 logged, newest first.") \
+  X(ALARM_HISTORY_HELP, "The last alarms the CX60 logged, newest first.") \
   X(ALARM_LIST_HELP, "Active alarms. Fix the cause, then use Reset alarms.") \
   X(PROGRAM_OFF, "Program off") \
   X(WEEK_HELP, "Fan speed through the week. Outside the coloured periods, the unit runs at the speed you've set. The " \
@@ -449,7 +449,7 @@
                      "runs at the speed you've set.") \
   X(PERIOD_ADDED, "Period added") \
   X(PANEL_FIRMWARE, "Panel firmware") \
-  X(CU60_SOFTWARE, "CU60 software") \
+  X(CX60_SOFTWARE, "CX60 software") \
   X(NOT_SEEN_YET, "not seen yet") \
   X(ESP, "ESP") \
   X(ESP_ADDRESS, "%s, address 1") \
@@ -483,7 +483,7 @@
   X(PAUSE_TOO_SHORT, "%s ms, too short") \
   X(PAUSE_NO_GAPS, "%s ms, no gaps") \
   X(BUS_PAGE_HELP, \
-    "Traffic on the RS-485 bus. The CU60 is the master and polls this panel. The ESP link uses the pause after the " \
+    "Traffic on the RS-485 bus. The CX60 is the master and polls this panel. The ESP link uses the pause after the " \
     "unit's status message. If that pause is under 13 ms, the panel stops the link for a while.") \
   X(UPTIME, "Uptime") \
   X(UPTIME_DAYS, "%lu d %02u:%02u") \
@@ -515,7 +515,7 @@
   X(NOTICE_ESPHOME, "Talks to Home Assistant through ESPHome") \
   X(NOTICE_FLEXIT, "Not made or approved by Flexit") \
   X(NOTICE_HARMED, "No ventilation units were harmed") \
-  X(NOTICE_CU60, "One CU60 was a bit confused") \
+  X(NOTICE_CX60, "One CX60 was a bit confused") \
   X(NOTICE_SINCE, "Fresh air since 2026") \
   X(NOTICE_OK, "OK: Flappy Fan") \
   X(KEYTEST, "Flappy Fan") \

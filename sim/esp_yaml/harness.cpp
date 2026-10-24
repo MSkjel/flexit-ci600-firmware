@@ -1,4 +1,4 @@
-// Runs the ESP's panel packages, turned into C++ by gen.py, against the panel's own link code on a fake CU60.
+// Runs the ESP's panel packages, turned into C++ by gen.py, against the panel's own link code on a fake CX60.
 // micros() and millis() run on simulated time.
 //   build/esp_test OUTDIR [PICTURE.ppm]
 #include <fstream>
@@ -91,13 +91,13 @@ static int fails, checks;
 
 static void step(const char *what) { printf("%s\n", what); }
 
-// ---------------------------------------------------------------- the fake CU60
+// ---------------------------------------------------------------- the fake CX60
 // Takes whatever the ESP flags for it, which is the setpoint and fan speeds it sets for the panel. Every 110 ms it
 // sends the status broadcast and the ESP and the panel talk in the quiet after it. The component calls the ESP
-// 150 us to 1.5 ms after the status frame ended. 30 ms after the status started the CU60 polls the panel, the
+// 150 us to 1.5 ms after the status frame ended. 30 ms after the status started the CX60 polls the panel, the
 // panel replies, and the ESP may send more in the gap after that.
 static unsigned long cycles, link_frames, gap_frames;
-static bool link_windows = true;     // false while the CU60 restarts and sends nothing
+static bool link_windows = true;     // false while the CX60 restarts and sends nothing
 static int link_lost_frames;         // the panel doesn't hear this many of the ESP's frames
 static int link_lost_answers;        // the ESP doesn't hear this many of the panel's answers
 static uint32_t link_quiet = 14400;  // end of the status broadcast to the poll, the panel refuses under 13 ms
@@ -181,7 +181,7 @@ static void cs60_cycle() {
   link_frame();
 }
 
-static void run(int n) {  // n CU60 cycles of 110 ms
+static void run(int n) {  // n CX60 cycles of 110 ms
   for (int c = 0; c < n; c++) {
     uint32_t t0 = now_us;
     cs60_cycle();
@@ -192,7 +192,7 @@ static void run(int n) {  // n CU60 cycles of 110 ms
     }
     pn_poll();
     for (int r = 0; r < 0x200; r++)
-      server->coil[r] = false;  // the CU60 has read everything flagged
+      server->coil[r] = false;  // the CX60 has read everything flagged
     if (++cycles % 9 == 0)
       pn_second();
     now_us = t0 + 110000;
@@ -857,7 +857,7 @@ int main(int argc, char **argv) {
   run(5);
   CHECK(panel_action.last == "reset_filter", "event %s", panel_action.last.c_str());
 
-  step("the CU60 restarts: no quiet for the link for a while");
+  step("the CX60 restarts: no quiet for the link for a while");
   link_windows = false;
   panel_brightness.control(40);  // ESP -> panel
   pn_set(K_NIGHT, 1);            // panel -> ESP
@@ -865,9 +865,9 @@ int main(int argc, char **argv) {
   CHECK(pn_get(K_BRIGHTNESS) != 40 && !panel_night.state, "something got through without a status broadcast");
   link_windows = true;
   run(20);
-  CHECK(pn_get(K_BRIGHTNESS) == 40, "brightness %d after the CU60 came back", pn_get(K_BRIGHTNESS));
-  CHECK(panel_night.state, "night mode not on after the CU60 came back");
-  CHECK(settled(), "something still waiting after the CU60 came back");
+  CHECK(pn_get(K_BRIGHTNESS) == 40, "brightness %d after the CX60 came back", pn_get(K_BRIGHTNESS));
+  CHECK(panel_night.state, "night mode not on after the CX60 came back");
+  CHECK(settled(), "something still waiting after the CX60 came back");
 
   step("frames and answers lost");
   link_lost_frames = 4;
@@ -881,8 +881,8 @@ int main(int argc, char **argv) {
 
   CHECK(panel_picture_status.state == "None", "picture status at the start: '%s'", panel_picture_status.state.c_str());
 
-  step("the panel refuses the link while the CU60 comes back too soon, then lets it back in");
-  link_quiet = 10000;  // the CU60 polls 10 ms after its status broadcast
+  step("the panel refuses the link while the CX60 comes back too soon, then lets it back in");
+  link_quiet = 10000;  // the CX60 polls 10 ms after its status broadcast
   run(40);
   CHECK(flexit::panel::link::tx.refused, "the ESP didn't take the refusal");
   CHECK(log_all.find("refuses the link") != std::string::npos, "the refusal wasn't logged");
@@ -950,10 +950,10 @@ int main(int argc, char **argv) {
   draw_dusk(panel_picture_dusk, 200, false);
   flexit::panel::picture::show("dusk");
   run(5);
-  link_windows = false;  // the CU60 restarts mid-picture
+  link_windows = false;  // the CX60 restarts mid-picture
   run(60);
   link_windows = true;
-  CHECK(picture("the CU60 restarted mid-picture", 3000) >= 0, "not shown after the CU60 restarted");
+  CHECK(picture("the CX60 restarted mid-picture", 3000) >= 0, "not shown after the CX60 restarted");
 
   pn_restart();
   CHECK(picture("panel restarted", 6000) >= 0, "picture not sent again after a panel restart");

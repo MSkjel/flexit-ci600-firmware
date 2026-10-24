@@ -120,8 +120,8 @@ int main(int argc, char **argv) {
          fmt_temp(b, M.t_supply, true), fmt_temp(c, M.t_extract, true), fmt_temp(d, M.t_water, true));
   printf("       mode %d, supply fan %d%%, rotor %d%%, heating %d%%, cooling %d%%, boost %d min\n", M.mode_now,
          M.fan_sup, M.rotor_pct, M.heat_pct, M.cool_pct, M.boost_left);
-  printf("       filter %u h, total %lu h, CU60 %d.%02d, alarms %d, log %d, EC fans %d, water heater %d\n",
-         M.filter_hours, (unsigned long) M.h_total, M.cu60_version >> 8, M.cu60_version & 0xFF, M.n_alarms, M.n_history,
+  printf("       filter %u h, total %lu h, CX60 %d.%02d, alarms %d, log %d, EC fans %d, water heater %d\n",
+         M.filter_hours, (unsigned long) M.h_total, M.cx60_version >> 8, M.cx60_version & 0xFF, M.n_alarms, M.n_history,
          (int) HAS(FEAT_EC_FANS), (int) HAS(FEAT_WATER_HEATER));
   printf("       runtime stop %lu h, min %lu, normal %lu, max %lu, rotor %lu, heater %lu\n", (unsigned long) M.h_stop,
          (unsigned long) M.h_min, (unsigned long) M.h_normal, (unsigned long) M.h_max, (unsigned long) M.h_rotor,

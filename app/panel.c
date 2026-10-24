@@ -82,7 +82,7 @@ int filter_days_left(void) {
 
 int filter_life(void) {
   if (!M.filter_days)
-    return 0;  // the CU60 allows a 0 day interval
+    return 0;  // the CX60 allows a 0 day interval
   int life = 100 - (int) ((uint32_t) M.filter_hours * 100 / FILTER_INTERVAL_H);
   return life < 0 ? 0 : life;
 }

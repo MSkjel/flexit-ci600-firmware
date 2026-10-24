@@ -20,7 +20,7 @@ void mb_init(uint8_t addr, uint16_t version, uint8_t patch) {
 
 static bool bit(const uint32_t *map, uint16_t reg) { return map[reg / 32] >> (reg % 32) & 1; }
 
-// Returns false if the coil stays set: the relay was of an older value of ours and the CU60 has to read the new one.
+// Returns false if the coil stays set: the relay was of an older value of ours and the CX60 has to read the new one.
 static bool set_pending(uint16_t reg, bool on) {
   if (on)
     MB.pending[reg / 32] |= 1u << (reg % 32);
@@ -85,7 +85,7 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
   int len;
 
   switch (fc) {
-    case 0x01:  // read coils, the pending flags. The CU60 reads past the end too, those are 0
+    case 0x01:  // read coils, the pending flags. The CX60 reads past the end too, those are 0
     case 0x02:  // read discrete inputs, always 0
       if (bcast || n != 8 || !cnt || cnt > 2000)
         return bcast ? 0 : exception(q, r, 3);
@@ -171,7 +171,7 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
   }
 }
 
-// The CU60 sends its relay right behind another server's reply with no idle gap, so one receive can hold
+// The CX60 sends its relay right behind another server's reply with no idle gap, so one receive can hold
 // several frames. We find each one by trying the lengths its function code allows and checking the CRC.
 static int frame_len(const uint8_t *q, int n) {
   if (n < 4)
@@ -206,7 +206,7 @@ int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
       junk = true;
       continue;
     }
-    int x = mb_frame(q + off, len, r);  // a request to us is always the last, since the CU60 then waits for us
+    int x = mb_frame(q + off, len, r);  // a request to us is always the last, since the CX60 then waits for us
     if (x)
       reply = x;
     off += len;
@@ -219,7 +219,7 @@ int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
 void mb_write(uint16_t reg, int16_t value) {
   if (reg >= MB_REGS)
     return;
-  // The CU60 may have read the old value already. Its relay of that would undo this one, so it's skipped.
+  // The CX60 may have read the old value already. Its relay of that would undo this one, so it's skipped.
   if (bit(MB.pending, reg))
     MB.again[reg / 32] |= 1u << (reg % 32);
   MB.hold[reg] = value;

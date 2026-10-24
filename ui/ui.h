@@ -149,7 +149,7 @@ extern uint8_t ui_screen_mem[UI_SCREEN_MEM];
 
 bool ui_has(uint32_t need);  // true if all features in the mask are installed
 
-const char *alarm_text(uint8_t code);      // name of a CU60 alarm code
+const char *alarm_text(uint8_t code);      // name of a CX60 alarm code
 const alarm_t *alarm_find(intptr_t code);  // the active alarm with this code, NULL if none
 
 // screens

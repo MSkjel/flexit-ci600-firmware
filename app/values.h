@@ -34,7 +34,7 @@
     X(DAY,             0,     M.dd,                 1, 31,   VF_CLOCK, 0, 1) \
     X(MONTH,           0,     M.mo,                 1, 12,   VF_CLOCK, 0, 1) \
     X(YEAR,            0,     M.yy,              2024, 2099, VF_CLOCK, 0, 1) \
-    /* week program period being edited (M.period), written to the CU60 as a whole. Times in minutes after \
+    /* week program period being edited (M.period), written to the CX60 as a whole. Times in minutes after \
        midnight. VF_LAYOUT since moving a period can reorder the day */ \
     X(PERIOD_START,    0,     M.period.start,       0, 1435, VF_LAYOUT, 0, 1) \
     X(PERIOD_END,      0,     M.period.end,         5, 1440, VF_LAYOUT, 0, 1) \
@@ -63,18 +63,18 @@ _Static_assert(V_PERIOD_SETPOINT - V_PERIOD_START == 3, "the period's values");
 // One VALUES() row, see plink_values.h for the columns
 typedef struct {
   int32_t min, max;
-  uint16_t key, flags, cu60;
+  uint16_t key, flags, cx60;
   uint8_t scale;
 } val_def_t;
 
 val_def_t val_def(val_t v);       // all zero for V_NONE
-uint16_t val_cu60_reg(val_t v);   // CU60 register for v, offset by our bus address if VF_PER_PANEL
+uint16_t val_cx60_reg(val_t v);   // CX60 register for v, offset by our bus address if VF_PER_PANEL
 val_t val_by_key(uint16_t key);   // V_NONE if no value has that key
-val_t val_by_cu60(uint16_t reg);  // value a CU60 register holds, not command registers. V_NONE if none
+val_t val_by_cx60(uint16_t reg);  // value a CX60 register holds, not command registers. V_NONE if none
 int32_t val_get(val_t v);
 void val_set(val_t v, int32_t value);         // set by the user
 void val_set_remote(val_t v, int32_t value);  // set by the ESP
-void val_set_bus(val_t v, int32_t value);     // read from the CU60
+void val_set_bus(val_t v, int32_t value);     // read from the CX60
 void val_load(val_t v, int32_t value);        // from flash at startup, only stores it
 void do_action(int a);                        // the user ran action a (action_t)
 void do_action_remote(int a);                 // the ESP asks to run action a

@@ -10,10 +10,10 @@
 #include <stddef.h>
 
 #define MAGIC 0x33534943u   // "CIS3", a new one when the value keys change
-#define REG_KEY 0x8000u     // the key of a cached CU60 register is REG_KEY | register
+#define REG_KEY 0x8000u     // the key of a cached CX60 register is REG_KEY | register
 #define QUIET_MS 5000u      // a save waits until nothing has changed for this long
 #define LATER_MS 3600000u   // other changes are written at most this often
-#define QUIET_WAIT_MS 250u  // for a quiet moment on the bus, the CU60's status broadcast comes every 110 ms
+#define QUIET_WAIT_MS 250u  // for a quiet moment on the bus, the CX60's status broadcast comes every 110 ms
 _Static_assert(FLASH_SETTINGS + FLASH_SETTINGS_PAGES * FLASH_PAGE == 0x08080000, "the pages end with the flash");
 
 // Page header, then count records. seq goes up with every save, the highest is current.

@@ -132,9 +132,9 @@ int main(void) {
   model_defaults();
   M.reset_cause = board_reset_cause(&M.fault_pc);
   unit_init();
-  settings_load();  // panel settings and the cached CU60 settings
+  settings_load();  // panel settings and the cached CX60 settings
   unit_start();
-  rs485_init();  // answer the CU60 as early as possible, it only looks for panels once
+  rs485_init();  // answer the CX60 as early as possible, it only looks for panels once
 
   bool known = lcd_init();
   lv_init();

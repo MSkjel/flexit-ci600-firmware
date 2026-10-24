@@ -43,14 +43,14 @@ static void forget_helps(int i) {
     help_asked = -1;
 }
 
-// A CU60 value from an answer the ESP ignored before our HELLO. The sync skips those, so it goes again.
+// A CX60 value from an answer the ESP ignored before our HELLO. The sync skips those, so it goes again.
 static void again(void *u, uint16_t key, const uint8_t *b, int n) {
   (void) u;
   val_t v = val_by_key(key);
   for (int i = 0; i < L.qn; i++)
     if (L.q[i].key == key)
       return;  // a newer one is waiting
-  if (v != V_NONE && (val_def(v).flags & VF_CU60))
+  if (v != V_NONE && (val_def(v).flags & VF_CX60))
     plink_send(&L, key, plink_number(b, n));
 }
 
@@ -263,7 +263,7 @@ void link_poll(void) {
   int32_t gone = link_compatible() && plink_room(&L) ? anim_gone() : -1;
   if (gone >= 0)
     plink_send(&L, K_ANIM_GONE, (uint32_t) gone);
-  // After a HELLO, send our own settings a few at a time so user changes still get through. Not the CU60's
+  // After a HELLO, send our own settings a few at a time so user changes still get through. Not the CX60's
   // values or the ESP's items. From us those mean "change it", and right after a start we may not know them yet.
   while (sync_next && plink_room(&L) > 8) {
     int v = sync_next++;
@@ -272,7 +272,7 @@ void link_poll(void) {
       break;
     }
     val_def_t d = val_def((val_t) v);
-    if ((d.flags & VF_LINK_R) && !(d.flags & (VF_CU60 | VF_ESP)))
+    if ((d.flags & VF_LINK_R) && !(d.flags & (VF_CX60 | VF_ESP)))
       plink_send(&L, d.key, (uint32_t) val_get((val_t) v));
   }
   if (!B.out_full) {  // answer buffer is free, fill it
@@ -295,7 +295,7 @@ void link_second(void) {
       link_send(K_ROOM_TEMP, (uint32_t) (int32_t) M.t_room);
     }
   }
-  // The ESP sends a frame every CU60 cycle, so 30 s without one means it's gone. Refused frames don't count,
+  // The ESP sends a frame every CX60 cycle, so 30 s without one means it's gone. Refused frames don't count,
   // since nothing gets through while we refuse them.
   uint32_t frames = B.frames - B.bad - B.refused;
   if (!HAS(FEAT_ESP)) {
@@ -314,8 +314,8 @@ void link_second(void) {
   }
 }
 
-// User changed v. Of the CU60 values we only send VF_MASTER ones. The CU60 takes those from the lowest panel
-// address only, so the ESP may have to write them for us. It sees the other CU60 writes on the bus. Not while
+// User changed v. Of the CX60 values we only send VF_MASTER ones. The CX60 takes those from the lowest panel
+// address only, so the ESP may have to write them for us. It sees the other CX60 writes on the bus. Not while
 // it's offline, it would write them late.
 void link_value_changed(val_t v) {
   val_def_t d = val_def(v);
@@ -325,7 +325,7 @@ void link_value_changed(val_t v) {
   }
   if (!(d.flags & VF_LINK_R))
     return;
-  if ((d.flags & VF_CU60) && (!(d.flags & VF_MASTER) || !M.esp_online))
+  if ((d.flags & VF_CX60) && (!(d.flags & VF_MASTER) || !M.esp_online))
     return;
   link_send(d.key, (uint32_t) val_get(v));
 }

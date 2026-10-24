@@ -39,10 +39,10 @@ static int info_rows(int page, kv_t *r) {
   if (page == INFO_ABOUT) {
     char fw[12];
     ROW(S_PANEL_FIRMWARE, "%s", fw_text(fw));
-    if (M.cu60_version)
-      ROW(S_CU60_SOFTWARE, "%d.%02d", M.cu60_version >> 8, M.cu60_version & 0xFF);
+    if (M.cx60_version)
+      ROW(S_CX60_SOFTWARE, "%d.%02d", M.cx60_version >> 8, M.cx60_version & 0xFF);
     else
-      ROW(S_CU60_SOFTWARE, "%s", _(S_NOT_SEEN_YET));
+      ROW(S_CX60_SOFTWARE, "%s", _(S_NOT_SEEN_YET));
     ROW(S_PANEL_ADDRESS, "%d", M.bus_addr);
     if (HAS(FEAT_ESP))
       ROW(S_ESP, _(S_ESP_ADDRESS), M.esp_online ? _(S_ONLINE) : _(S_OFFLINE));
@@ -206,7 +206,7 @@ static const notice_t NOTICES[] = {
     {N_TEXT, S_NOTICE_ESPHOME, NULL},
     {N_TEXT, S_NOTICE_FLEXIT, NULL},
     {N_TEXT, S_NOTICE_HARMED, NULL},
-    {N_MORE, S_NOTICE_CU60, NULL},
+    {N_MORE, S_NOTICE_CX60, NULL},
     {N_TEXT, S_NOTICE_SINCE, NULL},
     {N_LINK, S_NONE, REPO},
     {N_LAST, S_NOTICE_OK, NULL},

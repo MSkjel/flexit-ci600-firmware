@@ -76,7 +76,7 @@ another address before flashing.
 
 The screen goes dark with all three lights on for a few minutes. When it's back:
 
-1. Restart the ventilation unit (power off and on). The CU60, the unit's controller, only looks for panels when
+1. Restart the ventilation unit (power off and on). The CX60, the unit's controller, only looks for panels when
    it starts.
 2. Do the [first setup](#first-setup). Every update wipes the panel's own settings, since the bootloader erases
    all of its flash. Stuff the unit keeps, like fan speeds, setpoint and the week program, is untouched.
@@ -87,7 +87,7 @@ More on flashing, and what to do when it doesn't work, in [docs/flashing.md](doc
 
 OK on the home screen opens the menu.
 
-- **System > Panel address:** 1 without an ESP, 3 if the ESP is at 1. The CU60 only runs the week program and
+- **System > Panel address:** 1 without an ESP, 3 if the ESP is at 1. The CX60 only runs the week program and
   the boost timer if something answers at 1, and only takes the setpoint and NORMAL fan speeds from the lowest
   address. Restart the unit after changing it.
 - **System > Equipment:** make it match your unit (ESP, cooling). EC fans and water heater come from the unit's
@@ -116,7 +116,7 @@ If *Polls to this panel* stays at 0 after a restart, check the wiring.
 change them from Home Assistant if the ESP is at 1.
 
 **Week program doesn't run, or a boost stops after a few seconds.** Check that Week program is switched on in its
-menu, the clock is right, and that something is at address 1. The CU60 only runs either with a panel there.
+menu, the clock is right, and that something is at address 1. The CX60 only runs either with a panel there.
 
 **Clock jumps back after setting it.** A stock panel on the bus keeps its own time and sends it every second, so
 set it on that one.
@@ -132,7 +132,7 @@ unit.
 - *waiting*: the ESP isn't answering. Is it online, with `packages/panel.yaml`? It only talks to the panel at
   its `panel_address`, 3 by default.
 - *v1, the ESP v2* or similar: panel firmware and ESP packages are from different releases. Update the old one.
-- *too short* under Pause after status: the CU60 leaves too little room on the bus, so the link backs off for a
+- *too short* under Pause after status: the CX60 leaves too little room on the bus, so the link backs off for a
   bit and tries again.
 
 **Keys don't do anything.** They're locked, hold ? for 3 s. System > Lock when idle locks them automatically.
@@ -259,8 +259,8 @@ The firmware starts at 0x08002100, right after the bootloader.
 
 ### The ESP link
 
-About 9 times a second the CU60 sends a status broadcast and then leaves the bus quiet for a moment. The ESP
-sends a frame in that gap and the panel answers. Anything left over goes in the gaps after the CU60's polls.
+About 9 times a second the CX60 sends a status broadcast and then leaves the bus quiet for a moment. The ESP
+sends a frame in that gap and the panel answers. Anything left over goes in the gaps after the CX60's polls.
 Messages are numbered and resent until the other side has them. `proto/pbus.h` has the bus timing, `pbulk.h` the
 frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a copy of `proto/`: update it with
 `make -C sim esp_sync` (`esp_test` fails if they differ).

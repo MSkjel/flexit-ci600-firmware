@@ -1007,10 +1007,10 @@ int main(int argc, char **argv) {
   M.fan_ext = 75;
   ui_value_changed(V_NONE);
 
-  // ---- the ESP link: both ends run the real protocol code over a fake CU60. The scenes after this keep what
+  // ---- the ESP link: both ends run the real protocol code over a fake CX60. The scenes after this keep what
   // it sent, the items and the picture.
   fresh();
-  printf("\nESP link, one transaction after each CU60 status broadcast:\n");
+  printf("\nESP link, one transaction after each CX60 status broadcast:\n");
   settle();
   sim_esp_report("hello and state sync");
   sim_esp_items();

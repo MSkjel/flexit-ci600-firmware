@@ -360,8 +360,8 @@ static void s_time(char *b) {
 static void s_system(char *b) {
   if (M.bus_offline)
     strcpy(b, _(S_NO_CONTACT));
-  else if (M.cu60_version)
-    sprintf(b, _(S_ADDRESS_CU60), M.bus_addr, M.cu60_version >> 8, M.cu60_version & 0xFF);
+  else if (M.cx60_version)
+    sprintf(b, _(S_ADDRESS_CX60), M.bus_addr, M.cx60_version >> 8, M.cx60_version & 0xFF);
   else
     sprintf(b, _(S_ADDRESS), M.bus_addr);
 }

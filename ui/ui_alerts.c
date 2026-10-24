@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-// Names by CU60 alarm code, from status registers 0xCD..0xEA
+// Names by CX60 alarm code, from status registers 0xCD..0xEA
 static const str_t ALARM_TXT[] = {
     S_ALARM,
     S_OVERHEAT_THERMOSTAT,

@@ -1,4 +1,4 @@
-// Panel state, everything the UI shows and edits. Filled from the CU60, the ESP and our own hardware, or with
+// Panel state, everything the UI shows and edits. Filled from the CX60, the ESP and our own hardware, or with
 // made-up data in the simulator.
 #pragma once
 #include <stdbool.h>
@@ -20,12 +20,12 @@ enum { SAVER_TEXT_BAND, SAVER_TEXT_SHADOW, SAVER_TEXT_PLAIN, SAVER_TEXT_SMALL, S
 enum { POPUPS_ALL, POPUPS_NOT_FILTER, POPUPS_OFF, POPUPS_COUNT };              // which new alarms pop up
 enum { LED_OK_ALWAYS, LED_OK_NOT_NIGHT, LED_OK_NEVER, LED_OK_COUNT };          // when the OK light is on
 enum { RESET_POWER, RESET_PIN, RESET_WATCHDOG, RESET_SOFTWARE, RESET_FAULT };  // why the panel last started
-#define ALARM_FILTER 10                  // CU60 filter reminder, sorted after all other alarms
+#define ALARM_FILTER 10                  // CX60 filter reminder, sorted after all other alarms
 #define ALARM_FILTER_GUARD 3             // the filter guard input, on the filter light like the reminder
 extern const uint16_t TILE_DEFAULTS[4];  // factory dashboard tiles
 
 typedef struct {
-  uint8_t code;            // CU60 alarm code
+  uint8_t code;            // CX60 alarm code
   uint8_t dd, mo, hh, mi;  // when it started
   bool active;             // for history entries, still active
 } alarm_t;
@@ -33,7 +33,7 @@ typedef struct {
 // One period of a day in the week program
 typedef struct {
   uint8_t start_h, start_m, end_h, end_m, level;  // level = MODE_*
-  uint8_t idx;                                    // which of the day's four CU60 slots it uses
+  uint8_t idx;                                    // which of the day's four CX60 slots it uses
   int16_t setpoint;                               // 0.1 C
 } period_t;
 
@@ -89,7 +89,7 @@ typedef struct {
   // alarms
   alarm_t alarms[8];  // active alarms, the filter reminder last
   uint8_t n_alarms;
-  alarm_t history[5];  // the CU60's alarm log
+  alarm_t history[5];  // the CX60's alarm log
   uint8_t n_history;
 
   // schedule
@@ -110,11 +110,11 @@ typedef struct {
   uint8_t trend[TR_N][TREND_LEN];  // last 24 h of the temperatures, oldest first, encoded by trend_code()
 
   // system
-  uint16_t cu60_version;
+  uint16_t cx60_version;
   uint32_t fw_version;  // maj<<16 | min<<8 | patch
   uint8_t bus_addr;
   uint32_t bus_ok, bus_err, bus_ours;  // frames received, bad frames, polls to this panel
-  bool bus_offline;                    // no frames from the CU60 for a while, so the values shown are stale
+  bool bus_offline;                    // no frames from the CX60 for a while, so the values shown are stale
   uint32_t h_total, h_stop, h_min, h_normal, h_max, h_rotor, h_heater;  // run hours
   uint8_t cpu_busy;                                                     // % of the last second the CPU was awake
   uint8_t reset_cause;                                                  // RESET_*

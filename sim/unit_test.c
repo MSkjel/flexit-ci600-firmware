@@ -1312,8 +1312,8 @@ static void test_values(void) {
     CHECK(d.min <= d.max);
     if (d.key)
       CHECK((int) val_by_key(d.key) == v);  // keys must be unique, they identify values on the link and in flash
-    if ((d.flags & (VF_CU60 | VF_CMD)) == VF_CU60)
-      CHECK((int) val_by_cu60(val_cu60_reg((val_t) v)) == v);
+    if ((d.flags & (VF_CX60 | VF_CMD)) == VF_CX60)
+      CHECK((int) val_by_cx60(val_cx60_reg((val_t) v)) == v);
   }
   val_set(V_BRIGHTNESS, 150);
   CHECK(M.brightness == 100);  // clamped
@@ -1422,7 +1422,7 @@ static void test_clock(void) {
   clock_from_unix(t);
   clock_second();
   CHECK(!M.dst_now && clock_to_unix() == t);
-  clock_follow(t, t);  // from the RTC at boot, or the CU60
+  clock_follow(t, t);  // from the RTC at boot, or the CX60
   CHECK(M.dst_now && clock_to_unix() == t);
   M.dst_now = true;  // and the other way, a summer flag in winter
   clock_from_unix(1792328640u);
@@ -1492,7 +1492,7 @@ static void test_mbserver(void) {
   uint8_t disc[8] = {3, 0x04, 0, 0, 0, 5};
   CHECK(mb_frame(disc, frame(disc, 6), r) == 15 && (r[3] << 8 | r[4]) == FW_TYPE && (r[5] << 8 | r[6]) == 0);
   CHECK((r[7] << 8 | r[8]) == FW_PATCH && (r[9] << 8 | r[10]) == FW_VERSION);
-  // Fan down twice, NORMAL -> MIN -> STOP. The CU60 has read MIN when STOP comes, and its relay of MIN mustn't
+  // Fan down twice, NORMAL -> MIN -> STOP. The CX60 has read MIN when STOP comes, and its relay of MIN mustn't
   // undo STOP.
   mb_write(0x000, 1);
   uint8_t rd[8] = {3, 0x03, 0, 0, 0, 1};
@@ -1500,20 +1500,20 @@ static void test_mbserver(void) {
   mb_write(0x000, 0);
   uint8_t relay[8] = {0, 0x65, 0, 0, 0, 1};
   mb_frame(relay, frame(relay, 6), r);
-  CHECK(MB.hold[0] == 0 && (MB.pending[0] & 1));  // the coil stays set for the CU60 to read STOP
+  CHECK(MB.hold[0] == 0 && (MB.pending[0] & 1));  // the coil stays set for the CX60 to read STOP
   CHECK(mb_frame(rd, frame(rd, 6), r) == 7 && r[4] == 0);
   relay[5] = 0;
   mb_frame(relay, frame(relay, 6), r);
   CHECK(MB.hold[0] == 0 && !(MB.pending[0] & 1));
 }
 
-// ---------------------------------------------------------------- the CU60's clock, which the panels keep
-static void relay(uint16_t reg, uint16_t v) {  // the CU60 passing a panel's change on to all panels
+// ---------------------------------------------------------------- the CX60's clock, which the panels keep
+static void relay(uint16_t reg, uint16_t v) {  // the CX60 passing a panel's change on to all panels
   uint8_t q[8] = {0, 0x65, (uint8_t) (reg >> 8), (uint8_t) reg, (uint8_t) (v >> 8), (uint8_t) v}, r[MB_MAX_FRAME];
   mb_frame(q, frame(q, 6), r);
 }
 
-static void block(uint16_t reg, const uint16_t *v, int n) {  // an FC16 broadcast, the CU60's own blocks
+static void block(uint16_t reg, const uint16_t *v, int n) {  // an FC16 broadcast, the CX60's own blocks
   uint8_t q[MB_MAX_FRAME] = {0, 0x10, (uint8_t) (reg >> 8), (uint8_t) reg, 0, (uint8_t) n, (uint8_t) (2 * n)};
   uint8_t r[MB_MAX_FRAME];
   for (int i = 0; i < n; i++) {
@@ -1523,7 +1523,7 @@ static void block(uint16_t reg, const uint16_t *v, int n) {  // an FC16 broadcas
   mb_frame(q, frame(q, 7 + 2 * n), r);
 }
 
-static void cu60(uint16_t reg, uint16_t v) { block(reg, &v, 1); }  // one register of a status block
+static void cx60(uint16_t reg, uint16_t v) { block(reg, &v, 1); }  // one register of a status block
 
 static bool coil(uint16_t reg) { return MB.pending[reg / 32] >> (reg % 32) & 1; }
 
@@ -1576,7 +1576,7 @@ static void test_bus_clock(void) {
   stub_ms += 600;
   unit_poll();
   CHECK(stub_rtc == t2);
-  // The settings block the CU60 sends when it starts has the clock it saved at its last power cut. Ours stays
+  // The settings block the CX60 sends when it starts has the clock it saved at its last power cut. Ours stays
   // and goes out right away, unless we have none.
   uint16_t old[2] = {(uint16_t) ((t2 - 7200) >> 16), (uint16_t) (t2 - 7200)};
   block(0x94, old, 2);
@@ -1748,20 +1748,20 @@ static void test_runtime(void) {
     settings_poll();
   }
   CHECK(stub_flash_erases == erases + 1);
-  // after a restart the counters are back from flash, the CU60 only sends the high words when it starts
+  // after a restart the counters are back from flash, the CX60 only sends the high words when it starts
   model_defaults();
   unit_init();
   settings_load();
   unit_poll();
   CHECK(M.h_stop == 18 && M.h_total == 91 && M.brightness == 33);
   // the total's high word changed while we were off
-  cu60(0x15D, 9);
-  cu60(0x0CB, 109);
+  cx60(0x15D, 9);
+  cx60(0x0CB, 109);
   unit_poll();
   CHECK(M.h_total == 109);
   // saved soon: a high word and a relayed week program change, not a relayed fan change
   erases = stub_flash_erases;
-  cu60(0x15C, 6);
+  cx60(0x15C, 6);
   unit_poll();
   stub_ms += 6000;
   settings_poll();
@@ -2006,43 +2006,43 @@ static bool queued(uint16_t key, uint32_t value) {
   return false;
 }
 
-// ---------------------------------------------------------------- the CU60's registers, in and out of the model
+// ---------------------------------------------------------------- the CX60's registers, in and out of the model
 static void test_unit(void) {
   model_defaults();
   unit_init();
   toasts = 0;
-  // The CU60 ORs the heater flags of the panels present, so off has to clear all three and on only sets ours.
+  // The CX60 ORs the heater flags of the panels present, so off has to clear all three and on only sets ours.
   // What it made of them, 0x10E, is what's shown.
-  cu60(0x10E, 1);
+  cx60(0x10E, 1);
   unit_poll();
   CHECK(M.heater_enabled);
   val_set(V_HEATER, 0);
   CHECK(!MB.hold[0x13F] && !MB.hold[0x140] && !MB.hold[0x141] && coil(0x13F) && coil(0x140) && coil(0x141));
   for (uint16_t r = 0x13F; r <= 0x141; r++)
     relay(r, 0);
-  cu60(0x10E, 0);
+  cx60(0x10E, 0);
   unit_poll();
   CHECK(!M.heater_enabled);
   val_set(V_HEATER, 1);
   CHECK(M.heater_enabled && MB.hold[0x141] == 1 && coil(0x141) && !coil(0x13F) && !coil(0x140));
   relay(0x141, 1);
   for (int s = 0; s < 3; s++) {  // our flag is one vote, and the unit didn't take it: no heater, say
-    cu60(0x0C3, (uint16_t) (200 + s));
+    cx60(0x0C3, (uint16_t) (200 + s));
     unit_poll();
     stub_ms += 1000;
     unit_second();
   }
   CHECK(!M.heater_enabled && toasts == 1);
   toasts = 0;
-  cu60(0x10E, 1);
+  cx60(0x10E, 1);
   unit_poll();
   CHECK(M.heater_enabled);
 
   // The mode set and the one running. A boost runs MAX while NORMAL is set, and Boost -> Max on the overlay
   // then writes MAX all the same.
-  cu60(0x000, MODE_NORMAL);
-  cu60(0x0BF, MODE_MAX);
-  cu60(0x0C1, 600);
+  cx60(0x000, MODE_NORMAL);
+  cx60(0x0BF, MODE_MAX);
+  cx60(0x0C1, 600);
   unit_poll();
   CHECK(M.mode == MODE_NORMAL && M.mode_now == MODE_MAX && M.boost_on && M.boost_left == 10);
   val_set(V_BOOST, 0);
@@ -2050,33 +2050,33 @@ static void test_unit(void) {
   CHECK(coil(0x13B) && MB.hold[0x000] == MODE_MAX && coil(0x000));
   relay(0x13B, 1);
   relay(0x000, MODE_MAX);
-  cu60(0x0C1, 0);
+  cx60(0x0C1, 0);
   unit_poll();
   CHECK(!M.boost_on && !M.boost_left);
 
   // the setpoint in effect is 0xC2, 0xBE is the one set
-  cu60(0x0BE, 210);
-  cu60(0x0C2, 190);
+  cx60(0x0BE, 210);
+  cx60(0x0C2, 190);
   unit_poll();
   CHECK(M.setpoint_now == 190 && M.setpoint == 210);
 
   // extract regulation needs the extract sensor switched on, which the stock panel does along with it
-  cu60(0x114, REG_SUPPLY);
+  cx60(0x114, REG_SUPPLY);
   unit_poll();
   val_set(V_REGULATION, REG_EXTRACT);
   CHECK(MB.hold[0x114] == REG_EXTRACT && coil(0x114) && MB.hold[0x136] == 1 && coil(0x136));
   // supply air too cold, 0x0C2 is min + 6
-  cu60(0x00D, 160);
-  cu60(0x0C2, 166);
+  cx60(0x00D, 160);
+  cx60(0x0C2, 166);
   unit_poll();
   CHECK(M.supply_min == 160 && M.setpoint_now == 190);
 
-  cu60(0x114, 7);  // anything but 0 is supply air to the CU60
+  cx60(0x114, 7);  // anything but 0 is supply air to the CX60
   unit_poll();
   CHECK(M.regulation == REG_SUPPLY);
 
   // not the master, the ESP writes the setpoint, or we do while it's offline
-  cu60(0x00F, 1);
+  cx60(0x00F, 1);
   unit_poll();
   M.esp_online = true;
   val_set(V_SETPOINT, 215);
@@ -2089,15 +2089,15 @@ static void test_unit(void) {
   CHECK(M.setpoint == 210);
 
   // EC fans come from the DIP switches, not the menu
-  cu60(0x112, 0);
+  cx60(0x112, 0);
   unit_poll();
   val_set(V_FEAT_FIRST + FEAT_EC_FANS, 0);
   CHECK(HAS(FEAT_EC_FANS));
 
-  // the CU60's block and another panel like us change the week program, a stock panel's relays don't
+  // the CX60's block and another panel like us change the week program, a stock panel's relays don't
   val_set(V_WEEK_PROGRAM, 1);
   relay(0x117, 1);
-  cu60(0x117, 0);
+  cx60(0x117, 0);
   unit_poll();
   CHECK(!M.week_program);
   val_set(V_WEEK_PROGRAM, 1);
@@ -2105,44 +2105,44 @@ static void test_unit(void) {
   relay(0x117, 0);
   unit_poll();
   CHECK(!M.week_program);
-  cu60(0x099, 0x0712);  // stock 7.18 at address 1
+  cx60(0x099, 0x0712);  // stock 7.18 at address 1
   val_set(V_WEEK_PROGRAM, 1);
   relay(0x117, 1);
   relay(0x117, 0);
   unit_poll();
   CHECK(M.week_program);
 
-  // what the CU60 holds is shown as it is, its limits are wider than the editors'
-  cu60(0x091, 300);
-  cu60(0x016, 0);
+  // what the CX60 holds is shown as it is, its limits are wider than the editors'
+  cx60(0x091, 300);
+  cx60(0x016, 0);
   unit_poll();
   CHECK(M.boost_minutes == 300 && M.filter_days == 0 && filter_life() == 0 && filter_days_left() == 0);
-  // a filter interval that isn't whole months is due when the CU60 says
-  cu60(0x016, 100);
-  cu60(0x0C0, 90 * 24);
+  // a filter interval that isn't whole months is due when the CX60 says
+  cx60(0x016, 100);
+  cx60(0x0C0, 90 * 24);
   unit_poll();
   CHECK(M.filter_days == 100 && filter_days_left() == 10);
 
-  // A boost the CU60 doesn't count down, nothing answers at address 1, is stopped after a while and the user told
+  // A boost the CX60 doesn't count down, nothing answers at address 1, is stopped after a while and the user told
   val_set(V_BOOST, 1);
   CHECK(coil(0x13A));
   for (int s = 0; s < 12; s++) {  // counting down
-    cu60(0x0C1, (uint16_t) (1800 - s));
+    cx60(0x0C1, (uint16_t) (1800 - s));
     unit_poll();
     unit_second();
   }
   CHECK(M.boost_on && !coil(0x13B) && !toasts);
   for (int s = 0; s < 10; s++) {  // stuck, 9 seconds without a change
-    cu60(0x0C1, 1700);
+    cx60(0x0C1, 1700);
     unit_poll();
     unit_second();
   }
   CHECK(!coil(0x13B) && !toasts);
-  cu60(0x0C1, 1700);
+  cx60(0x0C1, 1700);
   unit_poll();
   unit_second();
   CHECK(coil(0x13B) && toasts == 1);
-  cu60(0x0C1, 0);
+  cx60(0x0C1, 0);
   unit_poll();
 
   // a stock panel sets back a time set on the keys: one toast, a later change is just followed
@@ -2231,7 +2231,7 @@ static void test_link(void) {
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
   CHECK(link_queue()->q[0].key == K_HELLO && link_queue()->q[0].value == (uint32_t) PLINK_VERSION << 16);
   CHECK(queued(spare, 1) && link_queue()->qn == PLINK_QUEUE);
-  // A CU60 value in the ignored answer goes again unless a newer one waits. Item values don't.
+  // A CX60 value in the ignored answer goes again unless a newer one waits. Item values don't.
   link_init();
   M.esp_version = PLINK_VERSION;
   link_send(K_SETPOINT, 215);

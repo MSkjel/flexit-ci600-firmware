@@ -346,7 +346,7 @@ static struct {
 
 static int hud_level(void) { return M.boost_on ? HUD_BOOST : M.mode_now; }
 
-// UP past MAX starts a boost. The CU60 goes back to the old speed after a boost, so set the one the overlay
+// UP past MAX starts a boost. The CX60 goes back to the old speed after a boost, so set the one the overlay
 // opened on and not the MAX we stepped through.
 static void hud_step(int k) {
   int lvl = hud_level() + (k == KEY_UP ? 1 : -1);

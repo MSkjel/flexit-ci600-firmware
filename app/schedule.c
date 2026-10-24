@@ -34,7 +34,7 @@ static int others(period_t *out) {
   return n;
 }
 
-// Overlapping periods run in the CU60's slot order, not as the day screen shows them. So a period stays between
+// Overlapping periods run in the CX60's slot order, not as the day screen shows them. So a period stays between
 // its neighbours: from where the ones that start before it end to where the next one starts.
 void sched_range(val_t v, int32_t *min, int32_t *max) {
   const period_edit_t *p = &M.period;
@@ -55,7 +55,7 @@ void sched_range(val_t v, int32_t *min, int32_t *max) {
   *max = v == V_PERIOD_END ? hi : hi - MIN_LEN;
 }
 
-// Put M.period into the day's list, replacing the one in the same CU60 slot, and write it to the unit
+// Put M.period into the day's list, replacing the one in the same CX60 slot, and write it to the unit
 void sched_period_changed(val_t v) {
   period_edit_t *p = &M.period;
   if (v == V_PERIOD_START && p->end < p->start + MIN_LEN)
@@ -124,7 +124,7 @@ bool sched_edit(int day, int i) {
   uint16_t start, end;
   if (!free_time(day, &start, &end))
     return false;
-  uint8_t used = 0;  // new period takes the day's first free CU60 slot
+  uint8_t used = 0;  // new period takes the day's first free CX60 slot
   for (int k = 0; k < M.n_periods[day]; k++)
     used |= (uint8_t) (1u << M.week[day][k].idx);
   int idx = 0;

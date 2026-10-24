@@ -1,4 +1,4 @@
-// Fake data for the simulator, and a stand-in for what the CU60 does when a value changes.
+// Fake data for the simulator, and a stand-in for what the CX60 does when a value changes.
 #include "ui.h"
 #include "sim.h"
 #include <stdlib.h>
@@ -161,7 +161,7 @@ void sim_model_init(void) {
         (int16_t) (480 + 60 * home + 40 * lv_trigo_sin((int16_t) (i * 52 % 360)) / LV_TRIGO_SIN_MAX);
     M.item_trends[1].pt[i] = (int16_t) (38 + 8 * home / 10 + (i == 70 ? 25 : i == 71 ? 15 : 0));  // a shower at 6:30
   }
-  M.cu60_version = 0x0207;
+  M.cx60_version = 0x0207;
   M.fw_version = 0x000100;  // 0.1.0
   M.bus_addr = 3;
   M.bus_ok = 184233;
@@ -189,7 +189,7 @@ void sim_model_init(void) {
   M.features = FBIT(FEAT_ESP) | FBIT(FEAT_EC_FANS);
 }
 
-// Roughly what the CU60 would do. On the panel, hw/unit.c puts the change on the bus instead.
+// Roughly what the CX60 would do. On the panel, hw/unit.c puts the change on the bus instead.
 void plat_value_changed(val_t v) {
   switch (v) {
     case V_MODE:

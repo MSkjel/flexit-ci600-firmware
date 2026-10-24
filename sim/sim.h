@@ -41,7 +41,7 @@ void sim_text(char *out, int size, const char *both);  // the part in the panel'
 void sim_item(int i, struct item *it);                 // SIM_ITEMS[i] as the panel stores it
 const char *sim_item_label(const char *name);
 
-// sim_esp.c, a fake ESP talking to the panel over a fake CU60 bus
+// sim_esp.c, a fake ESP talking to the panel over a fake CX60 bus
 void sim_esp_init(void);
 void sim_esp_items(void);  // send all of SIM_ITEMS
 void sim_esp_fill(void);   // send filler items up to N_ITEMS, on the smart home page
@@ -54,7 +54,7 @@ void sim_esp_send_dawn(void);
 unsigned sim_esp_send_animation(int x, int y);  // into slot 0, placed at x, y
 void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start);
 void sim_esp_move_animation(int mode, int a, int b, int ms);  // K_ANIM_MOVE for place 0: a, b are x, y or vx, vy
-void sim_link_run(int cycles);                                // run that many CU60 cycles
+void sim_link_run(int cycles);                                // run that many CX60 cycles
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1
 void sim_esp_report(const char *what);
 extern unsigned long sim_cycles;

@@ -71,7 +71,7 @@ def skip_echo(bus, buf):
 
 
 def find_reply(buf):
-    """The first bootloader reply in buf, [01 64 sub len data crc] or [01 e4 code crc], or None. The CU60's polls
+    """The first bootloader reply in buf, [01 64 sub len data crc] or [01 e4 code crc], or None. The CX60's polls
     to address 1 and the bootloader's exceptions to those have other function codes."""
     for start in range(len(buf) - 4):
         if buf[start] != BL_ADDR:

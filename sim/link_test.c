@@ -336,7 +336,7 @@ static void test_split_resend(void) {
   CHECK(got_panel == 17 && !wrong && others == 1 && !E.sessions && !E.qn);
 }
 
-// ---------------------------------------------------------------- the CU60 comes back too soon, then doesn't
+// ---------------------------------------------------------------- the CX60 comes back too soon, then doesn't
 static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8], POLL1[8], REPLY[13];
 
 static void frame(uint8_t *f, int n, const uint8_t *head, int k) {
@@ -346,8 +346,8 @@ static void frame(uint8_t *f, int n, const uint8_t *head, int k) {
   f[n - 1] = c >> 8;
 }
 
-// One CU60 cycle from t_us as the panel sees it. Status broadcast, a poll of panel 3 quiet_us later, a reply
-// with nothing flagged, then the CU60's next frame next_us after the poll.
+// One CX60 cycle from t_us as the panel sees it. Status broadcast, a poll of panel 3 quiet_us later, a reply
+// with nothing flagged, then the CX60's next frame next_us after the poll.
 static void bus_cycle(pbus_panel_t *w, uint32_t t_us, uint32_t quiet_us, uint32_t next_us) {
   uint32_t end = t_us + PBUS_STATUS_LEN * PBUS_BYTE_US;
   pbus_panel_burst(w, STATUS, PBUS_STATUS_LEN, t_us, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
@@ -379,7 +379,7 @@ static void test_rearm(void) {
   pbus_panel_init(&w);
   uint32_t t = 0;
   uint8_t say;
-  // the CU60 polls 14.4 ms after its status broadcast ends, 30 ms after it started, on its 10 ms grid
+  // the CX60 polls 14.4 ms after its status broadcast ends, 30 ms after it started, on its 10 ms grid
   for (int i = 0; i < 3; i++, t += 110000)
     bus_cycle(&w, t, 14400, 20000);
   CHECK(!w.refused && w.quiet_min_us == 14400 && w.gaps.gaps && !w.gaps.off);
@@ -392,8 +392,8 @@ static void test_rearm(void) {
   bus_cycle(&w, t, 12000, 20000);                                 // again, and now it takes twice as long
   t += 110000;
   CHECK(cycles_to(&w, &t, 14400, 20000, link_in) == 2 * PBUS_REARM);
-  // Gaps after polls. The CU60 comes back 5 ms after a poll instead of 20, so the gaps go off. They come back
-  // after a run of gaps the CU60 kept to, and the run is twice as long the next time.
+  // Gaps after polls. The CX60 comes back 5 ms after a poll instead of 20, so the gaps go off. They come back
+  // after a run of gaps the CX60 kept to, and the run is twice as long the next time.
   bus_cycle(&w, t, 14400, 5000);
   t += 110000;
   CHECK(w.gaps.off && !w.refused);

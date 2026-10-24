@@ -1,4 +1,4 @@
-// Clock and summer time. Times are Unix-style seconds but local time, like the CU60 and the stock panel keep them.
+// Clock and summer time. Times are Unix-style seconds but local time, like the CX60 and the stock panel keep them.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>

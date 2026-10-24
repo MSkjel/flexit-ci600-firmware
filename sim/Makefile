@@ -37,7 +37,7 @@ $(BUILD)/bulk_test: $(call obj,sim/bulk_test proto/pbulk proto/pbus proto/plink 
 $(BUILD)/sim $(BUILD)/lang_test $(BUILD)/unit_test $(BUILD)/replay $(BUILD)/link_test $(BUILD)/bulk_test:
 	$(CC) -o $@ $^ $(LDLIBS)
 
-# esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CU60
+# esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
 # gen.py also checks the ESP's copies of proto/
 ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/*)

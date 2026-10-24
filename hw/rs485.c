@@ -1,5 +1,5 @@
 // RS-485 on USART1. A frame ends when the line goes idle and we answer it right in the interrupt like stock,
-// since the CU60 only waits 10 ms for a register read. The ESP's link frames get answered here too. Replies go out
+// since the CX60 only waits 10 ms for a register read. The ESP's link frames get answered here too. Replies go out
 // from the TXE interrupt so the core can sleep.
 #include "rs485.h"
 #include "board.h"
@@ -23,7 +23,7 @@ void rs485_init(void) {
 // One of the two is set from the first byte to the last stop bit, and the interrupt swaps them in one write
 bool rs485_busy(void) { return USART1->CR1 & (USART_CR1_TXEIE | USART_CR1_TCIE); }
 
-// Early in the CU60's status broadcast, or with no CU60 at all. The rest of it and the gap after take 27 ms or
+// Early in the CX60's status broadcast, or with no CX60 at all. The rest of it and the gap after take 27 ms or
 // more, and we miss nothing there: the status comes again next cycle and the ESP sends its frame again.
 #define STATUS_EARLY 24  // bytes, 2 ms
 bool rs485_wait_quiet(uint32_t ms) {
@@ -31,9 +31,9 @@ bool rs485_wait_quiet(uint32_t ms) {
   for (uint32_t t = board_ms();;) {
     uint32_t s = board_irq_save();
     bool status = rx_len >= 7 && rx_len <= STATUS_EARLY && pbus_status_part(rx, 7) == 7;
-    bool cu60 = board_ms() - w->status_ms < 1000;
+    bool cx60 = board_ms() - w->status_ms < 1000;
     board_irq_restore(s);
-    if (!rs485_busy() && (status || !cu60))
+    if (!rs485_busy() && (status || !cx60))
       return true;
     if (board_ms() - t >= ms)
       return false;
@@ -79,7 +79,7 @@ void USART1_IRQHandler(void) {
     (void) USART1->DR;
     int n = rx_len;
     rx_len = 0;
-    int r = 0, skip = 0;  // skip = bytes in front of the CU60's
+    int r = 0, skip = 0;  // skip = bytes in front of the CX60's
     bool modbus = true;
     if (n > 0 && rx[0] == PBULK_ADDR) {  // the ESP link, or noise that looks like it
       int k = pbulk_frame_len(rx, n);
@@ -89,9 +89,9 @@ void USART1_IRQHandler(void) {
         }  // give the ESP's driver time to let go of the bus
         modbus = false;
       } else if (k && k < n && pbus_crc_ok(rx, k)) {
-        skip = k;  // the CU60 sent right behind a link frame. That goes unanswered, the ESP sends it again
-      } else if (pbus_is_cu60(rx + 1, n - 1)) {
-        skip = 1;  // a noise byte in front of a CU60 frame
+        skip = k;  // the CX60 sent right behind a link frame. That goes unanswered, the ESP sends it again
+      } else if (pbus_is_cx60(rx + 1, n - 1)) {
+        skip = 1;  // a noise byte in front of a CX60 frame
       } else {
         modbus = false;  // a link frame cut short, or noise
       }
