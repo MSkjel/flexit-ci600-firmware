@@ -23,8 +23,6 @@
 #define R_CU60_VERSION 0x097
 #define R_PANEL1_VERSION 0x099  // input register 3 of each panel at discovery, 0x099/0x09B/0x09D. Stock is 7.x
 #define R_PANEL3_VERSION 0x09D
-#define R_SPARE_FIRST 0x09E  // the old link mailbox and the stock panel's language
-#define R_SPARE_LAST 0x0A4
 #define R_SETTINGS_LAST 0x0BD  // 0x000..0x0BD are the settings the CU60 sends when it starts
 #define R_ST_SETPOINT 0x0BE    // 0x0BE..0x112 is the status broadcast. The setpoint set, or the potentiometer's
 #define R_ST_MODE 0x0BF        // the mode running
@@ -358,7 +356,7 @@ void unit_init(void) {
 
 // The settings, and the runtime counters since the CU60 only sends their high words when it starts
 bool unit_cached(uint16_t r) {
-  if (r == R_CLOCK_HI || r == R_CLOCK_LO || (r >= R_SPARE_FIRST && r <= R_SPARE_LAST))
+  if (r == R_CLOCK_HI || r == R_CLOCK_LO)
     return false;
   bool keep = r <= R_SETTINGS_LAST || (r >= R_CFG2_FIRST && r <= R_RT_LAST);
   bool cmd =

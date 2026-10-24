@@ -136,7 +136,6 @@ typedef struct {
 #define ADC_CR2_EXTSEL_SWSTART (7u << 17)
 #define ADC_CR2_EXTTRIG (1u << 20)
 #define ADC_CR2_SWSTART (1u << 22)
-#define ADC_CR2_TSVREFE (1u << 23)
 #define ADC_SMP_239_5 7u  // 239.5-cycle sample time
 
 // SPI

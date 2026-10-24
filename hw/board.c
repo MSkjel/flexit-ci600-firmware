@@ -226,10 +226,6 @@ void board_leds(bool alarm, bool filter, bool ok) {
 #define BL_DARK 15   // compare at 0 %, the panel we tried was still readable at 10
 #define BL_FULL 225  // compare at 100 %, a bit brighter than stock's 210
 
-#ifdef CI600_DEBUG
-volatile uint16_t dbg_bl;  // set over SWD to force this compare value, 0 = don't
-#endif
-
 static void backlight_init(void) {
   RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
   TIM1->PSC = 0;
@@ -247,10 +243,6 @@ void board_backlight(int pct) {
     pct = 100;
   // 0 % is the lowest dim level and still readable, below 0 is off
   bl_want = pct < 0 ? 0 : (uint16_t) (BL_DARK + (uint32_t) (pct * pct) * (BL_FULL - BL_DARK) / 10000);
-#ifdef CI600_DEBUG
-  if (dbg_bl)
-    bl_want = dbg_bl;
-#endif
 }
 
 // ---------------------------------------------------------------- room thermistor (PC0, ADC1 channel 10)
@@ -265,19 +257,18 @@ static void adc_init(void) {
   ADC1->CR2 |= ADC_CR2_CAL;
   while (ADC1->CR2 & ADC_CR2_CAL) {
   }
-  ADC1->SMPR1 = ADC_SMP_239_5 << 0 | ADC_SMP_239_5 << 18;  // channels 10 and 16, the temp sensor needs 17 us
+  ADC1->SMPR1 = ADC_SMP_239_5 << 0;  // channel 10
   ADC1->SQR1 = 0;
   ADC1->SQR3 = 10;
   ADC1->CR2 |= ADC_CR2_EXTSEL_SWSTART | ADC_CR2_EXTTRIG;
   ADC1->CR2 &= ~ADC_CR2_ADON;
 }
 
-static uint16_t adc_read(uint32_t channel) {
-  ADC1->SQR3 = channel;
+uint16_t board_room_adc(void) {  // 16 readings averaged
   ADC1->CR2 |= ADC_CR2_ADON;
   uint32_t t = board_us();
-  while (board_us() - t < 12) {
-  }  // ADC power-up takes 1 us, the temperature sensor 10
+  while (board_us() - t < 2) {
+  }  // the ADC needs 1 us after power-up
   uint32_t sum = 0;
   for (int i = 0; i < 16; i++) {
     ADC1->CR2 |= ADC_CR2_SWSTART;
@@ -288,17 +279,6 @@ static uint16_t adc_read(uint32_t channel) {
   ADC1->CR2 &= ~ADC_CR2_ADON;
   return (uint16_t) (sum / 16);
 }
-
-uint16_t board_room_adc(void) { return adc_read(10); }
-
-#ifdef CI600_DEBUG
-uint16_t board_chip_adc(void) {
-  ADC1->CR2 |= ADC_CR2_TSVREFE;
-  uint16_t v = adc_read(16);
-  ADC1->CR2 &= ~ADC_CR2_TSVREFE;
-  return v;
-}
-#endif
 
 // ---------------------------------------------------------------- RTC
 // The 32 kHz crystal can take seconds to start after a power cut, and the bus can't wait that long. We start it

@@ -31,8 +31,6 @@ uint8_t board_key_events(uint8_t *up);  // keys pressed since the last call, *up
 void board_leds(bool alarm, bool filter, bool ok);
 void board_backlight(int pct);  // target brightness in %, fades to it. Negative = off
 uint16_t board_room_adc(void);  // averaged 12-bit reading of the thermistor
-uint16_t board_chip_adc(void);  // CI600_DEBUG only. MCU temp sensor, 12 bits, about 5 counts per
-                                // degree. Only changes mean anything, the offset varies from chip to chip
 uint32_t board_rtc_get(void);   // local time, Unix-style seconds
 void board_rtc_set(uint32_t t);
 void board_rtc_poll(void);                      // 1 Hz, sets up the RTC once its crystal is running
