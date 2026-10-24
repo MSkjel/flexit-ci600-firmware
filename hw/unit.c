@@ -38,12 +38,13 @@
 #define R_ST_HEAT 0x0C9
 #define R_ST_FAN 0x0CA
 #define R_ST_TOTAL_H 0x0CB
+#define R_FILTER_RESETS 0x0CC
 #define R_ALARMS 0x0CD  // active alarms, 10 x (code, since hi, since lo)
 #define R_ALARMS_END 0x0EA
 #define R_LOG 0x0EB  // alarm log, 5 x (code, start hi, start lo, end hi, end lo)
 #define R_LOG_END 0x103
-#define R_ST_HEATER 0x10E  // the heater may run: the panels' flags below ORed, and the unit has one
-#define R_DS1_ELECTRIC 0x10F
+#define R_ST_HEATER 0x10E     // the heater may run: the panels' flags below ORed, and the unit has one
+#define R_DS1_ELECTRIC 0x10F  // the DIP switches DS1..DS4
 #define R_DS4_FAN_AC 0x112
 #define R_CFG2_FIRST 0x113  // 0x113..0x14B, more settings
 #define R_CFG_REGULATION 0x114
@@ -218,6 +219,10 @@ static bool stock_panel(void) {
 
 static void reg_changed(uint16_t r) {
   int16_t v = MB.hold[r];
+  if (r >= R_DS1_ELECTRIC && r <= R_DS4_FAN_AC) {
+    uint8_t bit = (uint8_t) (1u << (r - R_DS1_ELECTRIC));
+    M.dip = v ? M.dip | bit : M.dip & ~bit;
+  }
   switch (r) {
     case R_CFG_MODE:
       val_set_bus(V_MODE, v & 3);
@@ -232,6 +237,9 @@ static void reg_changed(uint16_t r) {
       break;
     case R_ST_FILTER_H:
       M.filter_hours = (uint16_t) v;
+      break;
+    case R_FILTER_RESETS:
+      M.filter_resets = (uint16_t) v;
       break;
     case R_ST_BOOST_S:
       M.boost_left = (uint16_t) ((v + 59) / 60);
@@ -307,6 +315,8 @@ static void reg_changed(uint16_t r) {
         read_week((r - R_WEEK_EN) / 4);
       else if (r >= R_RT_STOP && r <= R_RT_LAST)
         read_runtime();
+      else if (r >= R_PANEL1_VERSION && r <= R_PANEL3_VERSION && !((r - R_PANEL1_VERSION) & 1))
+        M.panel_version[(r - R_PANEL1_VERSION) / 2] = (uint16_t) v;
       break;
   }
   // settings kept in the CX60 like the fan % and setpoint, see values.h
@@ -405,6 +415,38 @@ void unit_poll(void) {
   }
 }
 
+// The manual tests in Advanced > Test. The CX60 only uses a test value while its enable register is set, and clears
+// that after 60 s.
+#define TEST_S 60
+static const struct {
+  val_t v;
+  uint16_t enable;
+} TESTS[] = {{V_TEST_SPEED, 0x143},
+             {V_TEST_FANS, 0x144},
+             {V_TEST_HEATER, 0x146},
+             {V_TEST_ROTOR, 0x148},
+             {V_TEST_COOLING, 0x149}};
+static uint8_t test_s[LEN(TESTS)];  // seconds left of each test
+
+static bool test_changed(val_t v) {
+  for (unsigned i = 0; i < LEN(TESTS); i++)
+    if (TESTS[i].v == v) {
+      int32_t x = val_get(v);
+      if (x)
+        bus_write(val_def(v).cx60, (int16_t) (v == V_TEST_SPEED ? x - 1 : x));
+      bus_write(TESTS[i].enable, x != 0);
+      test_s[i] = x ? TEST_S : 0;
+      return true;
+    }
+  return false;
+}
+
+static void tests_second(void) {
+  for (unsigned i = 0; i < LEN(TESTS); i++)
+    if (test_s[i] && !--test_s[i])
+      val_set_bus(TESTS[i].v, 0);  // over, the CX60 has cleared its enable too
+}
+
 // The CX60 only counts a boost down while something answers at address 1. One whose seconds don't fall is
 // stopped, rather than shown as running for good.
 #define BOOST_STUCK_S 10
@@ -450,11 +492,14 @@ void unit_second(void) {
     clock_write(t);
   if (clock_keys_s)
     clock_keys_s--;
+  tests_second();
 }
 
 // ---------------------------------------------------------------- changes made on the panel
 void plat_value_changed(val_t v) {
   val_def_t d = val_def(v);
+  if (test_changed(v))
+    return;
   if (d.flags & VF_CLOCK) {
     clock_keys_s = CLOCK_UNDONE_S;
     plat_time_set();

@@ -2006,6 +2006,43 @@ static bool queued(uint16_t key, uint32_t value) {
   return false;
 }
 
+// ---------------------------------------------------------------- the installer's settings and the manual tests
+static void test_advanced(void) {
+  model_defaults();
+  unit_init();
+  // They come and go by register like the other settings
+  cx60(0x159, (uint16_t) -150);
+  unit_poll();
+  CHECK(M.adv.deice_temp == -150);
+  val_set(V_DEICE_TEMP, -200);
+  CHECK(MB.hold[0x159] == -200 && coil(0x159));
+  // DIP switches, the panels the unit found and the filter changes
+  cx60(0x10F, 1);
+  cx60(0x112, 1);
+  cx60(0x09B, 0x0703);
+  cx60(0x0CC, 4);
+  unit_poll();
+  CHECK(M.dip == 0x9 && M.panel_version[1] == 0x0703 && !M.panel_version[0] && M.filter_resets == 4);
+  cx60(0x10F, 0);
+  unit_poll();
+  CHECK(M.dip == 0x8);
+  // A test writes its value, then its enable, and is over after a minute like in the CX60
+  val_set(V_TEST_SPEED, MODE_MAX + 1);
+  CHECK(MB.hold[0x0A8] == MODE_MAX && MB.hold[0x143] == 1 && coil(0x0A8) && coil(0x143));
+  val_set(V_TEST_HEATER, 1);
+  CHECK(MB.hold[0x145] == 1 && MB.hold[0x146] == 1);
+  for (int s = 0; s < 59; s++)
+    unit_second();
+  CHECK(M.test_speed == MODE_MAX + 1 && M.test_heater);
+  unit_second();
+  CHECK(!M.test_speed && !M.test_heater);
+  // Off ends it right away
+  val_set(V_TEST_ROTOR, 1);
+  CHECK(MB.hold[0x148] == 1);
+  val_set(V_TEST_ROTOR, 0);
+  CHECK(!MB.hold[0x148]);
+}
+
 // ---------------------------------------------------------------- the CX60's registers, in and out of the model
 static void test_unit(void) {
   model_defaults();
@@ -2281,6 +2318,7 @@ int main(void) {
   test_schedule();
   test_input();
   test_unit();
+  test_advanced();
   test_link();
   char why[96] = "";
   if (menu_check(why, sizeof why)) {

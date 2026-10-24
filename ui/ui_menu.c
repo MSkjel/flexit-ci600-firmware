@@ -116,6 +116,20 @@ static void i_h_normal(char *b) { hours(b, M.h_normal); }
 static void i_h_max(char *b) { hours(b, M.h_max); }
 static void i_h_rotor(char *b) { hours(b, M.h_rotor); }
 static void i_h_heater(char *b) { hours(b, M.h_heater); }
+static void i_filter_resets(char *b) { sprintf(b, "%u", M.filter_resets); }
+static void dip(char *b, int ds, str_t on, str_t off) { strcpy(b, tr((M.dip >> ds) & 1 ? on : off)); }
+static void i_ds2(char *b) { dip(b, 1, S_ON, S_OFF); }
+static void i_ds3(char *b) { dip(b, 2, S_ON, S_OFF); }
+static void panel_version(char *b, int i) {
+  uint16_t v = M.panel_version[i];
+  if (v)
+    sprintf(b, "%d.%d", v >> 8, v & 0xFF);
+  else
+    strcpy(b, _(S_NO_PANEL));
+}
+static void i_panel1(char *b) { panel_version(b, 0); }
+static void i_panel2(char *b) { panel_version(b, 1); }
+static void i_panel3(char *b) { panel_version(b, 2); }
 
 // ---------------------------------------------------------------- menus
 static const str_t O_REG[REG_COUNT] = {[REG_EXTRACT] = S_EXTRACT_AIR, [REG_SUPPLY] = S_SUPPLY_AIR};
@@ -145,30 +159,25 @@ static const str_t O_VIEW[VIEW_COUNT] = {[VIEW_DASH] = S_DASHBOARD,  [VIEW_FLOW]
                                          [VIEW_TREND] = S_TRENDS,    [VIEW_SENSORS] = S_ESP_SENSORS,
                                          [VIEW_COMFORT] = S_COMFORT, [VIEW_SMART] = S_SMART_HOME};
 static const str_t O_INDOOR[INDOOR_COUNT] = {[INDOOR_EXTRACT] = S_EXTRACT_AIR, [INDOOR_PANEL] = S_THIS_PANEL};
+static const str_t O_FIRE[5] = {
+    [1] = S_STOP_BOTH_FANS, [2] = S_BOTH_AT_MAX, [3] = S_EXTRACT_AT_MAX, [4] = S_SUPPLY_AT_MAX};
+static const str_t O_ROTOR_ALARM[2] = {S_STOP_THE_UNIT, S_KEEP_RUNNING};
+static const str_t O_TEST_SPEED[MODE_COUNT + 1] = {S_OFF, S_STOP, S_MIN, S_NORMAL, S_MAX};
 
 #define FANS(t, v, h) NUM(IC_FAN, t, v, h, .unit = S_UNIT_PCT, .need = FBIT(FEAT_EC_FANS))
 MENU(m_vent, S_VENTILATION, ENUM(IC_FAN, S_FAN_SPEED, V_MODE, S_FAN_SPEED_HELP, OPTS(MODE_NAMES)),
      TOG(IC_TIMER, S_BOOST_NOW, V_BOOST, S_BOOST_NOW_HELP),
-     NUM(IC_TIMER_SAND, S_BOOST_TIME, V_BOOST_MINUTES, S_BOOST_TIME_HELP, .step = 5, .unit = S_UNIT_MIN),
-     HEAD(S_FAN_SPEEDS), FANS(S_MIN_SUPPLY, V_FAN_MIN_SUP, S_MIN_SUPPLY_HELP),
-     FANS(S_MIN_EXTRACT, V_FAN_MIN_EXT, S_MIN_EXTRACT_HELP),
-     FANS(S_NORMAL_SUPPLY, V_FAN_NORM_SUP, S_NORMAL_SUPPLY_HELP),
-     FANS(S_NORMAL_EXTRACT, V_FAN_NORM_EXT, S_NORMAL_EXTRACT_HELP),
-     FANS(S_MAX_SUPPLY, V_FAN_MAX_SUP, S_MAX_SUPPLY_HELP), FANS(S_MAX_EXTRACT, V_FAN_MAX_EXT, S_MAX_EXTRACT_HELP));
+     NUM(IC_TIMER_SAND, S_BOOST_TIME, V_BOOST_MINUTES, S_BOOST_TIME_HELP, .step = 5, .unit = S_UNIT_MIN));
 
 #define TEMP(ic, t, v, h, ...) NUM(ic, t, v, h, .step = 5, .dec = 1, .unit = S_UNIT_C, __VA_ARGS__)
+#define TENTHS(ic, t, v, h, ...) NUM(ic, t, v, h, .dec = 1, .unit = S_UNIT_C, __VA_ARGS__)  // offsets, differences
 MENU(m_temp, S_TEMPERATURE, TEMP(IC_THERMOSTAT, S_SETPOINT, V_SETPOINT, S_SETPOINT_HELP),
-     ENUM(IC_TUNE, S_REGULATE_ON, V_REGULATION, S_REGULATE_ON_HELP, OPTS(O_REG)),
-     TEMP(IC_THERMO_LO, S_MIN_SUPPLY_AIR, V_SUPPLY_MIN, S_MIN_SUPPLY_AIR_HELP),
-     TEMP(IC_THERMO_HI, S_MAX_SUPPLY_AIR, V_SUPPLY_MAX, S_MAX_SUPPLY_AIR_HELP),
      TOG(IC_FIRE, S_HEATER, V_HEATER, S_HEATER_HELP, .without = FBIT(FEAT_WATER_HEATER)),  // the unit keeps it on
      TOG(IC_SNOW, S_COOLING, V_COOLING, S_COOLING_HELP, .need = FBIT(FEAT_COOLING)), HEAD(S_SENSORS),
      INFO(IC_THERMO, S_OUTDOOR, i_outdoor, S_OUTDOOR_HELP), INFO(IC_ARROW_R, S_SUPPLY, i_supply, S_SUPPLY_HELP),
      INFO(IC_HOME_THERMO, S_EXTRACT, i_extract, S_EXTRACT_HELP),
      INFO(IC_WATER, S_RETURN_WATER, i_water, S_RETURN_WATER_HELP, .need = FBIT(FEAT_WATER_HEATER)),
-     INFO(IC_THERMO, S_PANEL_SENSOR, i_room, S_PANEL_SENSOR_HELP),
-     ENUM(IC_HOME_THERMO, S_INDOOR_TEMPERATURE, V_INDOOR_SOURCE, S_INDOOR_TEMPERATURE_HELP, OPTS(O_INDOOR)),
-     NUM(IC_THERMO, S_PANEL_SENSOR_OFFSET, V_ROOM_OFFSET, S_PANEL_SENSOR_OFFSET_HELP, .dec = 1, .unit = S_UNIT_C));
+     INFO(IC_THERMO, S_PANEL_SENSOR, i_room, S_PANEL_SENSOR_HELP));
 
 #define DAY(t, d, h) SCR(IC_CALENDAR, t, SCR_DAY, h, .arg = d)
 MENU(m_sched, S_SCHEDULE, TOG(IC_CAL_CLOCK, S_WEEK_PROGRAM, V_WEEK_PROGRAM, S_WEEK_PROGRAM_HELP),
@@ -179,6 +188,7 @@ MENU(m_sched, S_SCHEDULE, TOG(IC_CAL_CLOCK, S_WEEK_PROGRAM, V_WEEK_PROGRAM, S_WE
 
 MENU(m_filter, S_FILTER, INFO(IC_FILTER, S_STATUS, i_filter_left, S_STATUS_HELP),
      INFO(IC_COUNTER, S_RUNNING_SINCE_CHANGE, i_filter_hours, S_RUNNING_SINCE_CHANGE_HELP),
+     INFO(IC_COUNTER, S_TIMES_CHANGED, i_filter_resets, S_TIMES_CHANGED_HELP),
      NUM(IC_CALENDAR, S_CHANGE_EVERY, V_FILTER_INTERVAL, S_CHANGE_EVERY_HELP, .step = 30, .unit = S_UNIT_DAYS),
      ACT(IC_RESTORE, S_FILTERS_CHANGED, A_RESET_FILTER, S_FILTERS_CHANGED_HELP));
 
@@ -279,8 +289,103 @@ MENU(m_system, S_SYSTEM, SCR(IC_INFO, S_ABOUT, SCR_INFO, S_ABOUT_HELP),
      NUM(IC_LAN, S_PANEL_ADDRESS, V_BUS_ADDR, S_PANEL_ADDRESS_HELP),
      TOG(IC_LOCK, S_KEY_LOCK, V_KEY_LOCK, S_KEY_LOCK_HELP),
      TOG(IC_LOCK, S_LOCK_WHEN_IDLE, V_AUTO_LOCK, S_LOCK_WHEN_IDLE_HELP),
+     TOG(IC_COG, S_ADVANCED_MENU, V_ADVANCED, S_ADVANCED_MENU_HELP),
      ACT(IC_REFRESH, S_RESTART_PANEL, A_RESTART, S_RESTART_PANEL_HELP),
-     ACT(IC_RESTORE, S_RESET_PANEL_SETTINGS, A_RESET_PANEL, S_RESET_PANEL_SETTINGS_HELP, .flags = MF_DANGER),
+     ACT(IC_RESTORE, S_RESET_PANEL_SETTINGS, A_RESET_PANEL, S_RESET_PANEL_SETTINGS_HELP, .flags = MF_DANGER));
+
+// ---------------------------------------------------------------- Advanced, the installer's settings
+// Stock had these behind PINs, here they're behind System > Advanced menu.
+MENU(m_adv_fans, S_FANS, FANS(S_MIN_SUPPLY, V_FAN_MIN_SUP, S_MIN_SUPPLY_HELP),
+     FANS(S_MIN_EXTRACT, V_FAN_MIN_EXT, S_MIN_EXTRACT_HELP),
+     FANS(S_NORMAL_SUPPLY, V_FAN_NORM_SUP, S_NORMAL_SUPPLY_HELP),
+     FANS(S_NORMAL_EXTRACT, V_FAN_NORM_EXT, S_NORMAL_EXTRACT_HELP),
+     FANS(S_MAX_SUPPLY, V_FAN_MAX_SUP, S_MAX_SUPPLY_HELP), FANS(S_MAX_EXTRACT, V_FAN_MAX_EXT, S_MAX_EXTRACT_HELP),
+     ENUM(IC_TIMER, S_BOOST_SPEED, V_BOOST_SPEED, S_BOOST_SPEED_HELP, OPTS(MODE_NAMES), .without = FBIT(FEAT_EC_FANS)));
+
+#define PI(t, v, h, ...) NUM(IC_TUNE, t, v, h, __VA_ARGS__)
+#define COOL .need = FBIT(FEAT_COOLING)
+MENU(m_adv_pi, S_REGULATOR_TUNING, HEAD(S_HEATING), PI(S_SUPPLY_AIR_K, V_PI_HEAT_SUP_K, S_SUPPLY_K_HELP),
+     PI(S_SUPPLY_AIR_I, V_PI_HEAT_SUP_I, S_SUPPLY_I_HELP), PI(S_EXTRACT_AIR_K, V_PI_HEAT_EXT_K, S_EXTRACT_K_HELP),
+     PI(S_EXTRACT_AIR_I, V_PI_HEAT_EXT_I, S_EXTRACT_I_HELP), HEAD(S_ROTOR),
+     PI(S_SUPPLY_AIR_K, V_PI_ROTOR_SUP_K, S_SUPPLY_K_HELP), PI(S_SUPPLY_AIR_I, V_PI_ROTOR_SUP_I, S_SUPPLY_I_HELP),
+     PI(S_EXTRACT_AIR_K, V_PI_ROTOR_EXT_K, S_EXTRACT_K_HELP), PI(S_EXTRACT_AIR_I, V_PI_ROTOR_EXT_I, S_EXTRACT_I_HELP),
+     HEAD(S_COOLING), PI(S_SUPPLY_AIR_K, V_PI_COOL_SUP_K, S_SUPPLY_K_HELP, COOL),
+     PI(S_SUPPLY_AIR_I, V_PI_COOL_SUP_I, S_SUPPLY_I_HELP, COOL),
+     PI(S_EXTRACT_AIR_K, V_PI_COOL_EXT_K, S_EXTRACT_K_HELP, COOL),
+     PI(S_EXTRACT_AIR_I, V_PI_COOL_EXT_I, S_EXTRACT_I_HELP, COOL));
+
+MENU(m_adv_reg, S_REGULATION, ENUM(IC_TUNE, S_REGULATE_ON, V_REGULATION, S_REGULATE_ON_HELP, OPTS(O_REG)),
+     TEMP(IC_THERMO_LO, S_MIN_SUPPLY_AIR, V_SUPPLY_MIN, S_MIN_SUPPLY_AIR_HELP),
+     TEMP(IC_THERMO_HI, S_MAX_SUPPLY_AIR, V_SUPPLY_MAX, S_MAX_SUPPLY_AIR_HELP), HEAD(S_NEUTRAL_ZONES),
+     TENTHS(IC_SNOW, S_COOLING_TO_ROTOR, V_NEUTRAL_COOL, S_COOLING_TO_ROTOR_HELP, COOL),
+     TENTHS(IC_ROTOR, S_ROTOR_TO_HEATING, V_NEUTRAL_HEAT, S_ROTOR_TO_HEATING_HELP),
+     SUB(IC_TUNE, S_REGULATOR_TUNING, m_adv_pi, S_REGULATOR_TUNING_HELP));
+
+MENU(m_adv_cooling, S_COOLING, TEMP(IC_THERMO_LO, S_MIN_OUTDOOR_TEMP, V_COOL_MIN_OUTDOOR, S_MIN_OUTDOOR_TEMP_HELP),
+     ENUM(IC_FAN, S_MIN_FAN_SPEED, V_COOL_MIN_SPEED, S_MIN_FAN_SPEED_HELP, OPTS(MODE_NAMES)),
+     NUM(IC_TIMER_SAND, S_RESTART_DELAY, V_COOL_DELAY, S_RESTART_DELAY_HELP, .step = 10, .unit = S_UNIT_S));
+
+static bool recovery_on(void) { return M.adv.cool_recovery; }
+static bool deice_on(void) { return M.adv.deice; }
+MENU(m_adv_recovery, S_HEAT_RECOVERY, TOG(IC_SNOW_THERMO, S_COOLING_RECOVERY, V_COOL_RECOVERY, S_COOLING_RECOVERY_HELP),
+     TENTHS(IC_THERMO, S_DIFFERENCE, V_RECOVERY_DIFF, S_DIFFERENCE_HELP, .shown = recovery_on),
+     ENUM(IC_ALERT, S_ROTOR_ALARM, V_ROTOR_ALARM, S_ROTOR_ALARM_HELP, OPTS(O_ROTOR_ALARM)),
+     TOG(IC_SNOWY, S_DE_ICING, V_DEICE, S_DE_ICING_HELP),
+     TEMP(IC_THERMO_LO, S_STARTS_BELOW, V_DEICE_TEMP, S_STARTS_BELOW_HELP, .shown = deice_on),
+     NUM(IC_ROTOR, S_ROTOR_SPEED, V_DEICE_ROTOR, S_ROTOR_SPEED_HELP, .shown = deice_on),
+     NUM(IC_TIMER_SAND, S_ROTOR_PERIOD, V_DEICE_ROTOR_PERIOD, S_ROTOR_PERIOD_HELP, .shown = deice_on),
+     NUM(IC_REFRESH, S_ROTOR_FREQUENCY, V_DEICE_ROTOR_FREQ, S_ROTOR_FREQUENCY_HELP, .shown = deice_on),
+     TEMP(IC_FAN, S_LESS_AIR_BELOW, V_LESS_AIR_TEMP, S_LESS_AIR_BELOW_HELP, .shown = deice_on),
+     NUM(IC_FAN, S_REDUCED_FAN_SPEED, V_DEICE_FAN, S_REDUCED_FAN_SPEED_HELP, .step = 5, .unit = S_UNIT_PCT,
+         .shown = deice_on),
+     NUM(IC_TIMER_SAND, S_FAN_PERIOD, V_DEICE_FAN_PERIOD, S_FAN_PERIOD_HELP, .shown = deice_on),
+     NUM(IC_REFRESH, S_FAN_FREQUENCY, V_DEICE_FAN_FREQ, S_FAN_FREQUENCY_HELP, .shown = deice_on),
+     NUM(IC_SPEED, S_RAMP_TIME, V_DEICE_RAMP, S_RAMP_TIME_HELP, .shown = deice_on));
+
+MENU(m_adv_sensors, S_SENSORS, TENTHS(IC_ARROW_R, S_SUPPLY_AIR_OFFSET, V_CAL_SUPPLY, S_SENSOR_OFFSET_HELP),
+     TENTHS(IC_HOME_THERMO, S_EXTRACT_AIR_OFFSET, V_CAL_EXTRACT, S_SENSOR_OFFSET_HELP),
+     TENTHS(IC_THERMO, S_OUTDOOR_OFFSET, V_CAL_OUTDOOR, S_SENSOR_OFFSET_HELP),
+     TENTHS(IC_WATER, S_RETURN_WATER_OFFSET, V_CAL_WATER, S_SENSOR_OFFSET_HELP, .need = FBIT(FEAT_WATER_HEATER)),
+     TOG(IC_HOME_THERMO, S_EXTRACT_AIR_SENSOR, V_EXTRACT_SENSOR, S_EXTRACT_AIR_SENSOR_HELP),
+     TOG(IC_THERMO, S_OUTDOOR_SENSOR, V_OUTDOOR_SENSOR, S_OUTDOOR_SENSOR_HELP), HEAD(S_THIS_PANEL),
+     TENTHS(IC_THERMO, S_PANEL_SENSOR_OFFSET, V_ROOM_OFFSET, S_PANEL_SENSOR_OFFSET_HELP),
+     ENUM(IC_HOME_THERMO, S_INDOOR_TEMPERATURE, V_INDOOR_SOURCE, S_INDOOR_TEMPERATURE_HELP, OPTS(O_INDOOR)));
+
+#define AC_FANS .without = FBIT(FEAT_EC_FANS)
+MENU(m_adv_inputs, S_INPUTS, ENUM(IC_FIRE, S_FIRE_SMOKE, V_FIRE_MODE, S_FIRE_SMOKE_HELP, OPTS(O_FIRE)),
+     TOG(IC_FILTER, S_FILTER_GUARD, V_FILTER_GUARD, S_FILTER_GUARD_HELP),
+     TOG(IC_THERMOSTAT, S_EXTERNAL_SETPOINT, V_EXT_SETPOINT, S_EXTERNAL_SETPOINT_HELP), HEAD(S_HOME_AWAY),
+     ENUM(IC_AWAY, S_FAN_SPEED, V_AWAY_SPEED, S_AWAY_SPEED_HELP, OPTS(MODE_NAMES)),
+     TEMP(IC_AWAY, S_SETPOINT, V_AWAY_SETPOINT, S_AWAY_SETPOINT_HELP),
+     NUM(IC_TIMER_SAND, S_HOLD_TIME, V_AWAY_HOLD, S_HOLD_TIME_HELP, .step = 5, .unit = S_UNIT_MIN),
+     HEAD(S_FIREPLACE_INPUT),
+     ENUM(IC_FIREPLACE, S_SUPPLY_SPEED, V_FIREPLACE_SUP, S_SUPPLY_SPEED_HELP, OPTS(MODE_NAMES), AC_FANS),
+     ENUM(IC_FIREPLACE, S_EXTRACT_SPEED, V_FIREPLACE_EXT, S_EXTRACT_SPEED_HELP, OPTS(MODE_NAMES), AC_FANS));
+
+#define DELAY(t, v) NUM(IC_TIMER_SAND, t, v, S_START_DELAY_HELP, .unit = S_UNIT_S)
+MENU(m_adv_start, S_START_AND_STOP, DELAY(S_START_DELAY_1, V_START_DELAY1), DELAY(S_START_DELAY_2, V_START_DELAY2),
+     DELAY(S_START_DELAY_3, V_START_DELAY3), DELAY(S_START_DELAY_4, V_START_DELAY4),
+     NUM(IC_FAN_CLOCK, S_FANS_AFTER_HEATER, V_RUN_ON, S_FANS_AFTER_HEATER_HELP, .step = 10, .unit = S_UNIT_S,
+         .without = FBIT(FEAT_WATER_HEATER)));
+
+#define PCT_OR_OFF .step = 10, .unit = S_UNIT_PCT, .flags = MF_ZERO_OFF
+MENU(m_adv_test, S_TEST, ENUM(IC_FAN, S_FANS, V_TEST_SPEED, S_TEST_FANS_HELP, OPTS(O_TEST_SPEED), AC_FANS),
+     NUM(IC_FAN, S_FANS, V_TEST_FANS, S_TEST_FANS_HELP, PCT_OR_OFF, .need = FBIT(FEAT_EC_FANS)),
+     TOG(IC_FIRE, S_HEATER, V_TEST_HEATER, S_TEST_HEATER_HELP), TOG(IC_ROTOR, S_ROTOR, V_TEST_ROTOR, S_TEST_ROTOR_HELP),
+     NUM(IC_SNOW, S_COOLING, V_TEST_COOLING, S_TEST_COOLING_HELP, PCT_OR_OFF, COOL));
+
+MENU(m_adv_unit, S_UNIT, INFO(IC_ROTOR, S_DS2_ROTOR_GUARD, i_ds2, S_DS2_HELP),
+     INFO(IC_ROTOR, S_DS3_ROTOR_MOTOR, i_ds3, S_DS3_HELP), HEAD(S_PANELS),
+     INFO(IC_MONITOR, S_PANEL_1, i_panel1, S_PANELS_HELP), INFO(IC_MONITOR, S_PANEL_2, i_panel2, S_PANELS_HELP),
+     INFO(IC_MONITOR, S_PANEL_3, i_panel3, S_PANELS_HELP));
+
+MENU(m_advanced, S_ADVANCED, SUB(IC_FAN, S_FANS, m_adv_fans, S_ADV_FANS_HELP),
+     SUB(IC_TUNE, S_REGULATION, m_adv_reg, S_REGULATION_HELP),
+     SUB(IC_SNOW, S_COOLING, m_adv_cooling, S_ADV_COOLING_HELP, COOL),
+     SUB(IC_ROTOR, S_HEAT_RECOVERY, m_adv_recovery, S_HEAT_RECOVERY_HELP),
+     SUB(IC_THERMO, S_SENSORS, m_adv_sensors, S_ADV_SENSORS_HELP), SUB(IC_PLUG, S_INPUTS, m_adv_inputs, S_INPUTS_HELP),
+     SUB(IC_POWER, S_START_AND_STOP, m_adv_start, S_START_AND_STOP_HELP),
+     SUB(IC_SERVICE, S_TEST, m_adv_test, S_TEST_HELP), SUB(IC_INFO, S_UNIT, m_adv_unit, S_UNIT_INFO_HELP),
      ACT(IC_RESTORE, S_FACTORY_RESET_UNIT, A_FACTORY_RESET, S_FACTORY_RESET_UNIT_HELP, .flags = MF_DANGER));
 
 // Rows from the ESP's items, for the Comfort or Smart home menu
@@ -357,6 +462,8 @@ static void s_time(char *b) {
   char t[12];
   sprintf(b, "%02d.%02d.%04d %s", M.dd, M.mo, M.yy, fmt_hm(t, M.hh * 60 + M.mi));
 }
+static void s_advanced(char *b) { strcpy(b, _(S_INSTALLER_SETTINGS)); }
+static bool advanced_on(void) { return M.advanced; }
 static void s_system(char *b) {
   if (M.bus_offline)
     strcpy(b, _(S_NO_CONTACT));
@@ -378,7 +485,8 @@ MENU(m_main, S_MENU, SUB(IC_FAN, S_VENTILATION, m_vent, S_VENTILATION_HELP, .fmt
      SUB(IC_PALETTE, S_DISPLAY, m_display, S_DISPLAY_HELP, .fmt = s_display),
      SUB(IC_MONITOR, S_SCREENSAVER, m_saver, S_SCREENSAVER_MENU_HELP, .fmt = s_saver),
      SUB(IC_CLOCK, S_DATE_AND_TIME, m_time, S_DATE_AND_TIME_HELP, .fmt = s_time),
-     SUB(IC_CHIP, S_SYSTEM, m_system, S_SYSTEM_HELP, .fmt = s_system));
+     SUB(IC_CHIP, S_SYSTEM, m_system, S_SYSTEM_HELP, .fmt = s_system),
+     SUB(IC_COG, S_ADVANCED, m_advanced, S_ADVANCED_HELP, .fmt = s_advanced, .shown = advanced_on));
 
 #define TILE_W 149
 #define TILE_H 44
@@ -401,9 +509,11 @@ static void menu_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
   memset(grid, 0, sizeof *grid);
   ui_hints(S_MOVE, S_OPEN, S_BACK, S_HELP);
-  for (unsigned i = 0; i < m_main.n; i++)
-    if (ui_has(m_main.items[i].need))
-      grid->tile[grid->n++] = &m_main.items[i];
+  for (unsigned i = 0; i < m_main.n; i++) {
+    const mitem_t *it = &m_main.items[i];
+    if (ui_has(it->need) && (!it->shown || it->shown()))
+      grid->tile[grid->n++] = it;
+  }
   frame_t *f = ui_frame();  // tiles may have gone since
   int rows = (grid->n + 1) / 2, last_top = rows > TILE_ROWS ? rows - TILE_ROWS : 0;
   if (f->sel >= grid->n)
@@ -1070,7 +1180,7 @@ static int check(const menu_t *m, char *why, size_t n) {
     if (it->type != MI_ENUM || it->opt_text)
       continue;
     val_def_t d = val_def(it->val);
-    int unnamed = 0;
+    int unnamed = (int) d.min;  // options below the minimum are never offered
     while (unnamed < it->n_opts && it->opts[unnamed] != S_NONE)
       unnamed++;
     if (it->n_opts != d.max + 1 && !bad++)

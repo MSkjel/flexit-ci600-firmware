@@ -125,6 +125,30 @@ void sim_model_init(void) {
   M.heater_enabled = true;
   M.filter_hours = 2900;
   M.filter_days = 180;
+  M.filter_resets = 7;
+  // the installer's settings as they come from the factory
+  M.adv.boost_speed = M.adv.fireplace_sup = MODE_MAX;
+  M.adv.cool_min_speed = MODE_NORMAL;
+  M.adv.away_speed = M.adv.fireplace_ext = MODE_MIN;
+  M.adv.fire_mode = M.adv.rotor_alarm = 1;
+  M.adv.extract_sensor = M.adv.outdoor_sensor = true;
+  M.adv.neutral_cool = M.adv.neutral_heat = M.adv.recovery_diff = 10;
+  M.adv.cool_min_outdoor = 170;
+  M.adv.deice_temp = -150;
+  M.adv.less_air_temp = -250;
+  M.adv.deice_rotor = 25;
+  M.adv.deice_period[0] = M.adv.deice_period[1] = 10;
+  M.adv.deice_freq[0] = M.adv.deice_freq[1] = 2;
+  M.adv.deice_fan = 50;
+  M.adv.deice_ramp = 1;
+  M.adv.away_setpoint = 180;
+  M.adv.away_hold = 60;
+  M.adv.cool_delay = M.adv.run_on = 180;
+  M.adv.start_delay[1] = M.adv.start_delay[2] = M.adv.start_delay[3] = 20;
+  static const uint16_t pi[12] = {60, 900, 60, 900, 0, 90, 0, 90, 0, 90, 0, 90};
+  memcpy(M.adv.pi, pi, sizeof pi);
+  M.panel_version[2] = 0x0001;  // this one
+  M.dip = 0x1;                  // DS1 electric heater, EC fans
   M.week_program = true;
   static const period_t wk[] = {
       {6, 30, 8, 0, MODE_NORMAL, 0, 210}, {8, 0, 15, 30, MODE_MIN, 1, 190}, {15, 30, 22, 30, MODE_NORMAL, 2, 210}};

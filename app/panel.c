@@ -31,7 +31,7 @@ void panel_defaults(void) {
   M.night_idle_brightness = 0;
   M.led_ok = LED_OK_NOT_NIGHT;
   M.led_alarm = M.led_filter = true;
-  M.key_lock = M.auto_lock = false;
+  M.key_lock = M.auto_lock = M.advanced = false;
   M.alarm_popups = POPUPS_ALL;
   M.auto_dst = true;
 }

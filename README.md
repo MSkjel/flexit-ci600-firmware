@@ -36,6 +36,8 @@ Everything the stock panel does:
 - All the unit's temperatures, plus the panel's own room sensor
 - Date and time, with summer time
 - Factory reset of the unit
+- The installer's settings: sensor offsets, cooling, de-icing, the fire/smoke, home/away and fireplace inputs,
+  start delays, regulator tuning, manual tests and the DIP switches. Turn on System > Advanced menu to see them.
 
 Plus:
 
@@ -140,7 +142,7 @@ unit.
 **Screen too bright or too dark.** Display > Brightness, Screensaver > Idle brightness, and Display > Night mode.
 
 **Panel temperature reads high.** The panel warms up a bit when used. Compare with a thermometer after an hour
-of not touching it and set Temperature > Panel sensor offset.
+of not touching it and set Advanced > Sensors > Panel sensor offset.
 
 **Anything else.** System > Restart panel keeps your settings. System > Reset panel settings goes back to the
 defaults but keeps the address and equipment. Neither touches the unit. If you open an issue, add the version
