@@ -81,6 +81,8 @@ The screen goes dark with all three lights on for a few minutes. When it's back:
 2. Do the [first setup](#first-setup). Every update wipes the panel's own settings, since the bootloader erases
    all of its flash. Stuff the unit keeps, like fan speeds, setpoint and the week program, is untouched.
 
+More on flashing, and what to do when it doesn't work, in [docs/flashing.md](docs/flashing.md).
+
 ## First setup
 
 OK on the home screen opens the menu.
@@ -227,6 +229,7 @@ All of these come from the simulator. CI redraws them on every push to main and 
 | `tools/` | Flashing, update files, fonts and icons |
 | `lib/lvgl` | LVGL 8.3.11 submodule, patched with `lib/lvgl-ci600.patch` in the build dir |
 | `lib/tjpgd` | TJpgDec for JPEG pictures |
+| `docs/` | The [hardware](docs/hardware.md) and [flashing](docs/flashing.md) |
 
 ### Build and test
 
