@@ -1671,8 +1671,9 @@ static void test_settings(void) {
     settings_touch(true);
     settings_flush();
   }
-  for (int i = 0; i < FLASH_SETTINGS_PAGES; i++)
-    CHECK(*(const uint32_t *) (stub_flash + i * FLASH_PAGE) == 0x32534943u);  // each holds a copy
+  uint32_t magic = *(const uint32_t *) stub_flash;
+  for (int i = 0; i < FLASH_SETTINGS_PAGES; i++)  // each holds a copy
+    CHECK(magic != 0xFFFFFFFFu && *(const uint32_t *) (stub_flash + i * FLASH_PAGE) == magic);
   model_defaults();
   settings_load();
   CHECK(M.brightness == 10 + 2 * FLASH_SETTINGS_PAGES - 1);
@@ -2223,12 +2224,13 @@ static void test_link(void) {
   // ESP restart: our HELLO goes ahead of the waiting values, even with a full queue
   link_init();
   M.esp_version = PLINK_VERSION;
-  link_poll();  // our own HELLO is in the answer
-  for (uint16_t k = 0x100; plink_room(link_queue()); k++)
+  link_poll();                   // our own HELLO is in the answer
+  const uint16_t spare = 0x0D0;  // keys no message has, so they're values
+  for (uint16_t k = spare; plink_room(link_queue()); k++)
     link_send(k, 1);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
   CHECK(link_queue()->q[0].key == K_HELLO && link_queue()->q[0].value == (uint32_t) PLINK_VERSION << 16);
-  CHECK(queued(0x100, 1) && link_queue()->qn == PLINK_QUEUE);
+  CHECK(queued(spare, 1) && link_queue()->qn == PLINK_QUEUE);
   // A CU60 value in the ignored answer goes again unless a newer one waits. Item values don't.
   link_init();
   M.esp_version = PLINK_VERSION;

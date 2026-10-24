@@ -9,7 +9,7 @@
 #include "unit.h"
 #include <stddef.h>
 
-#define MAGIC 0x32534943u   // "CIS2"
+#define MAGIC 0x33534943u   // "CIS3", a new one when the value keys change
 #define REG_KEY 0x8000u     // the key of a cached CU60 register is REG_KEY | register
 #define QUIET_MS 5000u      // a save waits until nothing has changed for this long
 #define LATER_MS 3600000u   // other changes are written at most this often

@@ -467,14 +467,23 @@ static void test_plink(void) {
   CHECK(l.qn == 1 && l.q[0].key == K_THEME);
   uint8_t b[PBULK_ANSWER_MAX];
   int n = plink_pack(&l, b, sizeof b);
-  CHECK(n == PLINK_NUMBER_BYTES && b[0] == (K_THEME & 0xFF) && b[2] == 4 && b[3] == 2 && !l.qn);
+  CHECK(n == 4 && b[0] == (K_THEME & 0xFF) && b[1] == K_THEME >> 8 && b[2] == 1 && b[3] == 2 && !l.qn);
+  // numbers go without their high zero bytes, 0 as none at all, a negative one whole
+  const uint32_t nums[] = {0, 1, 0xFF, 0x100, 0x123456, 0x80000000u, (uint32_t) -40};
+  const int lens[] = {0, 1, 1, 2, 3, 4, 4};
+  for (int i = 0; i < 7; i++) {
+    uint8_t v[4];
+    int len = plink_put_number(v, nums[i]);
+    CHECK(len == lens[i] && plink_number(v, len) == nums[i]);
+  }
   for (int i = 0; i < PLINK_QUEUE - 1; i++)
     plink_send(&l, K_ACTION, (uint32_t) i);
   CHECK(!plink_room(&l) && !plink_send(&l, K_ACTION, 99) && l.dropped == 1);
   // a HELLO always fits, goes first and replaces a waiting one
   CHECK(plink_send(&l, K_HELLO, 7) && l.qn == PLINK_QUEUE && l.q[0].key == K_HELLO && !l.q[1].value);
   CHECK(plink_send(&l, K_HELLO, 8) && l.qn == PLINK_QUEUE && l.q[0].value == 8 && !l.q[1].value);
-  CHECK(plink_pack(&l, b, 20) == 2 * PLINK_NUMBER_BYTES && l.qn == PLINK_QUEUE - 2 && l.q[0].value == 1);
+  CHECK(plink_waiting(&l) == 4 + 3 + 4 * 30);  // HELLO 8, actions 0 and 1..30
+  CHECK(plink_pack(&l, b, 20) == 4 + 3 + 3 * 4 && l.qn == PLINK_QUEUE - 5 && l.q[0].value == 4);
   CHECK(plink_kind(K_ITEM_DEF + 3) == PLINK_BYTES && plink_kind(K_ITEM_LABEL + N_ITEMS - 1) == PLINK_BYTES &&
         plink_kind(K_ITEM_UNIT + 7) == PLINK_BYTES && plink_kind(K_ITEM_HELP) == PLINK_BYTES &&
         plink_kind(K_ITEM_ON) == PLINK_BYTES && plink_kind(K_ITEM_OFF + N_ITEMS - 1) == PLINK_BYTES &&

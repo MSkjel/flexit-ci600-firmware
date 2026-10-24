@@ -5,25 +5,29 @@
 // clang-format off: a table, laid out by hand
 #define PANEL_VALUES(X) \
     /* panel-only, not sent to the ESP. The key is only for flash */ \
-    X(NIGHT_THEME,     0x060, M.night_theme,        0, N_THEMES, VF_SAVED | VF_LAYOUT, 0, 1) /* 0 = same as day */ \
-    X(DASH_TEMP,       0x061, M.dash_temp,          0, DT_COUNT - 1, VF_SAVED | VF_LAYOUT, 0, 1) /* DT_* */ \
-    X(SAVER_TEXT,      0x062, M.saver_text,         0, SAVER_TEXT_COUNT - 1, VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(SAVER_TOP,       0x063, M.saver_top,          0, 1,    VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(GO_HOME,         0x064, M.go_home,            0, 1,    VF_SAVED, 0, 1) \
-    X(SHOW_FLOW,       0x065, M.view_on[VIEW_FLOW], 0, 1,    VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(SHOW_TREND,      0x066, M.view_on[VIEW_TREND], 0, 1,   VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(SHOW_SENSORS,    0x067, M.view_on[VIEW_SENSORS], 0, 1, VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(SHOW_COMFORT,    0x068, M.view_on[VIEW_COMFORT], 0, 1, VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(SHOW_SMART,      0x069, M.view_on[VIEW_SMART], 0, 1,   VF_SAVED | VF_LAYOUT, 0, 1) \
-    X(TEMP_DEC,        0x06A, M.temp_dec,           0, 1,    VF_SAVED, 0, 1) \
-    X(LED_OK,          0x06B, M.led_ok,             0, LED_OK_COUNT - 1, VF_SAVED, 0, 1) \
-    X(LED_ALARM,       0x06C, M.led_alarm,          0, 1,    VF_SAVED, 0, 1) \
-    X(LED_FILTER,      0x06D, M.led_filter,         0, 1,    VF_SAVED, 0, 1) \
-    X(AUTO_LOCK,       0x06E, M.auto_lock,          0, 1,    VF_SAVED, 0, 1) \
-    X(ALARM_POPUPS,    0x06F, M.alarm_popups,       0, POPUPS_COUNT - 1, VF_SAVED, 0, 1) \
-    X(AUTO_DST,        0x070, M.auto_dst,           0, 1,    VF_SAVED, 0, 1) \
-    X(DST_NOW,         0x071, M.dst_now,            0, 1,    VF_SAVED | VF_RO, 0, 1) /* kept across restarts */ \
-    X(FAST_DISPLAY,    0x072, M.fast_display,       0, 1,    VF_SAVED, 0, 1) \
+    /* display */ \
+    X(NIGHT_THEME,     0x0A0, M.night_theme,        0, N_THEMES, VF_SAVED | VF_LAYOUT, 0, 1) /* 0 = same as day */ \
+    X(DASH_TEMP,       0x0A1, M.dash_temp,          0, DT_COUNT - 1, VF_SAVED | VF_LAYOUT, 0, 1) /* DT_* */ \
+    X(SAVER_TEXT,      0x0A2, M.saver_text,         0, SAVER_TEXT_COUNT - 1, VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(SAVER_TOP,       0x0A3, M.saver_top,          0, 1,    VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(GO_HOME,         0x0A4, M.go_home,            0, 1,    VF_SAVED, 0, 1) \
+    X(TEMP_DEC,        0x0A5, M.temp_dec,           0, 1,    VF_SAVED, 0, 1) \
+    X(FAST_DISPLAY,    0x0A6, M.fast_display,       0, 1,    VF_SAVED, 0, 1) \
+    /* home views */ \
+    X(SHOW_FLOW,       0x0B0, M.view_on[VIEW_FLOW], 0, 1,    VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(SHOW_TREND,      0x0B1, M.view_on[VIEW_TREND], 0, 1,   VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(SHOW_SENSORS,    0x0B2, M.view_on[VIEW_SENSORS], 0, 1, VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(SHOW_COMFORT,    0x0B3, M.view_on[VIEW_COMFORT], 0, 1, VF_SAVED | VF_LAYOUT, 0, 1) \
+    X(SHOW_SMART,      0x0B4, M.view_on[VIEW_SMART], 0, 1,   VF_SAVED | VF_LAYOUT, 0, 1) \
+    /* lights */ \
+    X(LED_OK,          0x0B8, M.led_ok,             0, LED_OK_COUNT - 1, VF_SAVED, 0, 1) \
+    X(LED_ALARM,       0x0B9, M.led_alarm,          0, 1,    VF_SAVED, 0, 1) \
+    X(LED_FILTER,      0x0BA, M.led_filter,         0, 1,    VF_SAVED, 0, 1) \
+    /* system */ \
+    X(AUTO_LOCK,       0x0C0, M.auto_lock,          0, 1,    VF_SAVED, 0, 1) \
+    X(ALARM_POPUPS,    0x0C1, M.alarm_popups,       0, POPUPS_COUNT - 1, VF_SAVED, 0, 1) \
+    X(AUTO_DST,        0x0C2, M.auto_dst,           0, 1,    VF_SAVED, 0, 1) \
+    X(DST_NOW,         0x0C3, M.dst_now,            0, 1,    VF_SAVED | VF_RO, 0, 1) /* kept across restarts */ \
     /* clock, not on the link or in flash since the RTC keeps it. So no key */ \
     X(HOUR,            0,     M.hh,                 0, 23,   VF_CLOCK, 0, 1) \
     X(MINUTE,          0,     M.mi,                 0, 59,   VF_CLOCK, 0, 1) \
