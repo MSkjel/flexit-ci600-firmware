@@ -14,6 +14,7 @@ int pn_online(void);
 int pn_get(uint16_t key);
 int pn_known(uint16_t key);
 int pn_reg(uint16_t reg);
+void pn_set_reg(uint16_t reg, int v);
 void pn_set(uint16_t key, int v);
 void pn_action(int a);
 int pn_idle(void);
@@ -514,9 +515,8 @@ int main(int argc, char **argv) {
   CHECK(!link_early, "%d frames sent sooner than %d us after the status", link_early, PBUS_START_MIN_US);
   CHECK(!link_late, "%d answers ended later than %u us after the status", link_late, (unsigned) link_end());
   CHECK(gap_frames > 0, "nothing sent in the gaps after polls");
-  CHECK(pn_get(K_SETPOINT) == 200 && pn_get(K_FAN_MAX_SUP) != 20,
-        "the ESP sent unit settings it doesn't have: setpoint %d, max supply %d", pn_get(K_SETPOINT),
-        pn_get(K_FAN_MAX_SUP));
+  CHECK(pn_get(K_SETPOINT) == 200 && pn_reg(0x004) != 20,
+        "the ESP sent unit settings it doesn't have: setpoint %d, max supply %d", pn_get(K_SETPOINT), pn_reg(0x004));
   printf("  linked and settled after %d cycles\n", c);
   CHECK(panel_screensaver.state == panel_screensaver.options[pn_get(K_SCREENSAVER)], "screensaver %s vs panel %d",
         panel_screensaver.state.c_str(), pn_get(K_SCREENSAVER));
@@ -1866,7 +1866,7 @@ int main(int argc, char **argv) {
 
   step("the ESP restarts while the panel has a newer unit setting, in Norwegian");
   server->hold[0x00D] = 150;  // the ESP's flash copy of the supply min
-  pn_set(K_SUPPLY_MIN, 160);  // changed on the panel while the ESP was down
+  pn_set_reg(0x00D, 160);     // changed on the panel while the ESP was down
   pn_set(K_LANGUAGE, 1);
   run(20);
   flexit::panel::language = 0;  // what the ESP has after a restart
@@ -1880,19 +1880,18 @@ int main(int argc, char **argv) {
   }
   CHECK(!english && !strcmp(pitem("fireplace").label, "Peis"), "in English for %d cycles after the hello, then '%s'",
         english, pitem("fireplace").label);
-  CHECK(pn_get(K_SUPPLY_MIN) == 160, "the ESP's hello put its old supply min %d on the panel", pn_get(K_SUPPLY_MIN));
+  CHECK(pn_reg(0x00D) == 160, "the ESP's hello put its old supply min %d on the panel", pn_reg(0x00D));
   pn_restart();  // the panel asks, and keeps its copy over the ESP's flash one
   c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
   run(20);
-  CHECK(c >= 0 && pn_get(K_SUPPLY_MIN) == 160, "the panel restarted and took the ESP's old supply min %d",
-        pn_get(K_SUPPLY_MIN));
-  int supply_max = pn_get(K_SUPPLY_MAX) + 10;
+  CHECK(c >= 0 && pn_reg(0x00D) == 160, "the panel restarted and took the ESP's old supply min %d", pn_reg(0x00D));
+  int supply_max = pn_reg(0x00E) + 10;
   server->setting(0x00E, (uint16_t) supply_max);  // changed on another panel while this one restarts
   pn_restart();
   c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
   run(20);
-  CHECK(c >= 0 && pn_get(K_SUPPLY_MAX) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
-        pn_get(K_SUPPLY_MAX), supply_max);
+  CHECK(c >= 0 && pn_reg(0x00E) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
+        pn_reg(0x00E), supply_max);
   server->setting(0x0B5, 75);  // a regulator value, which has no link key: only the register goes
   pn_restart();
   c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);

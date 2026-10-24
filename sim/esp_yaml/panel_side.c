@@ -44,6 +44,7 @@ int pn_online(void) { return M.esp_online; }
 int pn_get(uint16_t key) { return (int) val_get(val_by_key(key)); }
 int pn_known(uint16_t key) { return val_known(val_by_key(key)); }
 int pn_reg(uint16_t reg) { return (int) val_get(val_by_cx60(reg)); }  // the panel's value for a CX60 register
+void pn_set_reg(uint16_t reg, int v) { val_set(val_by_cx60(reg), v); }
 void pn_set(uint16_t key, int v) { val_set(val_by_key(key), v); }
 void pn_action(int a) { do_action((action_t) a); }
 int pn_idle(void) { return !link_queue()->qn && !link_bulk_state()->out_full; }  // nothing waiting for the ESP

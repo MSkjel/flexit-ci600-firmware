@@ -29,6 +29,21 @@
     X(AUTO_DST,        0x0C2, M.auto_dst,           0, 1,    VF_SAVED, 0, 1) \
     X(DST_NOW,         0x0C3, M.dst_now,            0, 1,    VF_SAVED | VF_RO, 0, 1) /* kept across restarts */ \
     X(ADVANCED,        0x0C4, M.advanced,           0, 1,    VF_SAVED | VF_LAYOUT, 0, 1) \
+    /* the unit's values. The CX60 relays every change to all panels and the ESP, so no key */ \
+    X(MODE,            0,     M.mode,               0, MODE_MAX, VF_CX60 | VF_CMD, 0x000, 1) \
+    X(BOOST,           0,     M.boost_on,           0, 1,    VF_CX60 | VF_CMD, 0, 1) /* commands 0x13A/0x13B */ \
+    X(BOOST_MINUTES,   0,     M.boost_minutes,      0, 360,  VF_CX60, 0x091, 1) \
+    X(SUPPLY_MIN,      0,     M.supply_min,        50, 250,  VF_CX60, 0x00D, 1) \
+    X(SUPPLY_MAX,      0,     M.supply_max,       150, 450,  VF_CX60, 0x00E, 1) \
+    X(REGULATION,      0,     M.regulation,         0, REG_COUNT - 1, VF_CX60, 0x114, 1) \
+    X(HEATER,          0,     M.heater_enabled,     0, 1,    VF_CX60 | VF_PER_PANEL, 0x13F, 1) \
+    X(COOLING,         0,     M.cooling_enabled,    0, 1,    VF_CX60, 0x115, 1) \
+    X(FAN_MIN_SUP,     0,     M.fan_pct[0][0],     20, 100,  VF_CX60, 0x002, 1) \
+    X(FAN_MAX_SUP,     0,     M.fan_pct[2][0],     20, 100,  VF_CX60, 0x004, 1) \
+    X(FAN_MIN_EXT,     0,     M.fan_pct[0][1],     20, 100,  VF_CX60, 0x007, 1) \
+    X(FAN_MAX_EXT,     0,     M.fan_pct[2][1],     20, 100,  VF_CX60, 0x009, 1) \
+    X(FILTER_INTERVAL, 0,     M.filter_days,       30, 360,  VF_CX60, 0x016, 1) /* days */ \
+    X(WEEK_PROGRAM,    0,     M.week_program,       0, 1,    VF_CX60, 0x117, 1) \
     /* the installer's settings, kept in the CX60. The ranges are stock's */ \
     X(BOOST_SPEED,     0,     M.adv.boost_speed,    1, 3,    VF_CX60, 0x090, 1) /* AC fans */ \
     X(NEUTRAL_COOL,    0,     M.adv.neutral_cool,   0, 50,   VF_CX60, 0x011, 1) \
@@ -115,7 +130,6 @@ typedef enum {
 
 // Code relies on these ids being consecutive
 _Static_assert(V_TILE4 == V_TILE1 + 3, "tiles");
-_Static_assert(V_FAN_MAX_EXT - V_FAN_MIN_SUP == 5, "fan percentages");
 _Static_assert(V_PERIOD_SETPOINT - V_PERIOD_START == 3, "the period's values");
 
 // One VALUES() row, see plink_values.h for the columns

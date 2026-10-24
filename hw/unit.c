@@ -327,8 +327,7 @@ static void reg_changed(uint16_t r) {
     id = V_NONE;
   if (id != V_NONE) {
     val_set_bus(id, v / val_def(id).scale);
-    if (id >= V_FAN_MIN_SUP && id <= V_FAN_MAX_EXT)
-      fan_outputs();
+    fan_outputs();  // in case it was a fan %
   }
 }
 
@@ -531,8 +530,7 @@ void plat_value_changed(val_t v) {
   if ((d.flags & VF_MASTER) && !is_master() && HAS(FEAT_ESP) && M.esp_online)
     return;
   bus_write(val_cx60_reg(v), (int16_t) (val_get(v) * d.scale));
-  if (v >= V_FAN_MIN_SUP && v <= V_FAN_MAX_EXT)
-    fan_outputs();
+  fan_outputs();  // in case it was a fan %
   if (v == V_REGULATION && M.regulation == REG_EXTRACT)
     bus_write(R_CFG_EXTRACT_SENSOR, 1);  // like the stock panel, the regulation does nothing without it
 }

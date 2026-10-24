@@ -1323,8 +1323,6 @@ static void test_values(void) {
   CHECK(M.bus_addr == 3);  // the ESP may only read it
   val_load(V_THEME, 9);
   CHECK(M.theme == N_THEMES - 1);  // loaded from flash, also clamped
-  val_set_remote(V_FAN_MIN_SUP, 55);
-  CHECK(M.fan_pct[0][0] == 55);
 }
 
 // ---------------------------------------------------------------- the ESP's items
