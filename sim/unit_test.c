@@ -2026,6 +2026,14 @@ static void test_advanced(void) {
   cx60(0x10F, 0);
   unit_poll();
   CHECK(M.dip == 0x8);
+  // From the ESP after we started, like the CX60 sent it. A change of ours the CX60 hasn't read yet stays.
+  plat_cx60_reg(0x0B5, 75);
+  unit_poll();
+  CHECK(M.adv.pi[0] == 75);
+  val_set(V_PI_HEAT_SUP_I, 500);
+  plat_cx60_reg(0x0B6, 900);
+  unit_poll();
+  CHECK(M.adv.pi[1] == 500 && MB.hold[0x0B6] == 500);
   // A test writes its value, then its enable, and is over after a minute like in the CX60
   val_set(V_TEST_SPEED, MODE_MAX + 1);
   CHECK(MB.hold[0x0A8] == MODE_MAX && MB.hold[0x143] == 1 && coil(0x0A8) && coil(0x143));

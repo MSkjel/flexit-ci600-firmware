@@ -235,6 +235,11 @@ void plat_value_changed(val_t v) {
 }
 
 void plat_time_set(void) {}
+void plat_cx60_reg(uint16_t reg, int16_t value) {  // hw/unit.c takes it like the CX60 sent it
+  val_t v = val_by_cx60(reg);
+  if (v != V_NONE)
+    val_set_bus(v, value / (int) val_def(v).scale);
+}
 void plat_save(bool by_user) { (void) by_user; }
 void plat_save_now(void) {}
 

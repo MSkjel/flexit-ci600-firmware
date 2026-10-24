@@ -141,6 +141,9 @@ static void number(uint16_t key, uint32_t v) {
     case K_ACTION:
       do_action_remote((int) v);
       return;
+    case K_CX60_REG:
+      plat_cx60_reg((uint16_t) (v >> 16), (int16_t) v);
+      return;
     case K_SHOW_VIEW:
       if (v < VIEW_COUNT) {
         input_activity();  // wakes it, or the view would sit at the idle brightness

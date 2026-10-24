@@ -537,6 +537,14 @@ void plat_value_changed(val_t v) {
     bus_write(R_CFG_EXTRACT_SENSOR, 1);  // like the stock panel, the regulation does nothing without it
 }
 
+// From the ESP after we started. A change of ours the CX60 hasn't read yet is newer, so it stays.
+void plat_cx60_reg(uint16_t reg, int16_t value) {
+  uint32_t s = board_irq_save();
+  if (reg < MB_REGS && !(MB.pending[reg / 32] >> (reg % 32) & 1))
+    mb_load(reg, value);
+  board_irq_restore(s);
+}
+
 void plat_save(bool by_user) { settings_touch(by_user); }
 
 void plat_save_now(void) {

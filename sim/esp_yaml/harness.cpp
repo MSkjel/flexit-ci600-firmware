@@ -13,6 +13,7 @@ void pn_second(void);
 int pn_online(void);
 int pn_get(uint16_t key);
 int pn_known(uint16_t key);
+int pn_reg(uint16_t reg);
 void pn_set(uint16_t key, int v);
 void pn_action(int a);
 int pn_idle(void);
@@ -1870,7 +1871,7 @@ int main(int argc, char **argv) {
   run(20);
   flexit::panel::language = 0;  // what the ESP has after a restart
   flexit::panel::restore_language();
-  flexit::panel::changed.reset();
+  flexit::panel::seen.reset();
   flexit::panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);  // what panel::setup() sends
   int english = 0;  // cycles the panel showed an item in English
   for (int k = 0; k < 100; k++) {
@@ -1892,6 +1893,11 @@ int main(int argc, char **argv) {
   run(20);
   CHECK(c >= 0 && pn_get(K_SUPPLY_MAX) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
         pn_get(K_SUPPLY_MAX), supply_max);
+  server->setting(0x0B5, 75);  // a regulator value, which has no link key: only the register goes
+  pn_restart();
+  c = run_until([] { return pn_online() && flexit::panel::link::connected && settled(); }, 2000);
+  run(20);
+  CHECK(c >= 0 && pn_reg(0x0B5) == 75, "the panel restarted and has heating K %d, the ESP saw 75", pn_reg(0x0B5));
 
   step("notes while the panel is away or restarting");
   pn_note(&icon, &level, &fresh);
