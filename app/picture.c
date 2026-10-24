@@ -435,10 +435,20 @@ bool pic_read(const lv_area_t *a, lv_color_t *buf, int stride) {
         unpack_row(y);
         P.line_y = (int16_t) y;
       }
-      for (int x = a->x1; x <= a->x2; x++) {
-        uint8_t b = P.line[x >> 1];
-        buf[x - a->x1] = P.pal[x & 1 ? b & 15 : b >> 4];
+      const uint8_t *src = &P.line[a->x1 >> 1];
+      lv_color_t *d = buf;
+      int x = a->x1;
+      if (x & 1) {
+        *d++ = P.pal[*src++ & 15];
+        x++;
       }
+      for (; x < a->x2; x += 2, d += 2) {  // a byte at a time, two pixels
+        uint8_t b = *src++;
+        d[0] = P.pal[b >> 4];
+        d[1] = P.pal[b & 15];
+      }
+      if (x == a->x2)
+        *d = P.pal[*src >> 4];
     }
     return true;
   }

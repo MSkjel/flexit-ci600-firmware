@@ -11,7 +11,7 @@ CC      := arm-none-eabi-gcc
 OBJCOPY := arm-none-eabi-objcopy
 SIZE    := arm-none-eabi-size
 ARCH    := -mcpu=cortex-m3 -mthumb
-CFLAGS  := $(ARCH) -Os -g -std=gnu11 $(WARN) -ffunction-sections -fdata-sections -MMD -MP -I. $(INCLUDES) $(DEFS)
+CFLAGS  := $(ARCH) -O2 -g -std=gnu11 $(WARN) -ffunction-sections -fdata-sections -MMD -MP -I. $(INCLUDES) $(DEFS)
 LDFLAGS := $(ARCH) -T $(BUILD)/ci600.ld -nostartfiles -Wl,--gc-sections -Wl,-Map=$(BUILD)/ci600.map --specs=nano.specs \
            -Wl,--no-warn-rwx-segments
 
@@ -43,11 +43,16 @@ $(BUILD)/%.o: $(ROOT)/%.c $(ROOT)/config.mk $(FW_STAMP) | $(LVGL_PATCHED)
 
 $(BUILD)/ui/ui_info.o: $(AUTHORS_H)
 
-# LVGL at -O2, it draws faster and there's room in flash. Warnings off, they aren't ours
-$(BUILD)/lib/%.o: CFLAGS += -O2 -w
+# LVGL, the JPEG decoder and our decoders at -O3, the pixel loops unrolled too. It costs flash, not RAM.
+# LVGL's warnings off, they aren't ours
+$(BUILD)/lib/%.o: CFLAGS += -O3 -w
+$(BUILD)/app/picture.o $(BUILD)/app/anim.o: CFLAGS += -O3
+$(BUILD)/lib/lvgl/src/draw/sw/%.o: CFLAGS += -funroll-loops
+$(BUILD)/lib/lvgl/src/draw/lv_draw_mask.o: CFLAGS += -funroll-loops
+$(BUILD)/lib/lvgl/src/misc/lv_color.o: CFLAGS += -funroll-loops
 # the patched copies find their relative includes next to the originals
 $(LV_COPY)/%.o: $(LV_COPY)/%.c $(ROOT)/config.mk $(FW_STAMP)
-	$(CC) $(CFLAGS) -O2 -w -I$(LVGL)/$(dir $*) -c -o $@ $<
+	$(CC) $(CFLAGS) -O3 -w -I$(LVGL)/$(dir $*) -c -o $@ $<
 
 flash: $(BUILD)/ci600_full.bin
 	python3 $(ROOT)/tools/flash.py $<
