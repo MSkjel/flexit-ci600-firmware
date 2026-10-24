@@ -15,7 +15,7 @@ uint32_t plat_entropy(void);       // different on every start, for the ESP link
 typedef struct {
   uint32_t uptime_s;                         // since this start
   uint32_t restarts;                         // since the power came on
-  uint32_t draw_max_us;                      // the slowest screen update
+  uint32_t full_us, full_send_us;            // the last big redraw scaled to the whole screen, and sending
   uint32_t stack_free;                       // bytes of stack never used
   uint32_t saves;                            // settings saves since the flash was erased
   uint32_t heap_size, heap_used, heap_peak;  // LVGL's memory, bytes

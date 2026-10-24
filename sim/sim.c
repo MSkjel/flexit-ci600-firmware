@@ -962,7 +962,7 @@ int main(int argc, char **argv) {
   open(S_NIGHT_MODE);
   shot("65_night_menu");
   key(KEY_BACK);
-  go(S_KEY_HINTS);
+  go(S_FAST_DISPLAY);
   shot("66_display_menu_end");
   ui_go_home();
   M.heat_pct = 0;

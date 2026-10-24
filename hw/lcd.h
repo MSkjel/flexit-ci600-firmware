@@ -8,3 +8,5 @@ bool lcd_init(void);  // false if the controller id is one the stock firmware do
 // all out, don't touch px before that. Waits for the previous transfer first.
 void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(void));
 extern volatile uint32_t lcd_send_us;  // time spent sending pixels, us, for PERF
+void lcd_fast(bool on);                // pixels at 18 MHz instead of 9, from the next area on
+void lcd_wait(void);                   // until the last area is out

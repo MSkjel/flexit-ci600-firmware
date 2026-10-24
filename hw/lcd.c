@@ -139,6 +139,7 @@ bool lcd_init(void) {
 // out in one burst in LVGL's order. Stock set the cursor for every column.
 volatile uint32_t lcd_send_us;
 static volatile bool sending;
+static uint32_t pixel_br = SPI_CR1_BR_DIV8;  // registers always go at 9 MHz
 static void (*send_done)(void);
 static uint32_t send_start;
 
@@ -159,7 +160,7 @@ void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(v
   while (SPI1->SR & SPI_SR_BSY) {
   }
   SPI1->CR1 &= ~SPI_CR1_SPE;  // 16-bit frames, one pixel each, high byte first
-  SPI1->CR1 |= SPI_CR1_DFF;
+  SPI1->CR1 = (SPI1->CR1 & ~SPI_CR1_BR) | SPI_CR1_DFF | pixel_br;
   SPI1->CR1 |= SPI_CR1_SPE;
   sending = true;
   send_done = done;
@@ -182,11 +183,18 @@ void DMA1_Channel3_IRQHandler(void) {
   }
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
   SPI1->CR1 &= ~SPI_CR1_SPE;
-  SPI1->CR1 &= ~SPI_CR1_DFF;
+  SPI1->CR1 = (SPI1->CR1 & ~(SPI_CR1_DFF | SPI_CR1_BR)) | SPI_CR1_BR_DIV8;
   SPI1->CR1 |= SPI_CR1_SPE;
   cs(0);
   lcd_send_us += board_us() - send_start;
   sending = false;
   if (send_done)
     send_done();
+}
+
+void lcd_fast(bool on) { pixel_br = on ? SPI_CR1_BR_DIV4 : SPI_CR1_BR_DIV8; }
+
+void lcd_wait(void) {
+  while (sending)
+    board_sleep();  // woken by the DMA interrupt
 }

@@ -300,6 +300,9 @@
   X(TEMPERATURES_HELP, "Show temperatures as 21.5° or 22°. Setpoints always show the decimal.") \
   X(KEY_HINTS, "Key hints") \
   X(KEY_HINTS_HELP, "Show what the keys do in the line at the bottom.") \
+  X(FAST_DISPLAY, "Fast display") \
+  X(FAST_DISPLAY_HELP, "Sends pictures to the screen twice as fast, above its rated speed. Turn it off if anything " \
+                       "looks wrong.") \
   X(DATE_AND_TIME, "Date and time") \
   X(HOUR, "Hour") \
   X(HOUR_HELP, "Set the hour.") \
@@ -494,7 +497,8 @@
   X(MEMORY, "Memory") \
   X(MEMORY_USE, "%s of %u KB, peak %s") \
   X(FREE_STACK, "Free stack") \
-  X(SLOWEST_REDRAW, "Slowest redraw") \
+  X(FULL_REDRAW, "Full redraw") \
+  X(REDRAW_SENDING, "%lu ms, %lu sending") \
   X(SETTINGS_SAVES, "Settings saves") \
   X(DIAG_PAGE_HELP, \
     "For finding faults. Restarts counts since the power came on and should stay low. Processor is the share of the " \

@@ -72,7 +72,8 @@ static int info_rows(int page, kv_t *r) {
     char used[12], peak[12];
     ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, s.heap_used), (unsigned) (s.heap_size / 1024), kb(peak, s.heap_peak));
     ROW(S_FREE_STACK, "%s KB", kb(used, s.stack_free));
-    ROW(S_SLOWEST_REDRAW, "%lu ms", (unsigned long) ((s.draw_max_us + 500) / 1000));
+    ROW(S_FULL_REDRAW, _(S_REDRAW_SENDING), (unsigned long) ((s.full_us + 500) / 1000),
+        (unsigned long) ((s.full_send_us + 500) / 1000));
     ROW(S_SETTINGS_SAVES, "%lu", (unsigned long) s.saves);
   } else {
     ROW(S_UNIT, "%s", M.bus_offline ? _(S_NO_CONTACT_LOWER) : _(S_TALKING));

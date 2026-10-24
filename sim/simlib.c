@@ -96,7 +96,8 @@ bool plat_const(const void *p) { return (const char *) p >= etext && (const char
 void plat_stats(plat_stats_t *s) {
   *s = (plat_stats_t) {.uptime_s = 3 * 86400 + 4 * 3600 + 12 * 60 + 7,
                        .restarts = 1,
-                       .draw_max_us = 41300,
+                       .full_us = 152300,
+                       .full_send_us = 136900,
                        .stack_free = 5312,
                        .saves = 128,
                        .heap_size = 16384,

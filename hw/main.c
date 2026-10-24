@@ -56,14 +56,24 @@ static uint32_t heap_used(void) {
   return m.total_size - m.free_size;
 }
 
+static uint32_t full_us, full_send_us;  // the last big redraw scaled to the whole screen, for Diagnostics
+
 static void draw(void) {
   flush_px = 0;
   lcd_send_us = 0;
+  lcd_fast(M.fast_display);
   uint32_t t = board_us();
   lv_timer_handler();
   if (!flush_px)
     return;
+  bool big = flush_px >= (uint32_t) SCR_W * SCR_H / 2;  // a new page, the status bar stays
+  if (big)
+    lcd_wait();  // so the last strip counts
   uint32_t us = board_us() - t;
+  if (big) {
+    full_us = (uint32_t) ((uint64_t) us * SCR_W * SCR_H / flush_px);
+    full_send_us = (uint32_t) ((uint64_t) lcd_send_us * SCR_W * SCR_H / flush_px);
+  }
   PERF.frames++;
   PERF.last_us = us;
   if (us > PERF.max_us)
@@ -93,7 +103,8 @@ void plat_stats(plat_stats_t *s) {
   uint32_t used = heap_used();
   *s = (plat_stats_t) {.uptime_s = uptime_s,
                        .restarts = board_restarts(),
-                       .draw_max_us = PERF.max_us,
+                       .full_us = full_us,
+                       .full_send_us = full_send_us,
                        .stack_free = PERF.stack_free,
                        .saves = settings_saves(),
                        .heap_size = LV_MEM_SIZE,

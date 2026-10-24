@@ -143,6 +143,7 @@ typedef struct {
   bool go_home;                   // back to the home view when idle
   bool view_on[VIEW_COUNT];       // views BACK cycles through, dashboard always
   bool temp_dec;                  // temperatures with one decimal
+  bool fast_display;              // pixels to the screen at 18 MHz, over the controller's rated 10
   uint8_t led_ok;                 // LED_OK_*
   bool led_alarm, led_filter;     // use the alarm and filter lights
   bool auto_lock;                 // lock the keys when idle

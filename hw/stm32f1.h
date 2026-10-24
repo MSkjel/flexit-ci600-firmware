@@ -144,6 +144,7 @@ typedef struct {
 #define SPI_CR1_CPOL (1u << 1)
 #define SPI_CR1_MSTR (1u << 2)
 #define SPI_CR1_BR (7u << 3)
+#define SPI_CR1_BR_DIV4 (1u << 3)
 #define SPI_CR1_BR_DIV8 (2u << 3)
 #define SPI_CR1_BR_DIV16 (3u << 3)
 #define SPI_CR1_SPE (1u << 6)

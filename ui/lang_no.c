@@ -297,6 +297,9 @@ const char *const LANG_NO[S_COUNT] = {
     [S_TEMPERATURES_HELP] = "Vis temperaturer som 21.5° eller 22°. Ønsket temperatur vises alltid med desimal.",
     [S_KEY_HINTS] = "Tastehjelp",
     [S_KEY_HINTS_HELP] = "Vis hva tastene gjør på linjen nederst.",
+    [S_FAST_DISPLAY] = "Rask skjerm",
+    [S_FAST_DISPLAY_HELP] =
+        "Sender bilder til skjermen dobbelt så fort, over oppgitt hastighet. Slå det av hvis noe ser feil ut.",
     [S_DATE_AND_TIME] = "Dato og tid",
     [S_HOUR] = "Time",
     [S_HOUR_HELP] = "Still inn timen.",
@@ -488,7 +491,8 @@ const char *const LANG_NO[S_COUNT] = {
     [S_MEMORY] = "Minne",
     [S_MEMORY_USE] = "%s av %u KB, topp %s",
     [S_FREE_STACK] = "Ledig stakk",
-    [S_SLOWEST_REDRAW] = "Tregeste opptegning",
+    [S_FULL_REDRAW] = "Full opptegning",
+    [S_REDRAW_SENDING] = "%lu ms, %lu overføring",
     [S_SETTINGS_SAVES] = "Lagringer",
     [S_DIAG_PAGE_HELP] = "For feilsøking. Omstarter teller siden strømmen kom på, og bør holde seg lavt. Prosessor er "
                          "hvor stor del av tiden den er våken. Minne er skjermens, nå og som mest.",

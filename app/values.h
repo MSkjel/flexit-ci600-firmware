@@ -23,6 +23,7 @@
     X(ALARM_POPUPS,    0x06F, M.alarm_popups,       0, POPUPS_COUNT - 1, VF_SAVED, 0, 1) \
     X(AUTO_DST,        0x070, M.auto_dst,           0, 1,    VF_SAVED, 0, 1) \
     X(DST_NOW,         0x071, M.dst_now,            0, 1,    VF_SAVED | VF_RO, 0, 1) /* kept across restarts */ \
+    X(FAST_DISPLAY,    0x072, M.fast_display,       0, 1,    VF_SAVED, 0, 1) \
     /* clock, not on the link or in flash since the RTC keeps it. So no key */ \
     X(HOUR,            0,     M.hh,                 0, 23,   VF_CLOCK, 0, 1) \
     X(MINUTE,          0,     M.mi,                 0, 59,   VF_CLOCK, 0, 1) \
