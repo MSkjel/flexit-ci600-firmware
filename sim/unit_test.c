@@ -878,14 +878,14 @@ static void test_anim_look(void) {
   put16(fade + 2, 1000);
   pic_msg(K_ANIM_FADE, fade, sizeof fade);
   sim_run(500);
-  CHECK(look_opa(0) >= 120 && look_opa(0) <= 135 && lv_obj_get_style_opa(img, LV_PART_MAIN) == look_opa(0));
+  CHECK(look_opa(0) >= 120 && look_opa(0) <= 135 && lv_obj_get_style_img_opa(img, LV_PART_MAIN) == look_opa(0));
   sim_run(600);
   int16_t x, y;
   CHECK(look_opa(0) == 0 && anim_pos(0, &x, &y));
   fade[1] = 255;
   put16(fade + 2, 0);
   pic_msg(K_ANIM_FADE, fade, sizeof fade);
-  CHECK(look_opa(0) == 255 && lv_obj_get_style_opa(img, LV_PART_MAIN) == 255);
+  CHECK(look_opa(0) == 255 && lv_obj_get_style_img_opa(img, LV_PART_MAIN) == 255);
   fade[1] = 0;
   pic_msg(K_ANIM_FADE, fade, 3);
   CHECK(look_opa(0) == 255);

@@ -19,10 +19,22 @@ index f0f4d55..fc41151 100644
      bool was_on_layout = lv_obj_is_layout_positioned(obj);
      if(f & LV_OBJ_FLAG_SCROLLABLE) {
 diff --git a/src/core/lv_obj_style.c b/src/core/lv_obj_style.c
-index ecffca9..1dbc36a 100644
+index ecffca9..274fc48 100644
 --- a/src/core/lv_obj_style.c
 +++ b/src/core/lv_obj_style.c
-@@ -271,6 +271,10 @@ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_
+@@ -225,7 +225,10 @@ lv_style_value_t lv_obj_get_style_prop(const lv_obj_t * obj, lv_part_t part, lv_
+     lv_style_value_t value_act;
+     bool inheritable = lv_style_prop_has_flag(prop, LV_STYLE_PROP_INHERIT);
+     lv_style_res_t found = LV_STYLE_RES_NOT_FOUND;
+-    while(obj) {
++    /*CI600: one no style has ever had is the default, without looking*/
++    extern uint32_t _lv_style_props_set[];
++    bool never = prop < _LV_STYLE_NUM_BUILT_IN_PROPS && !(_lv_style_props_set[prop >> 5] & (1UL << (prop & 31)));
++    while(obj && !never) {
+         found = get_prop_core(obj, part, prop, &value_act);
+         if(found == LV_STYLE_RES_FOUND) break;
+         if(!inheritable) break;
+@@ -271,6 +274,10 @@ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_
                                   lv_style_selector_t selector)
  {
      lv_style_t * style = get_local_style(obj, selector);
@@ -33,6 +45,67 @@ index ecffca9..1dbc36a 100644
      lv_style_set_prop(style, prop, value);
      lv_obj_refresh_style(obj, selector, prop);
  }
+diff --git a/src/font/lv_font_fmt_txt.c b/src/font/lv_font_fmt_txt.c
+index 78beaff..33ea77e 100644
+--- a/src/font/lv_font_fmt_txt.c
++++ b/src/font/lv_font_fmt_txt.c
+@@ -206,10 +206,34 @@ void _lv_font_clean_up_fmt_txt(void)
+  *   STATIC FUNCTIONS
+  **********************/
+ 
++/*CI600: the glyphs looked up last, for all fonts. Text is laid out again for every strip it's drawn in. letter in
++ *the low 21 bits, glyph id above*/
++#define GID_CACHE_BITS 5
++static struct {
++    const lv_font_fmt_txt_dsc_t * fdsc;
++    uint32_t letter_gid;
++} gid_cache[1 << GID_CACHE_BITS];
++
++static uint32_t get_glyph_dsc_id_uncached(const lv_font_t * font, uint32_t letter);
++
+ static uint32_t get_glyph_dsc_id(const lv_font_t * font, uint32_t letter)
+ {
+     if(letter == '\0') return 0;
+ 
++    lv_font_fmt_txt_dsc_t * fdsc = (lv_font_fmt_txt_dsc_t *)font->dsc;
++    if(letter >= (1UL << 21)) return get_glyph_dsc_id_uncached(font, letter);
++    uint32_t h = ((letter ^ ((uint32_t)(lv_uintptr_t)fdsc >> 3)) * 2654435761UL) >> (32 - GID_CACHE_BITS);
++    if(gid_cache[h].fdsc == fdsc && (gid_cache[h].letter_gid & 0x1FFFFF) == letter) return gid_cache[h].letter_gid >> 21;
++    uint32_t gid = get_glyph_dsc_id_uncached(font, letter);
++    if(gid < (1UL << 11)) {
++        gid_cache[h].fdsc = fdsc;
++        gid_cache[h].letter_gid = letter | gid << 21;
++    }
++    return gid;
++}
++
++static uint32_t get_glyph_dsc_id_uncached(const lv_font_t * font, uint32_t letter)
++{
+     lv_font_fmt_txt_dsc_t * fdsc = (lv_font_fmt_txt_dsc_t *)font->dsc;
+ 
+     /*Check the cache first*/
+diff --git a/src/misc/lv_style.c b/src/misc/lv_style.c
+index 994be81..b9b5dfe 100644
+--- a/src/misc/lv_style.c
++++ b/src/misc/lv_style.c
+@@ -35,6 +35,9 @@ static void lv_style_set_prop_meta_helper(lv_style_prop_t prop, lv_style_value_t
+  *  GLOBAL VARIABLES
+  **********************/
+ 
++/*CI600: the built-in properties any style has ever had, see lv_obj_get_style_prop()*/
++uint32_t _lv_style_props_set[(_LV_STYLE_NUM_BUILT_IN_PROPS + 31) / 32];
++
+ const uint8_t _lv_style_builtin_prop_flag_lookup_table[_LV_STYLE_NUM_BUILT_IN_PROPS] = {
+     [LV_STYLE_WIDTH] =                    LV_STYLE_PROP_LAYOUT_REFR,
+     [LV_STYLE_MIN_WIDTH] =                LV_STYLE_PROP_LAYOUT_REFR,
+@@ -423,6 +426,7 @@ static void lv_style_set_prop_internal(lv_style_t * style, lv_style_prop_t prop_
+     }
+ 
+     lv_style_prop_t prop_id = LV_STYLE_PROP_ID_MASK(prop_and_meta);
++    if(prop_id < _LV_STYLE_NUM_BUILT_IN_PROPS) _lv_style_props_set[prop_id >> 5] |= 1UL << (prop_id & 31);  /*CI600*/
+ 
+     if(style->prop_cnt > 1) {
+         uint8_t * tmp = style->v_p.values_and_props + style->prop_cnt * sizeof(lv_style_value_t);
 diff --git a/src/widgets/lv_label.c b/src/widgets/lv_label.c
 index f4fbe01..f3b99f2 100644
 --- a/src/widgets/lv_label.c

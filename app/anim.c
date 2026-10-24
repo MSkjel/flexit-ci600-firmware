@@ -512,10 +512,19 @@ static void gone(lv_event_t *e) {
     }
 }
 
+// img_opa on each, opa would make LVGL look it up for every object it draws
+static void set_opa(place_t *p) {
+  for (int i = -1; i < 3; i++) {
+    lv_obj_t *o = i < 0 ? p->img : p->ghost[i];
+    if (o)
+      lv_obj_set_style_img_opa(o, (lv_opa_t) p->opa.now, 0);
+  }
+}
+
 static void show_opa(place_t *p) {
   if (!p->img)
     return;
-  lv_obj_set_style_opa(p->img, (lv_opa_t) p->opa.now, 0);  // the ghosts too
+  set_opa(p);
   ghosts_redraw(p);
 }
 
@@ -540,7 +549,7 @@ static void show_place(place_t *p, lv_obj_t *parent) {
     lv_obj_set_pos(p->ghost[i], GHOST_AT[i].x, GHOST_AT[i].y);
   }
   if (p->opa.now != LV_OPA_COVER)
-    lv_obj_set_style_opa(p->img, (lv_opa_t) p->opa.now, 0);
+    set_opa(p);
   put(p, p->fx, p->fy);
 }
 
