@@ -67,6 +67,8 @@ std::string log_all;
 static uint32_t now_us;
 uint32_t millis() { return now_us / 1000; }
 uint32_t micros() { return now_us; }
+static bool in_bootloader;  // update.h's, which the harness builds without
+extern "C" bool flexit_panel_in_bootloader() { return in_bootloader; }
 static uint32_t waited_us;
 void delayMicroseconds(uint32_t us) {
   now_us += us;
@@ -1927,6 +1929,34 @@ int main(int argc, char **argv) {
   run(5);
   const char *restart = pn_note(&icon, &level, &fresh);
   CHECK(fresh && !strcmp(restart, "Washer done"), "note during a restart: '%s', fresh %d", restart, fresh);
+
+  step("the panel counts as away once it's in its bootloader");
+  {
+    namespace anim = flexit::panel::anim;
+    auto slow = [](int f, int x, int y) -> uint32_t {
+      delayMicroseconds(1);  // about a frame a slice, so it's made over many loops
+      return 0xFF000000u | ((uint32_t) (f * 4096 + y * 64 + x + 1) * 2654435761u) >> 8;
+    };
+    anim::clear("");
+    run(5);
+    anim::add("slow", {64, 64, 6, 100, 16, 16, 1, slow});
+    anim::show("slow");
+    flexit::panel::loop();
+    bool making = anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE;
+    in_bootloader = true;
+    flexit::panel::loop();
+    CHECK(making && !flexit::panel::link::connected && anim::W.phase == anim::IDLE &&
+              anim::find("slow")->state == anim::WANT && anim::find("slow")->data.empty(),
+          "still made for a panel in its bootloader: making %d, connected %d, phase %d", making,
+          flexit::panel::link::connected, anim::W.phase);
+    run(50);
+    CHECK(anim::W.phase == anim::IDLE, "made again while in its bootloader: phase %d", anim::W.phase);
+    in_bootloader = false;
+    pn_restart();  // the new firmware
+    run_until([] { return pn_online() && settled(); }, 2000);
+    CHECK(run_until([] { return anim::find("slow")->state == anim::SENT && settled(); }, 3000) >= 0,
+          "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
+  }
 
   printf("\n%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
