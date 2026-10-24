@@ -11,8 +11,8 @@ void panel_defaults(void) {
   M.brightness = 90;
   M.idle_brightness = 20;
   M.idle_after = 3;  // 2 min
-  M.screensaver = SAVER_CLOCK;
-  M.saver_text = SAVER_TEXT_BAND;
+  M.screensaver = SAVER_PIC_ALL;
+  M.saver_text = SAVER_TEXT_PLAIN;
   M.saver_top = false;
   M.home_view = VIEW_DASH;
   M.go_home = true;
@@ -20,7 +20,7 @@ void panel_defaults(void) {
     M.view_on[v] = true;
   M.dash_temp = DT_INDOOR;
   memcpy(M.tiles, TILE_DEFAULTS, sizeof TILE_DEFAULTS);
-  M.clock_24h = M.key_hints = M.temp_dec = true;
+  M.clock_24h = M.key_hints = M.temp_dec = M.fast_display = true;
   M.language = 0;
   M.room_offset = -40;  // the same fixed 4.0 C the stock firmware uses
   M.indoor_source = INDOOR_EXTRACT;

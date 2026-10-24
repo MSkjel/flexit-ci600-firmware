@@ -17,6 +17,8 @@
 #define GRAVITY 14  // SUB per step, each step
 #define LIFT (-96)  // SUB per step
 #define FALL_MAX 112
+#define SPEED_START 32  // ducts, SUB per step
+#define SPEED_MAX 64
 
 enum { KT_READY, KT_PAUSED, KT_RUNNING, KT_OVER };
 
@@ -47,13 +49,8 @@ static int16_t next_gap(int prev) {
   return (int16_t) (lo + kt_rand() % (hi - lo + 1));
 }
 
-// Duct speed in SUB per step, by the unit's fan speed
-static int duct_speed(void) {
-  static const uint8_t SPEED[] = {[MODE_STOP] = 24, [MODE_MIN] = 32, [MODE_NORMAL] = 40, [MODE_MAX] = 52};
-  if (M.boost_on || M.boost_left)
-    return 64;
-  return SPEED[M.mode_now < MODE_COUNT ? M.mode_now : MODE_NORMAL];
-}
+// Faster with every point
+static int duct_speed(void) { return LV_MIN(SPEED_START + kt->points, SPEED_MAX); }
 
 static void place_duct(int i) {
   int x = kt->x[i] / SUB, top = kt->gap[i] - DUCT_GAP / 2;

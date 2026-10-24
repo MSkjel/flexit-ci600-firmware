@@ -283,7 +283,7 @@
   X(THEME, "Theme") \
   X(THEME_HELP, "The colour theme for all screens.") \
   X(BRIGHTNESS_HELP, "Screen brightness when in use.") \
-  X(IDLE_BRIGHTNESS_HELP, "Screen brightness when the panel isn't in use.") \
+  X(IDLE_BRIGHTNESS_HELP, "Screen brightness when the panel isn't in use. Off turns the screen dark.") \
   X(IDLE_AFTER, "Idle after") \
   X(IDLE_AFTER_HELP, "How long after the last key press the panel goes idle.") \
   X(HOME_SCREEN_HELP, "Views, dashboard tiles and the start view.") \
@@ -524,7 +524,7 @@
   X(KEYTEST_BEST, "Best %d") \
   X(KEYTEST_AGAIN, "OK: again") \
   X(KEYTEST_HELP, "UP or OK flaps the fan. Get it through the gaps in the ducts, each one is a point. The ducts " \
-                  "move as fast as the unit's fans run.") \
+                  "speed up with every point.") \
   X(HELP, "Help") \
   X(NO_HELP, "Nothing to explain here.") \
   X(HELP_FOOTER, "BACK goes up one level, hold it to go home. Hold ? for 3 s to lock the keys.") \

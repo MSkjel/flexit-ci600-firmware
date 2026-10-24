@@ -476,6 +476,23 @@ static void checks(void) {
         "0 isn't Off in the editor");
   key(KEY_BACK);
 
+  // the day's idle brightness too, and Off turns the screen dark once idle
+  fresh();
+  M.idle_brightness = 0;
+  M.idle_after = 0;  // 15 s
+  key(KEY_OK);
+  open(S_SCREENSAVER);
+  edit(S_IDLE_BRIGHTNESS);
+  check(shows(lv_layer_top(), tr(S_OFF)) && !shows(lv_layer_top(), "%"), "the day's idle brightness 0 isn't Off");
+  key(KEY_BACK);
+  ui_go_home();
+  run(16000);
+  check(input_idle() && input_backlight() == -1, "idle at Off, but the backlight is on");
+  M.idle_brightness = 5;
+  check(input_backlight() == 5, "idle at 5 %, but not at 5 %");
+  key(KEY_BACK);  // wakes it up
+  check(!input_idle(), "still idle after a key");
+
   // the trend axis goes down to -5° for a coldest -5.0°
   fresh();
   for (int i = 0; i < TREND_LEN; i++)
@@ -629,7 +646,26 @@ static int kt_steer(int steps, int aim) {
   return kt_score();
 }
 
-// The key test from the notices: ready, running, over, five ducts at every fan speed, BACK to About, and the
+// Steers like kt_steer until the score is points. The steps it took, -1 if it hit first.
+static int kt_steer_to(int points, int max_steps) {
+  lv_area_t f;
+  int before = 0;
+  for (int i = 0; i < max_steps && !kt_over(); i++) {
+    if (kt_score() >= points)
+      return i;
+    int top, bottom;
+    kt_gap(&top, &bottom);
+    lv_obj_get_coords(kt_label(0), &f);
+    int y = (f.y1 + f.y2) / 2;
+    if (y > (top + bottom) / 2 + 4 && y >= before)
+      ui_key(KEY_UP);
+    before = y;
+    run(40);
+  }
+  return -1;
+}
+
+// The key test from the notices: ready, running, over, faster with every point, BACK to About, and the
 // screensaver only when nobody presses UP
 static void keytest(void) {
   fresh();
@@ -670,18 +706,12 @@ static void keytest(void) {
   check(kt_over() && kt_gap(&top, &bottom), "the fan went through a duct");
   check_shot("92c_keytest_over");
 
-  // five ducts at every fan speed
-  for (int level = MODE_STOP; level <= MODE_COUNT; level++) {
-    M.mode_now = (uint8_t) (level < MODE_COUNT ? level : MODE_MAX);
-    M.boost_on = level == MODE_COUNT;
-    ui_replace(&SCR_KEYTEST, 0);
-    key(KEY_UP);
-    char what[64];
-    snprintf(what, sizeof what, "the fan hit a duct early at fan speed %d", level);
-    check(kt_steer(700, 0) >= 5, what);
-  }
-  M.boost_on = false;
-  M.mode_now = MODE_NORMAL;
+  // faster with every point, and still playable at full speed
+  ui_replace(&SCR_KEYTEST, 0);
+  key(KEY_UP);
+  int early = kt_steer_to(5, 2000) >= 0 ? kt_steer_to(10, 2000) : -1;  // steps for points 5 to 10
+  int late = kt_steer_to(35, 6000) >= 0 ? kt_steer_to(40, 2000) : -1;
+  check(early > 0 && late > 0 && late * 5 < early * 4, "the ducts didn't speed up, or the fan hit one");
   kt_steer(400, 50);
   run(16000);
   check(ui_top() == &SCR_SAVER, "no screensaver once the fan hit");

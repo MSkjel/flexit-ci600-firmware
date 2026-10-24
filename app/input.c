@@ -90,7 +90,6 @@ int input_backlight(void) {
     return preview;
   if (!idle)
     return night_active() ? M.night_brightness : M.brightness;
-  if (night_active())
-    return M.night_idle_brightness ? M.night_idle_brightness : -1;  // 0 at night means off
-  return M.idle_brightness;
+  int pct = night_active() ? M.night_idle_brightness : M.idle_brightness;
+  return pct ? pct : -1;  // 0 means off
 }

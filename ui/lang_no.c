@@ -280,7 +280,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_THEME] = "Tema",
     [S_THEME_HELP] = "Fargetemaet for alle skjermbilder.",
     [S_BRIGHTNESS_HELP] = "Skjermens lysstyrke i bruk.",
-    [S_IDLE_BRIGHTNESS_HELP] = "Skjermens lysstyrke når panelet ikke er i bruk.",
+    [S_IDLE_BRIGHTNESS_HELP] = "Skjermens lysstyrke når panelet ikke er i bruk. Av gjør skjermen mørk.",
     [S_IDLE_AFTER] = "Hvile etter",
     [S_IDLE_AFTER_HELP] = "Hvor lenge etter siste tastetrykk panelet går i hvile.",
     [S_HOME_SCREEN_HELP] = "Visninger, felt på oversikten og startvisningen.",
@@ -517,7 +517,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_KEYTEST_BEST] = "Rekord %d",
     [S_KEYTEST_AGAIN] = "OK: igjen",
     [S_KEYTEST_HELP] = "OPP eller OK får viften til å flakse. Få den gjennom åpningene i kanalene, hver gir et poeng. "
-                       "Kanalene går like fort som viftene i aggregatet.",
+                       "Kanalene går fortere for hvert poeng.",
     [S_HELP] = "Hjelp",
     [S_NO_HELP] = "Ingenting å forklare her.",
     [S_HELP_FOOTER] = "TILBAKE går ett nivå opp, hold den for å gå hjem. Hold ? i 3 s for å låse tastene.",
