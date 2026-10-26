@@ -83,6 +83,8 @@ static const str_t O_FIRE[5] = {
     [1] = S_STOP_BOTH_FANS, [2] = S_BOTH_AT_MAX, [3] = S_EXTRACT_AT_MAX, [4] = S_SUPPLY_AT_MAX};
 static const str_t O_ROTOR_ALARM[2] = {S_STOP_THE_UNIT, S_KEEP_RUNNING};
 static const str_t O_TEST_SPEED[MODE_COUNT + 1] = {S_OFF, S_STOP, S_MIN, S_NORMAL, S_MAX};
+// same order as CPU_MHZ
+static const str_t O_CPU_SPEED[N_CPU_SPEEDS] = {S_N_72_MHZ_STOCK, S_N_80_MHZ, S_N_88_MHZ, S_N_96_MHZ, S_N_128_MHZ};
 
 // The four dashboard tiles show one of the unit's values, or any ESP item except buttons
 static const char *tile_opt(int o) {
@@ -302,7 +304,7 @@ MENU(m_display, S_DISPLAY,
      TOG(IC_CLOCK, S_N_24_HOUR_CLOCK, V_CLOCK_24H, S_N_24_HOUR_CLOCK_HELP),
      ENUM(IC_THERMO, S_TEMPERATURES, V_TEMP_DEC, S_TEMPERATURES_HELP, OPTS(O_DECIMALS)),
      TOG(IC_HELP, S_KEY_HINTS, V_KEY_HINTS, S_KEY_HINTS_HELP),
-     TOG(IC_MONITOR, S_FAST_DISPLAY, V_FAST_DISPLAY, S_FAST_DISPLAY_HELP));
+     TOG(IC_MONITOR, S_FAST_DISPLAY, V_FAST_DISPLAY, S_FAST_DISPLAY_HELP, .done = S_ONLY_UP_TO_80_MHZ));
 
 MENU(m_saver, S_SCREENSAVER,
      ENUM(IC_SLEEP, S_IDLE_AFTER, V_IDLE_AFTER, S_IDLE_AFTER_HELP, OPTS(O_IDLE_AFTER)),
@@ -460,7 +462,9 @@ MENU(m_advanced, S_ADVANCED,
      SUB(IC_POWER, S_START_AND_STOP, m_adv_start, S_START_AND_STOP_HELP),
      SUB(IC_SERVICE, S_TEST, m_adv_test, S_TEST_HELP),
      SUB(IC_INFO, S_UNIT, m_adv_unit, S_UNIT_INFO_HELP),
-     ACT(IC_RESTORE, S_FACTORY_RESET_UNIT, A_FACTORY_RESET, S_FACTORY_RESET_UNIT_HELP, .flags = MF_DANGER));
+     ACT(IC_RESTORE, S_FACTORY_RESET_UNIT, A_FACTORY_RESET, S_FACTORY_RESET_UNIT_HELP, .flags = MF_DANGER),
+     HEAD(S_THIS_PANEL),
+     ENUM(IC_CHIP, S_PROCESSOR_SPEED, V_CPU_SPEED, S_PROCESSOR_SPEED_HELP, OPTS(O_CPU_SPEED)));
 
 // Main menu grid. Each entry opens a submenu, .fmt writes its status line.
 static const mitem_t m_main_items[] = {

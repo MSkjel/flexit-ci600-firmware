@@ -50,7 +50,7 @@ typedef struct {
   uint16_t val;             // val_t it shows or changes, the range comes from values.h
   uint16_t step;            // MI_NUM: step size, 0 means 1
   str_t title, help, unit;  // ESP item rows take the title and unit from the item, the help from the ESP
-  str_t done;               // MI_ACTION: toast shown after it, S_DONE if unset
+  str_t done;               // MI_ACTION: toast shown after it, S_DONE if unset. MI_TOGGLE: toast when it can't go on
   const char *icon;
   union {
     const str_t *opts;   // MI_ENUM: option names, see OPTS

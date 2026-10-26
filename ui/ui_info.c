@@ -107,7 +107,7 @@ static int diag_rows(kv_t *r) {
   else
     ROW(S_LAST_START, "%s", tr(STARTS[M.reset_cause]));
   ROW(S_RESTARTS, "%lu", (unsigned long) s.restarts);
-  ROW(S_PROCESSOR, _(S_BUSY_PCT), M.cpu_busy);
+  ROW(S_PROCESSOR, _(S_MHZ_BUSY), (unsigned) s.cpu_mhz, M.cpu_busy);
   char used[12], peak[12];
   ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, sizeof used, s.heap_used), (unsigned) (s.heap_size / 1024),
       kb(peak, sizeof peak, s.heap_peak));

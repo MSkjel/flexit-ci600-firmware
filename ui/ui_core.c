@@ -214,7 +214,7 @@ static frame_t *frame_of(const screen_t *s) {  // NULL if s isn't open
 }
 
 // Takes overlay s and any help over it off the stack wherever they are, the rest stay built
-static void remove_overlay(const screen_t *s) {
+void ui_remove_overlay(const screen_t *s) {
   int n = 0;
   bool gone = false;
   for (int i = 0; i < depth; i++) {
@@ -384,16 +384,18 @@ static void update_status(void) {
 }
 
 // One at a time, a new one replaces the one shown, so fast key presses can't use up the heap
-void ui_toast(const char *icon, str_t msg) {
+void ui_toast_text(const char *icon, const char *text) {
   if (toast)
     lv_obj_del(toast);
   lv_obj_t *t = toast = mk_pill(lv_layer_top(), LV_SIZE_CONTENT, T.text, 12, 5, 6);
   if (icon)
     mk_icon(t, &icons_16, T.bg, icon);
-  mk_label(t, &font_f14, T.bg, tr(msg));
+  mk_label(t, &font_f14, T.bg, text);
   lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 0);  // covers the title briefly rather than the content
   toast_end = lv_tick_get() + TOAST_MS;
 }
+
+void ui_toast(const char *icon, str_t msg) { ui_toast_text(icon, tr(msg)); }
 
 void ui_key_lock_notice(bool toggled) {
   if (toggled)
@@ -409,9 +411,9 @@ void ui_wake(void) {
 }
 
 void ui_idle(void) {
-  bool unread = false;  // a message or alarm pop-up nobody has seen yet, going home would drop it
+  bool unread = false;  // an open message, alarm pop-up or trial, going home would drop it
   for (int i = 0; i < depth; i++)
-    unread |= stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP;
+    unread |= stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP || stack[i].s == &SCR_TRIAL;
   if (M.go_home && !unread)  // Display > Home screen > Back to start view
     ui_show_view(M.home_view);
   if (M.screensaver)
@@ -461,14 +463,14 @@ void ui_second(void) {
     frame_t *f = frame_of(&SCR_ALARM_POPUP);
     const alarm_t *shown = f ? alarm_find(f->arg) : NULL;
     if (shown && shown < alarm_find(code))
-      code = shown->code;              // the one shown is more serious and stays
-    remove_overlay(&SCR_ALARM_POPUP);  // one pop-up, on top, even if it was under the screensaver
+      code = shown->code;                 // the one shown is more serious and stays
+    ui_remove_overlay(&SCR_ALARM_POPUP);  // one pop-up, on top, even if it was under the screensaver
     input_activity();
     ui_push(&SCR_ALARM_POPUP, code);
   }
   if (M.note_new) {
     M.note_new = false;
-    remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
+    ui_remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
     input_activity();
     ui_push(&SCR_NOTE, 0);
   }
@@ -500,7 +502,7 @@ void ui_alarms_changed(void) {
       if (alarm_pops(M.alarms[i].code))
         f->arg = M.alarms[i].code;
     if (!f->arg)
-      remove_overlay(&SCR_ALARM_POPUP);
+      ui_remove_overlay(&SCR_ALARM_POPUP);
   }
   for (int i = 0; i < depth; i++)
     if (stack[i].s == &SCR_ALARMS || stack[i].s == &SCR_ALARM_POPUP)

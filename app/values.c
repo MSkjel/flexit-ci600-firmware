@@ -4,6 +4,7 @@
 #include "model.h"
 #include "clock.h"
 #include "link.h"
+#include "panel.h"
 #include "plat.h"
 #include "schedule.h"
 #include <string.h>
@@ -72,6 +73,11 @@ val_def_t val_def(val_t v) {
   if (v == V_PERIOD_START || v == V_PERIOD_END) {
     val_def_t d = DEFS[v];
     sched_range(v, &d.min, &d.max);
+    return d;
+  }
+  if (v == V_FAST_DISPLAY) {  // off over 80 MHz, so apply() refuses it from anywhere
+    val_def_t d = DEFS[v];
+    d.max = fast_display_ok();
     return d;
   }
   if (v > V_NONE && v < V_FEAT_FIRST)
@@ -165,6 +171,12 @@ int32_t val_get(val_t v) {
   }
 }
 
+static val_t on_trial = V_NONE;
+
+void val_trial(val_t v) { on_trial = v; }
+
+int32_t val_saved(val_t v) { return v == on_trial ? 0 : val_get(v); }  // what ui_trial() goes back to
+
 static void store(val_t v, int32_t x) {
   if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST) {
     uint32_t bit = FBIT(v - V_FEAT_FIRST);
@@ -241,7 +253,9 @@ static void apply(val_t v, int32_t x, source_t from) {
   if ((v == V_MONTH || v == V_YEAR) && M.dd > val_def(V_DAY).max)
     M.dd = (uint8_t) val_def(V_DAY).max;  // 31.03 to April is 30.04, not 01.05
   if (from == FROM_FLASH)
-    return;  // loading at startup, nothing else runs yet
+    return;  // loading at startup, nothing else runs yet. hw/main.c turns Fast display off if the clock needs it
+  if (v == V_CPU_SPEED && M.fast_display && !fast_display_ok())
+    apply(V_FAST_DISPLAY, 0, from);  // before plat_value_changed() restarts at the new speed, so it's saved too
   // With auto lock the keys relock on idle anyway, so don't wear the flash on every lock and unlock
   if ((d.flags & VF_SAVED) && !(v == V_KEY_LOCK && M.auto_lock))
     plat_save(from == FROM_USER);

@@ -69,6 +69,7 @@ void ui_pop(void);
 const screen_t *ui_top(void);  // top screen, NULL before ui_init()
 void ui_replace(const screen_t *s, intptr_t arg);
 void ui_go_home(void);
+void ui_remove_overlay(const screen_t *s);                  // and any help over it, wherever on the stack
 frame_t *ui_frame(void);                                    // frame being built or updated, else the top one
 void ui_rebuild(void);                                      // rebuild everything, e.g. after a theme change
 void ui_set_title(const char *t);                           // keeps the pointer, so t must stay valid
@@ -156,7 +157,7 @@ const alarm_t *alarm_find(intptr_t code);  // the active alarm with this code, N
 enum { ALARMS_NOW, ALARMS_HISTORY };       // arg for SCR_ALARMS
 enum { INFO_ABOUT, INFO_BUS, INFO_DIAG };  // arg for SCR_INFO
 extern const screen_t SCR_HOME, SCR_MENU, SCR_LIST, SCR_EDIT, SCR_ALARMS, SCR_ALARM_POPUP, SCR_SCHEDULE, SCR_INFO,
-    SCR_NOTICES, SCR_KEYTEST, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
+    SCR_NOTICES, SCR_KEYTEST, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE, SCR_TRIAL;
 // A home screen view. BACK cycles through them in VIEW_* order.
 typedef struct {
   void (*build)(lv_obj_t *body, int first);  // first: the first item on the page shown

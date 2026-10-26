@@ -27,6 +27,10 @@ enum { RESET_POWER, RESET_PIN, RESET_WATCHDOG, RESET_SOFTWARE, RESET_FAULT };  /
 #define ALARM_FILTER_GUARD 3             // the filter guard input, on the filter light like the reminder
 extern const uint16_t TILE_DEFAULTS[4];  // factory dashboard tiles
 
+// Processor speed's clocks in MHz, M.cpu_speed picks one. 72 is stock
+#define N_CPU_SPEEDS 5
+extern const uint8_t CPU_MHZ[N_CPU_SPEEDS];
+
 typedef struct {
   uint8_t code;            // CX60 alarm code
   uint8_t dd, mo, hh, mi;  // when it started
@@ -173,7 +177,8 @@ typedef struct {
   bool go_home;                   // back to the home view when idle
   bool view_on[VIEW_COUNT];       // views BACK cycles through, dashboard always
   bool temp_dec;                  // temperatures with one decimal
-  bool fast_display;              // pixels to the screen at 18 MHz, over the controller's rated 10
+  bool fast_display;              // pixels to the screen at 18 MHz, 20 at 80, over the controller's rated 10
+  uint8_t cpu_speed;              // CPU_MHZ[] index, over the processor's rated 72 MHz above 0
   uint8_t led_ok;                 // LED_OK_*
   bool led_alarm, led_filter;     // use the alarm and filter lights
   bool auto_lock;                 // lock the keys when idle

@@ -402,12 +402,17 @@ static bool list_key(int k) {
     case MI_SCREEN:
       ui_push((const screen_t *) it->target, it->arg);
       break;
-    case MI_TOGGLE:
+    case MI_TOGGLE: {
       if (read_only(it))
         break;
-      val_set(it->val, !is_on(it));
-      ui_toast(val_get(it->val) ? IC_TOGGLE_ON : IC_TOGGLE_OFF, val_get(it->val) ? S_ON : S_OFF);
+      bool on = !is_on(it);
+      val_set(it->val, on);
+      if (on && !is_on(it) && it->done)
+        ui_toast(IC_ALERT, it->done);  // refused, see val_def()
+      else
+        ui_toast(val_get(it->val) ? IC_TOGGLE_ON : IC_TOGGLE_OFF, val_get(it->val) ? S_ON : S_OFF);
       break;
+    }
     case MI_NUM:
     case MI_ENUM:
     case MI_ACTION:

@@ -1,4 +1,4 @@
-// The value editor and the action confirm box (SCR_EDIT), over a row list.
+// Value editor and action confirm box over a row list (SCR_EDIT), and the box for a setting on trial (SCR_TRIAL).
 #include "ui_menu.h"
 #include <string.h>
 
@@ -70,20 +70,35 @@ static const char *confirm_warning(const mitem_t *it) {
   return tr(it->flags & MF_DANGER ? S_HOLD_OK_WARNING : S_PRESS_OK);
 }
 
-// Height of the action confirm box, the question with the warning below it at *warning_y
-static int confirm_height(const mitem_t *it, int *warning_y) {
+// Height of a box with question q and warning w under it, at *warning_y
+static int confirm_height(const char *q, const char *w, int *warning_y) {
   lv_point_t qs, ws;
-  lv_txt_get_size(&qs, tr(it->help), &font_f14, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
-  lv_txt_get_size(&ws, confirm_warning(it), &font_f12, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  lv_txt_get_size(&qs, q, &font_f14, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  lv_txt_get_size(&ws, w, &font_f12, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
   *warning_y = EDIT_TOP + qs.y + 10;
   return *warning_y + ws.y + 14;
 }
 
+// Returns the warning's label
+static lv_obj_t *confirm_texts(lv_obj_t *card, const char *q, const char *w, int warning_y) {
+  mk_wrap(card, &font_f14, T.text, q, CARD_PAD, EDIT_TOP, EDIT_TEXT_W);
+  return mk_wrap(card, &font_f12, T.warn, w, CARD_PAD, warning_y, EDIT_TEXT_W);
+}
+
 // Action confirm box. The help text says what it does, then how to confirm.
 static void edit_confirm(lv_obj_t *card, const mitem_t *it, int warning_y) {
-  mk_wrap(card, &font_f14, T.text, tr(it->help), CARD_PAD, EDIT_TOP, EDIT_TEXT_W);
-  mk_wrap(card, &font_f12, T.warn, confirm_warning(it), CARD_PAD, warning_y, EDIT_TEXT_W);
+  confirm_texts(card, tr(it->help), confirm_warning(it), warning_y);
   ui_hints(S_NONE, it->flags & MF_DANGER ? S_HOLD_TO_CONFIRM : S_CONFIRM, S_CANCEL, S_NONE);
+}
+
+// Centred, h high, with an icon and a title
+static lv_obj_t *edit_card(lv_obj_t *b, int h, const char *icon, const char *title) {
+  if (h > BODY_H - 8)
+    h = BODY_H - 8;
+  lv_obj_t *card = mk_card(b, (SCR_W - EDIT_W) / 2, (BODY_H - h) / 2, EDIT_W, h, T.line, 1);
+  lv_obj_set_pos(mk_icon(card, &icons_16, T.accent, icon), CARD_PAD, 12);
+  lv_obj_set_pos(mk_label(card, &font_f16, T.text, title), 38, 9);
+  return card;
 }
 
 static void edit_build(lv_obj_t *b, intptr_t arg) {
@@ -108,12 +123,8 @@ static void edit_build(lv_obj_t *b, intptr_t arg) {
   if (it->type == MI_ENUM)
     h = EDIT_TOP + 6 + opt_rows() * OPT_H;
   else if (it->type == MI_ACTION)
-    h = confirm_height(it, &warning_y);
-  if (h > BODY_H - 8)
-    h = BODY_H - 8;
-  lv_obj_t *card = mk_card(b, (SCR_W - EDIT_W) / 2, (BODY_H - h) / 2, EDIT_W, h, T.line, 1);
-  lv_obj_set_pos(mk_icon(card, &icons_16, T.accent, it->icon ? it->icon : IC_TUNE), CARD_PAD, 12);
-  lv_obj_set_pos(mk_label(card, &font_f16, T.text, item_title(it)), 38, 9);
+    h = confirm_height(tr(it->help), confirm_warning(it), &warning_y);
+  lv_obj_t *card = edit_card(b, h, it->icon ? it->icon : IC_TUNE, item_title(it));
   row_help(it);
   if (it->type == MI_NUM)
     edit_number(card, it);
@@ -210,3 +221,76 @@ int ui_backlight_preview(void) {
     return -1;
   return (int) ed.v;  // at night 0 means off, but it previews as 0 %, not with the light off
 }
+
+// ---------------------------------------------------------------- a setting on trial
+// The countdown runs on under other screens, and after HOME closed the box.
+#define TRIAL_MS 20000
+static struct {
+  val_t v;            // on trial, V_NONE if none
+  uint32_t end;       // lv_tick_get() when it goes off
+  lv_timer_t *timer;  // every second until then
+  lv_obj_t *left;     // the time left
+} trial;
+
+static void trial_left(char *buf, size_t n) {
+  int32_t ms = (int32_t) (trial.end - lv_tick_get());
+  int s = ms > 0 ? (int) ((ms + 999) / 1000) : 0;
+  if (trial.v == V_CPU_SPEED)
+    sprint(buf, n, _(S_BACK_TO_72_IN), s);
+  else
+    sprint(buf, n, _(S_FAST_OFF_IN), s);
+}
+
+static void trial_answer(bool keep) {
+  val_t v = trial.v;
+  lv_timer_del(trial.timer);
+  trial.v = V_NONE;
+  ui_remove_overlay(&SCR_TRIAL);
+  plat_trial_end(keep);
+  if (!keep)
+    val_set(v, 0);
+  ui_toast(keep ? IC_CHECK : IC_TOGGLE_OFF, keep ? S_SAVED : S_OFF);
+}
+
+static void trial_tick(lv_timer_t *t) {
+  (void) t;
+  if ((int32_t) (lv_tick_get() - trial.end) >= 0)
+    trial_answer(false);
+  else
+    ui_refresh();  // the countdown, on the second
+}
+
+void ui_trial(int v) {
+  trial.v = (val_t) v;
+  trial.end = lv_tick_get() + TRIAL_MS;
+  trial.timer = lv_timer_create(trial_tick, 1000, NULL);
+  input_activity();
+  ui_push(&SCR_TRIAL, 0);
+}
+
+static void trial_build(lv_obj_t *b, intptr_t arg) {
+  (void) arg;
+  bool cpu = trial.v == V_CPU_SPEED;
+  char left[48], title[32];
+  trial_left(left, sizeof left);
+  sprint(title, sizeof title, _(S_KEEP_MHZ), CPU_MHZ[M.cpu_speed]);  // the speed on trial, see hw/main.c
+  int warning_y, h = confirm_height(_(S_KEEP_QUESTION), left, &warning_y);
+  lv_obj_t *card = edit_card(b, h, cpu ? IC_CHIP : IC_MONITOR, cpu ? title : _(S_KEEP_FAST_DISPLAY));
+  trial.left = confirm_texts(card, _(S_KEEP_QUESTION), left, warning_y);
+  ui_hints(S_NONE, S_KEEP, S_CANCEL, S_HELP);
+  ui_help(cpu ? S_PROCESSOR_SPEED_HELP : S_FAST_DISPLAY_HELP);
+}
+
+static void trial_update(void) {
+  char left[48];
+  trial_left(left, sizeof left);
+  lv_label_set_text(trial.left, left);
+}
+
+static bool trial_key(int k) {
+  if (k == KEY_OK || k == KEY_BACK)
+    trial_answer(k == KEY_OK);
+  return k != KEY_HELP;  // ? shows the help, the other keys do nothing
+}
+
+const screen_t SCR_TRIAL = {.flags = SF_OVERLAY, .build = trial_build, .update = trial_update, .key = trial_key};

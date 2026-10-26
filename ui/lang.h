@@ -233,7 +233,17 @@
   X(KEY_HINTS_HELP, "Show what the keys do in the line at the bottom.") \
   X(FAST_DISPLAY, "Fast display") \
   X(FAST_DISPLAY_HELP, "Sends pictures to the screen twice as fast, above its rated speed. Turn it off if anything " \
-                       "looks wrong.") \
+                       "looks wrong. Only with Processor speed up to 80 MHz, under Advanced.") \
+  X(ONLY_UP_TO_80_MHZ, "Only up to 80 MHz, see Advanced") \
+  X(PROCESSOR_SPEED, "Processor speed") \
+  X(PROCESSOR_SPEED_HELP, \
+    "Over 72 MHz the processor runs past its rating, so screens draw faster. The panel restarts to switch. If it " \
+    "crashes, or you don't confirm within 20 s, it goes back to 72 MHz by itself. Over 80, Fast display is off.") \
+  X(N_72_MHZ_STOCK, "72 MHz (stock)") \
+  X(N_80_MHZ, "80 MHz") \
+  X(N_88_MHZ, "88 MHz") \
+  X(N_96_MHZ, "96 MHz") \
+  X(N_128_MHZ, "128 MHz") \
   /* Display > Night mode */ \
   X(NIGHT_MODE, "Night mode") \
   X(NIGHT_MODE_HELP, "Use a different brightness and theme at night.") \
@@ -614,7 +624,7 @@
   X(INSTALLED, "Installed") \
   X(NOT_INSTALLED, "None") \
   X(PROCESSOR, "Processor") \
-  X(BUSY_PCT, "%d%% busy") \
+  X(MHZ_BUSY, "%u MHz, %d%% busy") \
   X(UNIT, "Unit") \
   X(NO_CONTACT_LOWER, "no contact") \
   X(TALKING, "talking") \
@@ -652,8 +662,8 @@
   X(REDRAW_SENDING, "%lu ms, %lu sending") \
   X(SETTINGS_SAVES, "Settings saves") \
   X(DIAG_PAGE_HELP, \
-    "For finding faults. Restarts counts since the power came on and should stay low. Processor is the share of the " \
-    "time it's awake. Memory is the screen's, now and at most.") \
+    "For finding faults. Restarts counts since the power came on and should stay low. Processor is its clock and the " \
+    "share of the time it's awake. Memory is the screen's, now and at most.") \
   X(ABOUT_PAGE_HELP, "Software versions of this panel and the unit, and what's installed.") \
   X(NOTICE_FIRMWARE, "Replacement firmware %s") \
   X(NOTICE_REVERSED, "Reverse engineered by") \
@@ -691,6 +701,13 @@
   X(KEYS_UNLOCKED, "Keys unlocked") \
   /* start-up */ \
   X(UNKNOWN_DISPLAY_CONTROLLER, "Unknown display controller") \
+  X(CRASHED_AT_MHZ, "Crashed at %d MHz, back to 72") \
+  /* Processor speed or Fast display on trial */ \
+  X(KEEP_MHZ, "Keep %d MHz?") \
+  X(KEEP_FAST_DISPLAY, "Keep Fast display?") \
+  X(KEEP_QUESTION, "Does the screen look right? OK keeps it, BACK undoes it.") \
+  X(BACK_TO_72_IN, "Back to 72 MHz in %d s") \
+  X(FAST_OFF_IN, "Fast display goes off in %d s") \
   /* key hints and tiles */ \
   X(MOVE, "Move") \
   X(OPEN, "Open") \
@@ -710,6 +727,7 @@
   X(ALARM_LIST, "Alarm list") \
   X(CLOSE, "Close") \
   X(CONFIRM, "Confirm") \
+  X(KEEP, "Keep") \
   X(HOLD_TO_CONFIRM, "Hold to confirm") \
   X(TILE_1, "Tile 1") \
   X(TILE_2, "Tile 2") \

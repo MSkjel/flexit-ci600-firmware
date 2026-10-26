@@ -33,6 +33,8 @@ int sim_anim_drift(uint8_t *b, int place, unsigned channels, const int *v);  // 
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error
 void sim_mkdir(const char *dir);                                    // like mkdir -p, exits on error
 
+extern int sim_trial_answer;  // plat_trial_end()'s keep, -1 until the next one
+
 // sim_model.c
 struct item;
 void sim_model_init(void);

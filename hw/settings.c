@@ -47,7 +47,7 @@ static uint32_t page_after(uint32_t page) {
 // registers, the bus address among them decides which per-panel registers are ours.
 static bool for_each_record(bool (*f)(void *u, record_t it), void *u) {
   for (val_t v = val_next(V_NONE, VF_SAVED, 0); v != V_COUNT; v = val_next(v, VF_SAVED, 0))
-    if (!f(u, (record_t) {val_def(v).key, (int16_t) val_get(v)}))
+    if (!f(u, (record_t) {val_def(v).key, (int16_t) val_saved(v)}))
       return false;
   for (uint16_t r = 0; r < MB_REGS; r++)
     if (unit_cached(r) && !f(u, (record_t) {(uint16_t) (REG_KEY | r), unit_reg(r)}))

@@ -16,12 +16,17 @@ static void spi_drain(void) {
   }
 }
 
-// Frame size and speed: SPI_CR1_DFF for 16 bits, SPI_CR1_BR_DIV16 = 4.5 MHz, SPI_CR1_BR_DIV8 = 9 MHz
+// Frame size and speed: SPI_CR1_DFF for 16 bits, and SPI_CR1_BR from spi_speed()
 static void spi_mode(uint32_t bits) {
   SPI1->CR1 &= ~SPI_CR1_SPE;
   SPI1->CR1 = (SPI1->CR1 & ~(SPI_CR1_DFF | SPI_CR1_BR)) | bits;
   SPI1->CR1 |= SPI_CR1_SPE;
 }
+
+// SPI_CR1_BR for at most want, at the clock now. Never over LCD_SPI_MAX_HZ, see lcd_spi_div()
+static uint32_t spi_speed(uint32_t want) { return SPI_CR1_BR_DIV(lcd_spi_div(board_hz(), want)); }
+// Registers and pixels, Fast display's pixels, and the pixels' now. Set by lcd_init(), which runs after the clock
+static uint32_t reg_br, fast_br, pixel_br;
 
 // Deselecting waits until the last byte is out.
 static void cs(int on) {
@@ -118,7 +123,7 @@ static void run(const rv_t *s, int n) {
 bool lcd_init(void) {
   RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
   SPI1->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_MSTR | SPI_CR1_CPOL | SPI_CR1_CPHA;  // soft NSS, master, mode 3
-  spi_mode(SPI_CR1_BR_DIV16);                                                          // slower during setup
+  spi_mode(spi_speed(LCD_INIT_HZ));                                                    // slower during setup
   board_delay_ms(400);     // as stock, lets the display's supply settle after power-up
   pin_set(PIN_LCD_CS, 0);  // CS low during the reset, as stock
   pin_set(PIN_LCD_RESET, 0);
@@ -137,8 +142,10 @@ bool lcd_init(void) {
       run(INIT_9220, sizeof INIT_9220 / sizeof *INIT_9220);
       break;
   }
-  wreg(0x03, 0x5038);         // entry mode, BGR as stock but along a screen row first, see lcd_draw
-  spi_mode(SPI_CR1_BR_DIV8);  // same pixel speed as stock
+  wreg(0x03, 0x5038);  // entry mode, BGR as stock but along a screen row first, see lcd_draw
+  pixel_br = reg_br = spi_speed(LCD_REG_HZ);
+  fast_br = spi_speed(LCD_FAST_HZ);
+  spi_mode(reg_br);
   RCC->AHBENR |= RCC_AHBENR_DMA1EN;
   irq_enable(IRQ_DMA1_CH3);
   return known;
@@ -149,7 +156,6 @@ bool lcd_init(void) {
 // out in one burst in LVGL's order. Stock set the cursor for every column.
 volatile uint32_t lcd_send_us;
 static volatile bool sending;
-static uint32_t pixel_br = SPI_CR1_BR_DIV8;  // registers always go at 9 MHz
 static void (*send_done)(void);
 static uint32_t send_start;
 
@@ -183,7 +189,7 @@ void DMA1_Channel3_IRQHandler(void) {
   DMA1_CH(3)->CCR = 0;
   spi_drain();  // the last pixel out of the shift register
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
-  spi_mode(SPI_CR1_BR_DIV8);
+  spi_mode(reg_br);
   cs(0);
   lcd_send_us += board_us() - send_start;
   sending = false;
@@ -191,7 +197,7 @@ void DMA1_Channel3_IRQHandler(void) {
     send_done();
 }
 
-void lcd_fast(bool on) { pixel_br = on ? SPI_CR1_BR_DIV4 : SPI_CR1_BR_DIV8; }
+void lcd_fast(bool on) { pixel_br = on ? fast_br : reg_br; }
 
 void lcd_wait(void) {
   while (sending)

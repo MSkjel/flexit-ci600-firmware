@@ -3,6 +3,7 @@
 #include "bus.h"
 #include "clock.h"
 #include "layout.h"
+#include "lcd.h"
 #include "link.h"
 #include "mbserver.h"
 #include "pdeflate.h"
@@ -2352,6 +2353,104 @@ static void test_leds(void) {
   M.night = false;
 }
 
+// ---------------------------------------------------------------- Processor speed
+// The clock at a start, at each speed. The mark has the speed the last run was at, and the one this start tries.
+static void test_cpu_clock(void) {
+  static const int MHZ[] = {72, 80, 88, 96, 128};
+  CHECK(LEN(MHZ) == N_CPU_SPEEDS);
+  bool revert;
+  for (int s = 0; s < N_CPU_SPEEDS; s++) {
+    CHECK(CPU_MHZ[s] == MHZ[s] && cpu_speed_of(MHZ[s]) == s);
+    // after a power cut, as the setting says
+    CHECK(cpu_clock_choice(s, 0, RESET_POWER, &revert) == MHZ[s] && !revert);
+    // a crash or the watchdog over 72 MHz sets it back to 72, at 72 they don't count
+    CHECK(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_FAULT, &revert) == 72 && revert == (s > 0));
+    CHECK(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_WATCHDOG, &revert) == 72 && revert == (s > 0));
+    // nor do the panel's own restarts, the reset pin or a crash at 72 before
+    CHECK(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert) == MHZ[s] && !revert);
+    CHECK(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_PIN, &revert) == MHZ[s] && !revert);
+    CHECK(cpu_clock_choice(s, CLOCK_MARK(0, 0), RESET_FAULT, &revert) == MHZ[s] && !revert);
+    // set back to 72 at this speed
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert) == 72 && !revert);
+  }
+  CHECK(cpu_speed_of(8) == 0);  // on HSI without the crystal
+  // a mark with speeds there aren't, from other firmware
+  CHECK(cpu_clock_choice(1, CLOCK_MARK(7, 9), RESET_FAULT, &revert) == 80 && !revert);
+}
+
+// A new speed over 72 starts as a trial of it, with the setting still saved as 72
+static void test_cpu_trial(void) {
+  bool revert;
+  for (int t = 1; t < N_CPU_SPEEDS; t++) {
+    int mhz = CPU_MHZ[t];
+    for (int from = 0; from < N_CPU_SPEEDS; from++)  // picked at any speed
+      CHECK(cpu_clock_choice(0, CLOCK_MARK(from, t), RESET_SOFTWARE, &revert) == mhz && !revert);
+    // a restart during it carries on with it, a crash ends it
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_SOFTWARE, &revert) == mhz && !revert);
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_FAULT, &revert) == 72 && revert);
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_WATCHDOG, &revert) == 72 && revert);
+    // a hang before the restart counts at the speed it ran at, over 72
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(0, t), RESET_WATCHDOG, &revert) == mhz && !revert);
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(4, t), RESET_WATCHDOG, &revert) == 72 && revert);
+    // OK keeps it. BACK or no answer restart at 72, and a power cut loses the mark, see hw/main.c
+    CHECK(cpu_clock_choice(t, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert) == mhz && !revert);
+    CHECK(cpu_clock_choice(0, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert) == 72 && !revert);
+    CHECK(cpu_clock_choice(0, 0, RESET_POWER, &revert) == 72 && !revert);
+  }
+}
+
+// The display's SPI at each speed: the expected rates, and never over 20 MHz
+static void test_lcd_spi(void) {
+  static const struct {
+    int mhz;
+    uint32_t init, reg, fast;  // kHz
+  } WANT[] = {
+      {72, 4500, 9000, 18000},  {80, 5000, 10000, 20000},  {88, 5500, 11000, 11000},
+      {96, 6000, 12000, 12000}, {128, 8000, 16000, 16000},
+  };
+  CHECK(LEN(WANT) == N_CPU_SPEEDS);
+  for (int s = 0; s < N_CPU_SPEEDS; s++) {
+    uint32_t hz = CPU_MHZ[s] * 1000000u, div = lcd_spi_div(hz, LCD_INIT_HZ);
+    CHECK(CPU_MHZ[s] == WANT[s].mhz && hz / div / 1000 == WANT[s].init);
+    for (int fast = 0; fast < 2; fast++) {
+      div = lcd_spi_div(hz, fast ? LCD_FAST_HZ : LCD_REG_HZ);
+      CHECK(hz <= (uint64_t) LCD_SPI_MAX_HZ * div && hz / div / 1000 == (fast ? WANT[s].fast : WANT[s].reg));
+    }
+  }
+  // whatever is asked for
+  CHECK(lcd_spi_div(80000000, 100000000) == 4 && lcd_spi_div(88000000, 100000000) == 8);
+  CHECK(lcd_spi_div(80000001, LCD_FAST_HZ) == 8);
+  CHECK(lcd_spi_div(8000000, LCD_REG_HZ) == 2);  // on HSI without the crystal
+}
+
+// Over 80 MHz Fast display is off: picking such a speed turns it off and saves that, and it can't go on from the
+// user, the ESP or flash
+static void test_fast_display(void) {
+  model_defaults();
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  settings_load();
+  for (int s = 0; s < N_CPU_SPEEDS; s++) {
+    bool ok = CPU_MHZ[s] <= 80;
+    M.cpu_speed = 0;
+    M.fast_display = true;
+    val_set(V_CPU_SPEED, s);
+    CHECK(M.cpu_speed == s && M.fast_display == ok);
+    settings_flush();
+    M.cpu_speed = 0;  // so loading takes Fast display as it was saved
+    M.fast_display = true;
+    settings_load();
+    CHECK(M.fast_display == ok && M.cpu_speed == s && val_def(V_FAST_DISPLAY).max == ok);
+    val_set(V_FAST_DISPLAY, 1);
+    CHECK(M.fast_display == ok);
+    M.fast_display = false;
+    val_set_remote(V_FAST_DISPLAY, 1);
+    CHECK(!M.fast_display);  // never from the ESP, only in its copy of the settings
+    val_load(V_FAST_DISPLAY, 1);
+    CHECK(M.fast_display == ok);
+  }
+  model_defaults();
+}
+
 // ---------------------------------------------------------------- the week program
 static int layout_changes, saver_builds, value_changes;  // see --wrap in the Makefile
 void __wrap_ui_layout_changed(void) { layout_changes++; }
@@ -2813,6 +2912,57 @@ static void test_unit(void) {
   CHECK(stub_rtc == t + 600 && toasts == 1);
 }
 
+// The panel has the ESP's HELLO, so it takes the rest of its messages
+static void link_up(void) {
+  model_defaults();
+  link_init();
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16, false);
+}
+
+// Our saved value of v in a settings dump, -1 if it isn't there
+static int32_t dumped(val_t v) {
+  uint32_t snap[256];
+  number_from_esp(K_SETTINGS, 0, false);
+  int k = settings_out(snap, 256);
+  for (int i = 1; i < k - 1; i++)  // between the format and the count
+    if (snap[i] >> 16 == val_def(v).key)
+      return (int32_t) (snap[i] & 0xFFFF);
+  return -1;
+}
+
+// A setting on trial goes to flash and to the ESP's copy as 0, 72 MHz or off, until it's kept. The rest are saved.
+static void test_link_trial(void) {
+  link_up();
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  settings_load();
+  M.cpu_speed = 2;  // a trial at 88 MHz, see hw/main.c
+  val_trial(V_CPU_SPEED);
+  M.brightness = 42;
+  plat_save_now();  // as a restart does
+  CHECK(dumped(V_CPU_SPEED) == 0 && dumped(V_BRIGHTNESS) == 42);
+  link_up();  // the defaults, and the ESP's HELLO again
+  settings_load();
+  CHECK(M.cpu_speed == 0 && M.brightness == 42);
+  // kept
+  M.cpu_speed = 2;
+  val_trial(V_NONE);
+  plat_save_now();
+  CHECK(dumped(V_CPU_SPEED) == 2);
+  link_up();
+  settings_load();
+  CHECK(M.cpu_speed == 2);
+  // Fast display at 80 MHz
+  M.cpu_speed = 1;
+  M.fast_display = true;
+  val_trial(V_FAST_DISPLAY);
+  plat_save_now();
+  CHECK(dumped(V_FAST_DISPLAY) == 0);
+  link_up();
+  settings_load();
+  CHECK(!M.fast_display && M.cpu_speed == 1);
+  val_trial(V_NONE);
+}
+
 static void test_link(void) {
   model_defaults();
   M.features |= FBIT(FEAT_ESP);
@@ -3010,6 +3160,10 @@ int main(void) {
   test_runtime();
   test_deice_saved();
   test_leds();
+  test_cpu_clock();
+  test_cpu_trial();
+  test_lcd_spi();
+  test_fast_display();
   test_schedule();
   test_input();
   test_unit();
@@ -3017,6 +3171,7 @@ int main(void) {
   test_bus_values();
   test_link();
   test_link_picture();
+  test_link_trial();
   char why[96] = "";
   if (menu_check(why, sizeof why)) {
     printf("menus: %s\n", why);

@@ -1413,6 +1413,71 @@ static void keytest(void) {
   check(ui_top() == &SCR_INFO && !strcmp(ui_title(), tr(S_ABOUT)), "BACK didn't leave the key test for About");
 }
 
+// Processor speed, and a setting on trial: OK keeps it, BACK or 20 s without an answer switch it back again, also
+// under other screens
+static void check_trial(void) {
+  fresh();
+  M.advanced = true;
+  key(KEY_OK);
+  open(S_ADVANCED);
+  go(S_PROCESSOR_SPEED);
+  shot("93_processor_speed");
+  key(KEY_OK);
+  shot("93a_processor_speeds");
+  // 88 MHz turns Fast display off, and it can't go on again. The simulator doesn't restart, see hw/main.c
+  key(KEY_DOWN);
+  key(KEY_DOWN);
+  key(KEY_OK);
+  check(M.cpu_speed == 2 && !M.fast_display, "88 MHz left Fast display on");
+  key(KEY_BACK);
+  open(S_DISPLAY);
+  go(S_FAST_DISPLAY);
+  key(KEY_OK);
+  check(!M.fast_display && shows(lv_layer_top(), tr(S_ONLY_UP_TO_80_MHZ)), "Fast display went on at 88 MHz");
+  check_shot("93d_fast_display_refused");
+  ui_go_home();
+  run(2000);              // the toast
+  ui_trial(V_CPU_SPEED);  // the start after 88 MHz was picked
+  run(30);
+  shot("93b_trial");
+  char left[48], title[32];
+  sprint(title, sizeof title, _(S_KEEP_MHZ), 88);
+  sprint(left, sizeof left, _(S_BACK_TO_72_IN), 1);
+  check(shows(lv_layer_top(), title), "the trial doesn't name its speed");
+  sim_trial_answer = -1;
+  seconds(19);
+  check(ui_top() == &SCR_TRIAL && shows(lv_layer_top(), left) && sim_trial_answer < 0, "the trial didn't count down");
+  run(1000);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 0 && !M.cpu_speed, "no answer kept 88 MHz");
+  run(2000);  // the toast
+
+  M.cpu_speed = 1;  // at 80 Fast display gets a trial too
+  M.fast_display = true;
+  ui_trial(V_FAST_DISPLAY);
+  run(30);
+  check_shot("93c_trial_fast_display");
+  key(KEY_OK);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 1 && M.fast_display, "OK didn't keep Fast display");
+  ui_trial(V_FAST_DISPLAY);
+  run(30);
+  key(KEY_BACK);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 0 && !M.fast_display, "BACK kept Fast display");
+
+  // idle leaves it, and the time runs on under a message
+  M.fast_display = M.go_home = true;
+  M.screensaver = 0;
+  ui_trial(V_FAST_DISPLAY);
+  ui_idle();
+  check(ui_top() == &SCR_TRIAL, "idle closed a trial");
+  note("Front door left open");
+  sim_trial_answer = -1;
+  run(20000);
+  check(ui_top() == &SCR_NOTE && sim_trial_answer == 0 && !M.fast_display, "the trial didn't end under a message");
+  key(KEY_OK);
+  check(ui_top() == &SCR_HOME, "the trial stayed behind the message");
+  M.cpu_speed = 0;
+}
+
 // For --perf. Repainted pixels are what cost time on the panel.
 static void measure(const char *what, int k) {
   run(200);
@@ -1499,6 +1564,7 @@ int main(int argc, char **argv) {
   check_views();
   notices();
   keytest();
+  check_trial();
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

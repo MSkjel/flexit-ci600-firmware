@@ -229,8 +229,18 @@ const char *const LANG_NO[S_COUNT] = {
     [S_KEY_HINTS] = "Tastehjelp",
     [S_KEY_HINTS_HELP] = "Vis hva tastene gjør på linjen nederst.",
     [S_FAST_DISPLAY] = "Rask skjerm",
-    [S_FAST_DISPLAY_HELP] =
-        "Sender bilder til skjermen dobbelt så fort, over oppgitt hastighet. Slå det av hvis noe ser feil ut.",
+    [S_FAST_DISPLAY_HELP] = "Sender bilder til skjermen dobbelt så fort, over oppgitt hastighet. Slå det av hvis noe "
+                            "ser feil ut. Bare med prosessorfart opp til 80 MHz, under Avansert.",
+    [S_ONLY_UP_TO_80_MHZ] = "Bare opp til 80 MHz, se Avansert",
+    [S_PROCESSOR_SPEED] = "Prosessorfart",
+    [S_PROCESSOR_SPEED_HELP] = "Over 72 MHz går prosessoren over oppgitt hastighet, og skjermen tegnes fortere. "
+                               "Panelet starter på nytt for å bytte. Krasjer det, eller bekrefter du ikke innen 20 s, "
+                               "går det tilbake til 72 MHz. Over 80 er rask skjerm av.",
+    [S_N_72_MHZ_STOCK] = "72 MHz (standard)",
+    [S_N_80_MHZ] = "80 MHz",
+    [S_N_88_MHZ] = "88 MHz",
+    [S_N_96_MHZ] = "96 MHz",
+    [S_N_128_MHZ] = "128 MHz",
     // Display > Night mode
     [S_NIGHT_MODE] = "Nattmodus",
     [S_NIGHT_MODE_HELP] = "Bruk en annen lysstyrke og et annet tema om natten.",
@@ -610,7 +620,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_INSTALLED] = "Installert",
     [S_NOT_INSTALLED] = "Ingen",
     [S_PROCESSOR] = "Prosessor",
-    [S_BUSY_PCT] = "%d %% opptatt",
+    [S_MHZ_BUSY] = "%u MHz, %d %% opptatt",
     [S_UNIT] = "Aggregat",
     [S_NO_CONTACT_LOWER] = "ingen kontakt",
     [S_TALKING] = "svarer",
@@ -647,7 +657,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_REDRAW_SENDING] = "%lu ms, %lu overføring",
     [S_SETTINGS_SAVES] = "Lagringer",
     [S_DIAG_PAGE_HELP] = "For feilsøking. Omstarter teller siden strømmen kom på, og bør holde seg lavt. Prosessor er "
-                         "hvor stor del av tiden den er våken. Minne er skjermens, nå og som mest.",
+                         "klokken og hvor stor del av tiden den er våken. Minne er skjermens, nå og som mest.",
     [S_ABOUT_PAGE_HELP] = "Programvareversjoner for panelet og aggregatet, og hva som er installert.",
     [S_NOTICE_FIRMWARE] = "Erstatningsfastvare %s",
     [S_NOTICE_REVERSED] = "Reversert av",
@@ -685,6 +695,13 @@ const char *const LANG_NO[S_COUNT] = {
     [S_KEYS_UNLOCKED] = "Tastene er låst opp",
     // start-up
     [S_UNKNOWN_DISPLAY_CONTROLLER] = "Ukjent skjermkontroller",
+    [S_CRASHED_AT_MHZ] = "Krasjet på %d MHz, tilbake på 72",
+    // Processor speed or Fast display on trial
+    [S_KEEP_MHZ] = "Beholde %d MHz?",
+    [S_KEEP_FAST_DISPLAY] = "Beholde rask skjerm?",
+    [S_KEEP_QUESTION] = "Ser skjermen riktig ut? OK beholder det, TILBAKE angrer.",
+    [S_BACK_TO_72_IN] = "Tilbake til 72 MHz om %d s",
+    [S_FAST_OFF_IN] = "Rask skjerm slås av om %d s",
     // key hints and tiles
     [S_MOVE] = "Flytt",
     [S_OPEN] = "Åpne",
@@ -704,6 +721,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_ALARM_LIST] = "Alarmliste",
     [S_CLOSE] = "Lukk",
     [S_CONFIRM] = "Bekreft",
+    [S_KEEP] = "Behold",
     [S_HOLD_TO_CONFIRM] = "Hold for å bekrefte",
     [S_TILE_1] = "Felt 1",
     [S_TILE_2] = "Felt 2",

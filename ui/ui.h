@@ -32,6 +32,10 @@ void ui_picture_coming(void);
 bool ui_held(void);           // the flush sends nothing to the LCD
 void ui_show_view(int view);  // back to the home screen on this view
 void ui_toast(const char *icon, str_t msg);
+void ui_toast_text(const char *icon, const char *text);  // the same with a text made at run time
+// V_CPU_SPEED just went over 72 MHz or V_FAST_DISPLAY on, and may garble the screen. OK keeps it, BACK or 20 s
+// without an answer set it back to 0, 72 MHz or off, after telling plat_trial_end().
+void ui_trial(int v);
 // Toasts locked or unlocked after a toggle, else how to unlock
 void ui_key_lock_notice(bool toggled);
 int ui_backlight_preview(void);  // brightness an open editor is previewing, -1 if none

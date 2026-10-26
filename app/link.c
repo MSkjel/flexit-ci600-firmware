@@ -196,7 +196,7 @@ static void send_settings(void) {
       settings_at = -1;
       return;
     }
-    plink_send(&queue, K_SETTINGS, (uint32_t) val_def(v).key << 16 | (uint16_t) val_get(v));
+    plink_send(&queue, K_SETTINGS, (uint32_t) val_def(v).key << 16 | (uint16_t) val_saved(v));
     settings_n++;
     settings_at = (int16_t) v;
   }

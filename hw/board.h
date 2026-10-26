@@ -1,4 +1,4 @@
-// The CI600 board, STM32F103 at 72 MHz.
+// The CI600 board, STM32F103 at 72 MHz, or up to 128 with Processor speed.
 //
 //   LCD    SPI1, PA5 SCK, PA6 MISO, PA7 MOSI, PA4 CS, PA1 reset, PC4/PC5 held low. ILI932x, 320x240
 //   keys   PB7 up, PB5 down, PB6 OK, PB9 back, PB8 help, high = pressed
@@ -28,8 +28,11 @@ extern uint32_t fault_record[2];  // FAULT_MAGIC and the faulting PC from startu
 #define PIN_RS485_RX_OFF GPIOA, 11  // receiver disable
 #define PIN_RS485_TX_ON GPIOA, 12   // driver enable
 
-void board_init(void);
-uint32_t board_hz(void);  // core clock
+void board_init(void);               // at 72 MHz, or 8 without the crystal
+uint32_t board_hz(void);             // core clock
+bool board_set_clock(uint32_t mhz);  // from 72 to one of CPU_MHZ. False without the crystal. Before the bus and display
+uint8_t board_clock_mark(void);      // what the last run set below, 0 after a power cut. Read it before setting it
+void board_set_clock_mark(uint8_t m);  // kept through a reset, for the next start
 uint32_t board_ms(void);
 uint32_t board_us(void);  // free-running, wraps every 71 minutes, keeps counting during sleep
 void board_delay_ms(uint32_t ms);

@@ -10,8 +10,28 @@ static volatile uint32_t ms;
 static volatile uint8_t keys, key_down, key_up;  // debounced state, presses and releases not read yet
 static uint8_t key_hist[IN_COUNT];
 static volatile uint16_t bl_now, bl_want;  // backlight compare, now and where it's fading to
+static uint32_t bl_mhz = 72;               // the clock TIM1 counts at, see bl_counts()
+
+// Backlight compare values and period are timer counts at 72 MHz. A faster clock gets as many more, rounded, so the
+// frequency and the brightness stay the same.
+static uint32_t bl_counts(uint32_t c) { return (c * bl_mhz + 36) / 72; }
 
 // ---------------------------------------------------------------- clocks and pins
+// The core clocks, 72 is stock and the one clocks() starts at. The PLL takes the 8 MHz crystal x mhz / 8. APB1 /2 at
+// 72 and /4 above keep it at 36 MHz or under, its limit. The ADC's limit is 14 MHz: /6 makes it 12 and 13.3, /8 11
+// and 12. At 128 even /8, its biggest divider, makes it 16, but the room sensor samples for the longest time there
+// is. Flash stays at 2 wait states, there are no more. APB2 with the SPI, the USART and TIM1 runs at the full clock.
+static const struct {
+  uint8_t mhz;
+  uint32_t cfgr;  // PLL multiplier, APB1 and ADC dividers
+} CLOCKS[] = {
+    {72, RCC_CFGR_PLLMUL9 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6},
+    {80, RCC_CFGR_PLLMUL10 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV6},
+    {88, RCC_CFGR_PLLMUL11 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+    {96, RCC_CFGR_PLLMUL12 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+    {128, RCC_CFGR_PLLMUL16 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+};
+
 static void clocks(void) {
   RCC->CR |= RCC_CR_HSION;  // run on HSI while the PLL is reconfigured
   while (!(RCC->CR & RCC_CR_HSIRDY)) {
@@ -27,14 +47,14 @@ static void clocks(void) {
     if (i > 2000000)
       return;  // no crystal, stay on HSI at 8 MHz
   FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY_2;
-  RCC->CFGR = RCC_CFGR_PLLMUL9 | RCC_CFGR_PLLSRC_HSE | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6;  // 72 MHz
+  RCC->CFGR = CLOCKS[0].cfgr | RCC_CFGR_PLLSRC_HSE;
   RCC->CR |= RCC_CR_PLLON;
   while (!(RCC->CR & RCC_CR_PLLRDY)) {
   }
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
-  hz = 72000000;
+  hz = CLOCKS[0].mhz * 1000000u;
 }
 
 uint32_t board_hz(void) { return hz; }
@@ -98,6 +118,8 @@ static void pins(void) {
 static volatile uint32_t us_hi;
 
 void TIM2_IRQHandler(void) {
+  if (!(TIM2->SR & TIM_SR_UIF))
+    return;  // cleared since, by board_set_clock() or this handler a moment ago
   TIM2->SR = 0;
   us_hi++;
 }
@@ -114,9 +136,15 @@ uint32_t board_us(void) {
   return h << 16 | l;
 }
 
+// Prescaler to 1 MHz from APB1's timer clock, which is twice APB1's when APB1 is divided
+static uint32_t us_prescaler(void) {
+  uint32_t ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> 8;  // under 4 is /1, then /2, /4, /8 and /16
+  return (ppre1 < 4 ? hz : hz >> (ppre1 - 3) << 1) / 1000000 - 1;
+}
+
 static void us_init(void) {
   RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
-  TIM2->PSC = hz / 1000000 - 1;  // APB1 is /2 but its timers get x2 back, so this is the core clock
+  TIM2->PSC = us_prescaler();
   TIM2->ARR = 0xFFFF;
   TIM2->EGR = TIM_EGR_UG;  // load the prescaler
   TIM2->SR = 0;
@@ -186,7 +214,7 @@ void SysTick_Handler(void) {
   if (ms % 8 == 0 && bl_now != bl_want) {  // fade, about 1/4 s from dark to full
     int step = (bl_want > bl_now ? bl_want - bl_now : bl_now - bl_want) / 8 + 1;
     bl_now = (uint16_t) (bl_want > bl_now ? bl_now + step : bl_now - step);
-    TIM1->CCR1 = bl_now;
+    TIM1->CCR1 = bl_counts(bl_now);
   }
 }
 
@@ -219,15 +247,15 @@ void board_leds(bool alarm, bool filter, bool ok) {
 }
 
 // ---------------------------------------------------------------- backlight
-// TIM1 CH1 on PA8 at ~68 kHz switches the backlight's boost converter directly. 100 % duty shorts the coil
-// across the supply and the chip browns out, so the duty is limited.
+// TIM1 CH1 on PA8 at ~68 kHz, at any clock, switches the backlight's boost converter directly. 100 % duty shorts the
+// coil across the supply and the chip browns out, so the duty is limited.
 //
 // Stock regulates the LED current on PB0, but it samples 7.5 ADC cycles at the start of a period and reads about
 // 2 counts at any duty it uses, way below its targets of 240 full and 6 dimmed. So stock just sits at the limit,
 // compare 210. PB0 is too noisy and drifts too much to regulate on, and it doesn't show where the light starts
 // either, the average rises steadily from compare 140 up. We set the duty directly and never read PB0.
 // Brightness follows the square of the %, which looks about even.
-#define BL_TOP 1050
+#define BL_TOP 1050  // the period, 1867 counts at 128 MHz
 #define BL_DARK 15   // compare at 0 %, the panel we tried was still readable at 10
 #define BL_FULL 225  // compare at 100 %, a bit brighter than stock's 210
 
@@ -396,6 +424,57 @@ uint8_t board_reset_cause(uint32_t *fault_pc) {
 }
 
 uint32_t board_restarts(void) { return restarts.n; }
+
+// ---------------------------------------------------------------- over 72 MHz
+// For Processor speed, over the rated 72. SysTick, the microseconds and the backlight follow the clock, see CLOCKS.
+bool board_set_clock(uint32_t mhz) {
+  unsigned i = 1;
+  while (i < LEN(CLOCKS) && CLOCKS[i].mhz != mhz)
+    i++;
+  if (hz != CLOCKS[0].mhz * 1000000u || i == LEN(CLOCKS))
+    return false;  // no crystal, still on HSI. Or not a clock it has
+  uint32_t s = irq_save();
+  RCC->CFGR &= ~RCC_CFGR_SW;  // to HSI, on since clocks(), while the PLL changes
+  while (RCC->CFGR & RCC_CFGR_SWS) {
+  }
+  RCC->CR &= ~RCC_CR_PLLON;
+  while (RCC->CR & RCC_CR_PLLRDY) {
+  }
+  RCC->CFGR = CLOCKS[i].cfgr | RCC_CFGR_PLLSRC_HSE;
+  RCC->CR |= RCC_CR_PLLON;
+  while (!(RCC->CR & RCC_CR_PLLRDY)) {
+  }
+  RCC->CFGR |= RCC_CFGR_SW_PLL;
+  while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
+  }
+  hz = mhz * 1000000;
+  SYSTICK->LOAD = hz / 1000 - 1;
+  SYSTICK->VAL = 0;
+  uint32_t us = board_us();  // the microseconds count on from here
+  TIM2->PSC = us_prescaler();
+  TIM2->EGR = TIM_EGR_UG;  // loads it and zeroes the count. Not a wrap, so clear its flag
+  TIM2->SR = 0;
+  TIM2->CNT = us & 0xFFFF;
+  us_hi = us >> 16;
+  bl_mhz = mhz;
+  TIM1->ARR = bl_counts(BL_TOP);  // both preloaded, they change at the end of a period
+  TIM1->CCR1 = bl_counts(bl_now);
+  irq_restore(s);
+  return true;
+}
+
+// Kept through a reset like restarts above, 0 after a power cut
+#define CLOCK_MARK_MAGIC 0x434C4B4Du
+__attribute__((section(".noinit"))) static struct {
+  uint32_t magic, mark;
+} clock_mark;
+
+uint8_t board_clock_mark(void) { return clock_mark.magic == CLOCK_MARK_MAGIC ? (uint8_t) clock_mark.mark : 0; }
+
+void board_set_clock_mark(uint8_t m) {
+  clock_mark.mark = m;
+  clock_mark.magic = CLOCK_MARK_MAGIC;
+}
 
 // ---------------------------------------------------------------- entropy
 __attribute__((section(".noinit"))) static uint32_t starts;  // not zeroed, counts on from whatever power-up left

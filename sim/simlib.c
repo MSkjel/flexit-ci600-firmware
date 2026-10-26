@@ -164,6 +164,7 @@ bool plat_const(const void *p) { return (const char *) p >= etext && (const char
 // Made up, so the screenshots don't change with every other change
 void plat_stats(plat_stats_t *s) {
   *s = (plat_stats_t) {.uptime_s = 3 * 86400 + 4 * 3600 + 12 * 60 + 7,
+                       .cpu_mhz = 72,
                        .restarts = 1,
                        .full_us = 152300,
                        .full_send_us = 136900,
@@ -173,6 +174,9 @@ void plat_stats(plat_stats_t *s) {
                        .heap_used = 9830,
                        .heap_peak = 14540};
 }
+
+int sim_trial_answer = -1;
+void plat_trial_end(bool keep) { sim_trial_answer = keep; }
 
 // A different link session on every simulated start, but the same sequence on every run.
 uint32_t plat_entropy(void) {
