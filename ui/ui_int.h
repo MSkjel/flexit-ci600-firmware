@@ -1,0 +1,180 @@
+// UI internals, shared by ui/*.c. The platform's side is ui.h.
+#pragma once
+#include "ui.h"
+#include "lvgl.h"
+#include "model.h"
+#include "plink_icons.h"
+#include "input.h"
+#include "link.h"
+#include "panel.h"
+#include "picture.h"
+#include "anim.h"
+#include "plat.h"
+#include "schedule.h"
+#include "trend.h"
+
+#define BAR_H 24   // status bar
+#define HINT_H 20  // key hint bar
+#define BODY_Y BAR_H
+#define BODY_H (SCR_H - BAR_H - HINT_H)
+#define HELP_CARD_W 288
+#define HELP_W (HELP_CARD_W - 2 * CARD_PAD)  // help text width, make check verifies every *_HELP text fits
+#define HELP_LINES 6                         // max lines of help text
+
+// Theme colours. The hex values for each theme are in ui_core.c.
+// clang-format off
+#define THEME_COLOURS(X) \
+  X(bg) X(surface) X(surface2) X(line) X(text) X(dim) X(faint) X(accent) X(accent_soft) X(on_accent) X(warm) \
+  X(cold) X(ok) X(warn) X(err)
+// clang-format on
+#define X(name) lv_color_t name;
+typedef struct {
+  THEME_COLOURS(X)
+} theme_t;
+#undef X
+extern theme_t T;
+extern const str_t THEME_NAMES[N_THEMES], MODE_NAMES[MODE_COUNT], DAY_NAMES[7];  // Monday first
+
+// screen_t flags
+enum {
+  SF_OVERLAY = 1,  // drawn over the screen below, which stays built
+  SF_NOBARS = 2    // full screen, no status or hint bar
+};
+
+// A kind of screen. Each open one is a frame_t on the screen stack.
+typedef struct screen {
+  str_t title;  // status bar title, S_NONE for none
+  uint8_t flags;
+  void (*build)(lv_obj_t *body, intptr_t arg);  // creates the widgets, arg comes from ui_push()
+  void (*update)(void);                         // refreshes the values, on model changes and every second
+  bool (*key)(int key);                         // true if it handled the key
+  const char *(*selected)(void);                // text of the selected row, for the simulator's checks
+  bool (*ok_led)(uint32_t ms);                  // takes over the OK light while on top
+} screen_t;
+
+// One entry on the screen stack
+typedef struct {
+  const screen_t *s;
+  intptr_t arg;
+  int16_t sel, top;      // selected row and scroll position, kept while another screen is on top
+  const char *title;     // set by ui_set_title(), NULL to use the screen's
+  str_t hints[4], help;  // key hints (UP/DOWN, OK, BACK, ?) and the text ? shows
+  lv_obj_t *root;        // overlay container, SF_OVERLAY only
+  uint32_t close_at;     // lv_tick_get() time to close at, 0 = never
+  bool built;            // built before, so building it again is a rebuild
+} frame_t;
+
+void ui_push(const screen_t *s, intptr_t arg);
+void ui_pop(void);
+const screen_t *ui_top(void);  // top screen, NULL before ui_init()
+void ui_replace(const screen_t *s, intptr_t arg);
+void ui_go_home(void);
+void ui_remove_overlay(const screen_t *s);                  // and any help over it, wherever on the stack
+frame_t *ui_frame(void);                                    // frame being built or updated, else the top one
+void ui_rebuild(void);                                      // rebuild everything, e.g. after a theme change
+void ui_set_title(const char *t);                           // keeps the pointer, so t must stay valid
+void ui_help(str_t text);                                   // text the ? key shows for this screen
+void ui_help_item(int item);                                // same, with an ESP item's help
+void ui_hints(str_t ud, str_t ok, str_t back, str_t help);  // key hint labels, S_NONE hides one
+const char *ui_selected(void);       // selected row on the top screen for the simulator's checks, NULL if none
+const char *ui_title(void);          // title shown, for the simulator's checks
+void ui_close_after(uint32_t ms);    // close the current screen after ms, calling again restarts the timer
+void ui_view_dots(int n, int cur);   // page dots in the status bar for the home views
+const char *icon_glyph(uint8_t id);  // glyph for an ESP icon id, ICN_* in proto/plink_icons.h
+
+// drawing helpers (ui_widgets.c)
+#define CARD_RADIUS 14
+#define CARD_PAD 14  // from a card's edge to what's on it
+#define CHART_X 40   // trend chart position and height
+#define CHART_Y 26
+#define CHART_H 140
+#define EN_DASH "\xE2\x80\x93"
+#define MIDDOT "\xC2\xB7"
+#define DEG "\xC2\xB0"  // degree sign
+#define DEG_C DEG "C"
+#define NO_VALUE EN_DASH  // for a value that's unknown or gone
+lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int radius);
+lv_obj_t *mk_group(lv_obj_t *p, int w, int h);  // a bare container
+lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt);
+lv_obj_t *mk_text(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int w,
+                  lv_text_align_t align);  // a label w wide, its text aligned in it
+lv_obj_t *mk_wrap(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int x, int y, int w);  // wraps at w
+lv_obj_t *mk_icon(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *ic);
+void label_dots(lv_obj_t *l);                   // truncate with "...", copying static text first
+void label_text(lv_obj_t *l, const char *txt);  // doesn't copy text in flash, so not for label_dots() labels
+lv_obj_t *mk_bar(lv_obj_t *p, int x, int y, int w, int h, int val, int max, lv_color_t c);
+lv_timer_t *mk_timer(lv_obj_t *owner, lv_timer_cb_t cb, uint32_t ms);  // deleted with owner
+lv_obj_t *mk_arc(lv_obj_t *p, int size, int width, int val, int max, lv_color_t c);
+lv_obj_t *mk_card(lv_obj_t *p, int x, int y, int w, int h, lv_color_t border, int border_w);
+lv_obj_t *mk_disc(lv_obj_t *p, int x, int y, int size, lv_color_t bg, const lv_font_t *f, lv_color_t c,
+                  const char *icon);  // icon in a filled circle
+lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, const lv_font_t *f, lv_color_t c, const char *icon);
+void mk_empty(lv_obj_t *p, lv_color_t c, const char *icon, const char *title, const char *sub);  // empty state
+// Just the empty state, so only BACK and ? do anything
+void mk_empty_screen(lv_obj_t *p, lv_color_t c, const char *icon, const char *title, const char *sub);
+// Rounded box as wide as its content and h high, its children in a row. A pad_y of 0 isn't set.
+#define PILL_RADIUS 14
+lv_obj_t *mk_pill(lv_obj_t *p, int h, lv_color_t bg, int pad_x, int pad_y, int gap);
+lv_obj_t *mk_chart(lv_obj_t *p, int w, int lines);                       // 24 h chart with this many grid lines
+lv_obj_t *mk_day_bar(lv_obj_t *p, int x, int y, int w, int h, int day);  // a day's periods as blocks on a track
+lv_color_t level_color(int mode);                                        // colour of a fan speed (MODE_*)
+uint32_t ui_hex(lv_color_t c);                                           // as 0xRRGGBB, for recoloured text
+lv_color_t item_color(const item_t *it);             // ok, warn or err by the item's levels, else accent
+int item_pct(const item_t *it);                      // value as 0..100 between min and max, 0 if unknown
+bool item_on(const item_t *it);                      // a toggle that's on, not off or unknown
+void keep_in_view(int16_t *top, int row, int rows);  // scroll *top so row is among the rows shown
+void clamp_sel(int n, int max_top);                  // keeps the frame's selection and scroll in a list of n
+int16_t step_sel(int sel, int key, int n);           // move the selection for UP or DOWN, wrapping around
+bool sel_key(int key, int n);  // UP or DOWN moves the frame's selection in a list of n and updates it, else false
+int32_t step_value(int32_t v, int n, int step, int32_t min, int32_t max);  // n steps, onto multiples of step, clamped
+void set_text(lv_obj_t *l, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void label_fit(lv_obj_t *l, const char *txt, int w);  // txt in font_f20 if it fits in w, else font_f14
+// Texts into buf, n bytes with the 0, cut short to fit
+// sprintf through LVGL's printf, so newlib's and its RAM aren't linked in
+int sprint(char *buf, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+char *copy_text(char *buf, size_t n, const char *s);  // strcpy
+char *add_text(char *buf, size_t n, const char *s);   // strcat
+const char *fmt_temp(char *buf, size_t n, int16_t t, bool unit);
+const char *fmt_target(char *buf, size_t n, int16_t t);  // setpoint, always with one decimal whatever Temperatures says
+const char *fmt_dec(char *buf, size_t n, int32_t v, uint8_t dec);
+const char *fmt_hm(char *buf, size_t n, int minutes);   // minutes since midnight up to 24:00, as the clock shows them
+char *add_unit(char *buf, size_t n, const char *unit);  // no space before a degree sign, or before % in English
+const char *fmt_pct(char *buf, size_t n, int pct);      // 50% or 50 %, as the language writes it
+char *item_text(char *buf, size_t n, const item_t *it, bool unit);  // the value: the number, a dash, on/off or Press
+
+// Only one full screen is built at a time, so they share one state buffer. Overlays keep their own statics.
+// SCREEN_STATE(type, name) points name into the buffer and checks that type fits.
+#define UI_SCREEN_MEM 256
+extern uint8_t ui_screen_mem[UI_SCREEN_MEM];
+#define SCREEN_STATE(type, name) \
+  static type *const name = (type *) (void *) ui_screen_mem; \
+  _Static_assert(sizeof(type) <= UI_SCREEN_MEM, #type " fits in ui_screen_mem")
+
+const char *alarm_text(uint8_t code);      // name of a CX60 alarm code
+const alarm_t *alarm_find(intptr_t code);  // the active alarm with this code, NULL if none
+
+// screens
+enum { ALARMS_NOW, ALARMS_HISTORY };       // arg for SCR_ALARMS
+enum { INFO_ABOUT, INFO_BUS, INFO_DIAG };  // arg for SCR_INFO
+extern const screen_t SCR_HOME, SCR_MENU, SCR_LIST, SCR_EDIT, SCR_ALARMS, SCR_ALARM_POPUP, SCR_SCHEDULE, SCR_INFO,
+    SCR_NOTICES, SCR_KEYTEST, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE, SCR_TRIAL;
+// A home screen view. BACK cycles through them in VIEW_* order.
+typedef struct {
+  void (*build)(lv_obj_t *body, int first);  // first: the first item on the page shown
+  void (*update)(void);
+  str_t help;
+  uint8_t per_page;    // items on a page, BACK shows the next page before the next view. 0 = one page
+  uint32_t need;       // required features, FBIT(FEAT_x) mask
+  int (*count)(void);  // items to show, the view is hidden while there are none. NULL = always shown
+} view_t;
+extern const view_t DASH_VIEW, FLOW_VIEW, TREND_VIEW, SENSORS_VIEW, COMFORT_VIEW, SMART_VIEW;
+struct menu;
+const struct menu *period_menu(void);  // settings of the period in M.period, for SCR_LIST
+void open_filter_menu(void);           // opens Filter, from the filter alarm pop-up
+int menu_check(char *why, size_t n);   // make check: how many menu option problems, the first one goes in why
+const char *tile_name(int src);        // name of a dashboard tile source (TILE_*), NULL if its ESP item is missing
+// Option actually used for a setting. Falls back when it needs the ESP and there isn't one
+int tile_used(val_t tile, int src);  // a dashboard tile (V_TILE1..4)
+int view_used(val_t v, int view);    // the start view
+int saver_used(val_t v, int mode);   // the screensaver
+bool saver_picture(void);            // the screensaver shows the picture

@@ -1,16 +1,37 @@
 // see board.h
 #include "board.h"
+#include "input.h"  // IN_*
 #include "layout.h"
 #include "model.h"  // RESET_*
 #include "stm32f1.h"
 
-uint32_t board_hz = 8000000;
+static uint32_t hz = 8000000;
 static volatile uint32_t ms;
 static volatile uint8_t keys, key_down, key_up;  // debounced state, presses and releases not read yet
-static uint8_t key_hist[BK_COUNT];
+static uint8_t key_hist[IN_COUNT];
 static volatile uint16_t bl_now, bl_want;  // backlight compare, now and where it's fading to
+static uint32_t bl_mhz = 72;               // the clock TIM1 counts at, see bl_counts()
+
+// Backlight compare values and period are timer counts at 72 MHz. A faster clock gets as many more, rounded, so the
+// frequency and the brightness stay the same.
+static uint32_t bl_counts(uint32_t c) { return (c * bl_mhz + 36) / 72; }
 
 // ---------------------------------------------------------------- clocks and pins
+// The core clocks, 72 is stock and the one clocks() starts at. The PLL takes the 8 MHz crystal x mhz / 8. APB1 /2 at
+// 72 and /4 above keep it at 36 MHz or under, its limit. The ADC's limit is 14 MHz: /6 makes it 12 and 13.3, /8 11
+// and 12. At 128 even /8, its biggest divider, makes it 16, but the room sensor samples for the longest time there
+// is. Flash stays at 2 wait states, there are no more. APB2 with the SPI, the USART and TIM1 runs at the full clock.
+static const struct {
+  uint8_t mhz;
+  uint32_t cfgr;  // PLL multiplier, APB1 and ADC dividers
+} CLOCKS[] = {
+    {72, RCC_CFGR_PLLMUL9 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6},
+    {80, RCC_CFGR_PLLMUL10 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV6},
+    {88, RCC_CFGR_PLLMUL11 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+    {96, RCC_CFGR_PLLMUL12 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+    {128, RCC_CFGR_PLLMUL16 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+};
+
 static void clocks(void) {
   RCC->CR |= RCC_CR_HSION;  // run on HSI while the PLL is reconfigured
   while (!(RCC->CR & RCC_CR_HSIRDY)) {
@@ -26,64 +47,66 @@ static void clocks(void) {
     if (i > 2000000)
       return;  // no crystal, stay on HSI at 8 MHz
   FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY_2;
-  RCC->CFGR = RCC_CFGR_PLLMUL9 | RCC_CFGR_PLLSRC_HSE | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6;  // 72 MHz
+  RCC->CFGR = CLOCKS[0].cfgr | RCC_CFGR_PLLSRC_HSE;
   RCC->CR |= RCC_CR_PLLON;
   while (!(RCC->CR & RCC_CR_PLLRDY)) {
   }
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
-  board_hz = 72000000;
+  hz = CLOCKS[0].mhz * 1000000u;
 }
+
+uint32_t board_hz(void) { return hz; }
 
 // Same as stock's gpio_init and gpio_init_early. Level goes in before mode so outputs don't glitch.
 static const struct {
   gpio_t *port;
   uint8_t pin, mode, level;  // output level, or the pull for inputs, 1 = up
 } PINS[] = {
-    {GPIOA, 1, PIN_OUT, 1},       // LCD reset, released
-    {GPIOA, 4, PIN_OUT, 1},       // LCD CS, idle
-    {GPIOA, 5, PIN_AF, 0},        // SPI1 SCK
-    {GPIOA, 6, PIN_IN_PULL, 1},   // SPI1 MISO
-    {GPIOA, 7, PIN_AF, 0},        // SPI1 MOSI
-    {GPIOC, 4, PIN_OUT, 0},       // LCD lines the stock firmware holds low
-    {GPIOC, 5, PIN_OUT, 0},       //
-    {GPIOA, 8, PIN_AF, 0},        // TIM1 CH1, backlight
-    {GPIOB, 0, PIN_AIN, 0},       // backlight LED current, not read
-    {GPIOC, 0, PIN_AIN, 0},       // room thermistor
-    {GPIOA, 9, PIN_AF, 0},        // USART1 TX
-    {GPIOA, 10, PIN_IN, 0},       // USART1 RX
-    {GPIOA, 11, PIN_OUT, 0},      // RS-485 receiver disable
-    {GPIOA, 12, PIN_OUT, 0},      // RS-485 driver enable
-    {GPIOB, 5, PIN_IN_PULL, 0},   // down key, keys are high when pressed
-    {GPIOB, 6, PIN_IN_PULL, 0},   // OK key
-    {GPIOB, 7, PIN_IN_PULL, 0},   // up key
-    {GPIOB, 8, PIN_IN_PULL, 0},   // help key
-    {GPIOB, 9, PIN_IN_PULL, 0},   // back key
-    {GPIOC, 10, PIN_OUT_OD, 1},   // alarm LED, LEDs are lit when low
-    {GPIOC, 11, PIN_OUT_OD, 1},   // filter LED
-    {GPIOC, 12, PIN_OUT_OD, 1},   // OK LED
-    {GPIOA, 0, PIN_IN_PULL, 1},   // not used from here on
-    {GPIOA, 3, PIN_IN, 0},        //
-    {GPIOB, 10, PIN_OUT, 0},      //
-    {GPIOB, 11, PIN_IN, 0},       //
-    {GPIOB, 12, PIN_IN_PULL, 0},  //
-    {GPIOB, 13, PIN_IN_PULL, 0},  //
-    {GPIOB, 14, PIN_IN_PULL, 0},  //
-    {GPIOB, 15, PIN_IN_PULL, 0},  //
-    {GPIOC, 1, PIN_OUT, 0},       //
-    {GPIOC, 2, PIN_IN, 0},        //
-    {GPIOC, 3, PIN_OUT, 1},       //
-    {GPIOC, 6, PIN_IN_PULL, 0},   //
-    {GPIOC, 7, PIN_IN_PULL, 0},   //
-    {GPIOC, 8, PIN_IN_PULL, 0},   //
-    {GPIOC, 9, PIN_IN_PULL, 0},   //
-    {GPIOC, 13, PIN_IN, 0},       //
+    {PIN_LCD_RESET, PIN_OUT, 1},      // released
+    {PIN_LCD_CS, PIN_OUT, 1},         // idle
+    {GPIOA, 5, PIN_AF, 0},            // SPI1 SCK
+    {GPIOA, 6, PIN_IN_PULL, 1},       // SPI1 MISO
+    {GPIOA, 7, PIN_AF, 0},            // SPI1 MOSI
+    {GPIOC, 4, PIN_OUT, 0},           // LCD lines the stock firmware holds low
+    {GPIOC, 5, PIN_OUT, 0},           //
+    {GPIOA, 8, PIN_AF, 0},            // TIM1 CH1, backlight
+    {GPIOB, 0, PIN_AIN, 0},           // backlight LED current, not read
+    {GPIOC, 0, PIN_AIN, 0},           // room thermistor
+    {GPIOA, 9, PIN_AF, 0},            // USART1 TX
+    {GPIOA, 10, PIN_IN, 0},           // USART1 RX
+    {PIN_RS485_RX_OFF, PIN_OUT, 0},   //
+    {PIN_RS485_TX_ON, PIN_OUT, 0},    //
+    {PIN_KEY_DOWN, PIN_IN_PULL, 0},   // keys are high when pressed
+    {PIN_KEY_OK, PIN_IN_PULL, 0},     //
+    {PIN_KEY_UP, PIN_IN_PULL, 0},     //
+    {PIN_KEY_HELP, PIN_IN_PULL, 0},   //
+    {PIN_KEY_BACK, PIN_IN_PULL, 0},   //
+    {PIN_LED_ALARM, PIN_OUT_OD, 1},   // LEDs are lit when low
+    {PIN_LED_FILTER, PIN_OUT_OD, 1},  //
+    {PIN_LED_OK, PIN_OUT_OD, 1},      //
+    {GPIOA, 0, PIN_IN_PULL, 1},       // not used from here on
+    {GPIOA, 3, PIN_IN, 0},            //
+    {GPIOB, 10, PIN_OUT, 0},          //
+    {GPIOB, 11, PIN_IN, 0},           //
+    {GPIOB, 12, PIN_IN_PULL, 0},      //
+    {GPIOB, 13, PIN_IN_PULL, 0},      //
+    {GPIOB, 14, PIN_IN_PULL, 0},      //
+    {GPIOB, 15, PIN_IN_PULL, 0},      //
+    {GPIOC, 1, PIN_OUT, 0},           //
+    {GPIOC, 2, PIN_IN, 0},            //
+    {GPIOC, 3, PIN_OUT, 1},           //
+    {GPIOC, 6, PIN_IN_PULL, 0},       //
+    {GPIOC, 7, PIN_IN_PULL, 0},       //
+    {GPIOC, 8, PIN_IN_PULL, 0},       //
+    {GPIOC, 9, PIN_IN_PULL, 0},       //
+    {GPIOC, 13, PIN_IN, 0},           //
 };
 
 static void pins(void) {
   RCC->APB2ENR |= RCC_APB2ENR_AFIOEN | RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN | RCC_APB2ENR_IOPCEN;
-  for (unsigned i = 0; i < sizeof PINS / sizeof *PINS; i++) {
+  for (unsigned i = 0; i < LEN(PINS); i++) {
     pin_set(PINS[i].port, PINS[i].pin, PINS[i].level);
     pin_mode(PINS[i].port, PINS[i].pin, PINS[i].mode);
   }
@@ -95,6 +118,8 @@ static void pins(void) {
 static volatile uint32_t us_hi;
 
 void TIM2_IRQHandler(void) {
+  if (!(TIM2->SR & TIM_SR_UIF))
+    return;  // cleared since, by board_set_clock() or this handler a moment ago
   TIM2->SR = 0;
   us_hi++;
 }
@@ -111,9 +136,15 @@ uint32_t board_us(void) {
   return h << 16 | l;
 }
 
+// Prescaler to 1 MHz from APB1's timer clock, which is twice APB1's when APB1 is divided
+static uint32_t us_prescaler(void) {
+  uint32_t ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> 8;  // under 4 is /1, then /2, /4, /8 and /16
+  return (ppre1 < 4 ? hz : hz >> (ppre1 - 3) << 1) / 1000000 - 1;
+}
+
 static void us_init(void) {
   RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
-  TIM2->PSC = board_hz / 1000000 - 1;  // APB1 is /2 but its timers get x2 back, so this is the core clock
+  TIM2->PSC = us_prescaler();
   TIM2->ARR = 0xFFFF;
   TIM2->EGR = TIM_EGR_UG;  // load the prescaler
   TIM2->SR = 0;
@@ -123,9 +154,9 @@ static void us_init(void) {
 }
 
 // ---------------------------------------------------------------- sleeping
-// Awake time is the main loop plus long interrupts. The bus adds its time to board_isr_us, the 1 ms tick and
-// the display DMA are too short to count.
-volatile uint32_t board_isr_us;
+// Awake time is the main loop plus long interrupts. The bus adds its time with board_isr_time(), the 1 ms tick
+// and the display DMA are too short to count.
+static volatile uint32_t isr_us;
 static uint32_t slept_us, busy_from_us;
 static bool debugger;
 
@@ -145,11 +176,13 @@ void board_sleep(void) {
   slept_us += board_us() - t;
 }
 
+void board_isr_time(uint32_t us) { isr_us += us; }
+
 uint16_t board_busy_pm(void) {
   uint32_t s = irq_save();
-  uint32_t now = board_us(), span = now - busy_from_us, isr = board_isr_us, slept = slept_us;
+  uint32_t now = board_us(), span = now - busy_from_us, isr = isr_us, slept = slept_us;
   busy_from_us = now;
-  board_isr_us = slept_us = 0;
+  isr_us = slept_us = 0;
   irq_restore(s);
   uint32_t idle = slept > isr ? slept - isr : 0;
   if (!span || idle > span)
@@ -163,11 +196,11 @@ void SysTick_Handler(void) {
   static const struct {
     gpio_t *g;
     uint8_t pin;
-  } K[BK_COUNT] = {
-      [BK_UP] = {GPIOB, 7},   [BK_DOWN] = {GPIOB, 5}, [BK_OK] = {GPIOB, 6},
-      [BK_BACK] = {GPIOB, 9}, [BK_HELP] = {GPIOB, 8},
+  } K[IN_COUNT] = {
+      [IN_UP] = {PIN_KEY_UP},     [IN_DOWN] = {PIN_KEY_DOWN}, [IN_OK] = {PIN_KEY_OK},
+      [IN_BACK] = {PIN_KEY_BACK}, [IN_HELP] = {PIN_KEY_HELP},
   };
-  for (int k = 0; k < BK_COUNT; k++) {  // debounce: 8 equal samples in a row
+  for (int k = 0; k < IN_COUNT; k++) {  // debounce: 8 equal samples in a row
     uint8_t bit = (uint8_t) (1u << k);
     key_hist[k] = (uint8_t) (key_hist[k] << 1 | pin_get(K[k].g, K[k].pin));
     if (key_hist[k] == 0xFF && !(keys & bit)) {
@@ -181,7 +214,7 @@ void SysTick_Handler(void) {
   if (ms % 8 == 0 && bl_now != bl_want) {  // fade, about 1/4 s from dark to full
     int step = (bl_want > bl_now ? bl_want - bl_now : bl_now - bl_want) / 8 + 1;
     bl_now = (uint16_t) (bl_want > bl_now ? bl_now + step : bl_now - step);
-    TIM1->CCR1 = bl_now;
+    TIM1->CCR1 = bl_counts(bl_now);
   }
 }
 
@@ -208,21 +241,21 @@ uint8_t board_key_events(uint8_t *up) {
 }
 
 void board_leds(bool alarm, bool filter, bool ok) {
-  pin_set(GPIOC, 10, !alarm);
-  pin_set(GPIOC, 11, !filter);
-  pin_set(GPIOC, 12, !ok);
+  pin_set(PIN_LED_ALARM, !alarm);
+  pin_set(PIN_LED_FILTER, !filter);
+  pin_set(PIN_LED_OK, !ok);
 }
 
 // ---------------------------------------------------------------- backlight
-// TIM1 CH1 on PA8 at ~68 kHz switches the backlight's boost converter directly. 100 % duty shorts the coil
-// across the supply and the chip browns out, so the duty is limited.
+// TIM1 CH1 on PA8 at ~68 kHz, at any clock, switches the backlight's boost converter directly. 100 % duty shorts the
+// coil across the supply and the chip browns out, so the duty is limited.
 //
 // Stock regulates the LED current on PB0, but it samples 7.5 ADC cycles at the start of a period and reads about
 // 2 counts at any duty it uses, way below its targets of 240 full and 6 dimmed. So stock just sits at the limit,
 // compare 210. PB0 is too noisy and drifts too much to regulate on, and it doesn't show where the light starts
 // either, the average rises steadily from compare 140 up. We set the duty directly and never read PB0.
 // Brightness follows the square of the %, which looks about even.
-#define BL_TOP 1050
+#define BL_TOP 1050  // the period, 1867 counts at 128 MHz
 #define BL_DARK 15   // compare at 0 %, the panel we tried was still readable at 10
 #define BL_FULL 225  // compare at 100 %, a bit brighter than stock's 210
 
@@ -302,6 +335,14 @@ static bool rtc_sync(void) {  // wait until the registers show the counter again
   return false;
 }
 
+// a two-word register pair like PRLH/PRLL, in configuration mode
+static void rtc_write(volatile uint32_t *hi, uint32_t v) {
+  RTC->CRL |= RTC_CRL_CNF;
+  hi[0] = v >> 16;
+  hi[1] = v & 0xFFFF;
+  RTC->CRL &= ~RTC_CRL_CNF;
+}
+
 static bool rtc_on_crystal(void) {
   return (RCC->BDCR & (RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL | RCC_BDCR_LSERDY)) ==
          (RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL_LSE | RCC_BDCR_LSERDY);
@@ -328,10 +369,7 @@ void board_rtc_poll(void) {
   RCC->BDCR |= RCC_BDCR_RTCSEL_LSE | RCC_BDCR_RTCEN;
   if (!rtc_wait())
     return;
-  RTC->CRL |= RTC_CRL_CNF;
-  RTC->PRLH = 0;
-  RTC->PRLL = 0x7FFF;  // 32768 Hz -> seconds
-  RTC->CRL &= ~RTC_CRL_CNF;
+  rtc_write(&RTC->PRLH, 0x7FFF);  // 32768 Hz -> seconds
   if (!rtc_wait() || !rtc_sync())
     return;
   rtc_ok = true;
@@ -354,15 +392,11 @@ void board_rtc_set(uint32_t t) {
   soft_ms = ms;
   if (!rtc_ok || !rtc_wait())
     return;
-  RTC->CRL |= RTC_CRL_CNF;
-  RTC->CNTH = t >> 16;
-  RTC->CNTL = t & 0xFFFF;
-  RTC->CRL &= ~RTC_CRL_CNF;
+  rtc_write(&RTC->CNTH, t);
   rtc_wait();
 }
 
 // ---------------------------------------------------------------- reset cause
-extern uint32_t fault_record[2];  // FAULT_MAGIC and the faulting PC from startup.c, kept through the reset
 // Kept through a reset. Starts over at power on, and on the first start after flashing, when it holds whatever
 // was in that RAM.
 #define RESTARTS_MAGIC 0x52535443u
@@ -390,6 +424,57 @@ uint8_t board_reset_cause(uint32_t *fault_pc) {
 }
 
 uint32_t board_restarts(void) { return restarts.n; }
+
+// ---------------------------------------------------------------- over 72 MHz
+// For Processor speed, over the rated 72. SysTick, the microseconds and the backlight follow the clock, see CLOCKS.
+bool board_set_clock(uint32_t mhz) {
+  unsigned i = 1;
+  while (i < LEN(CLOCKS) && CLOCKS[i].mhz != mhz)
+    i++;
+  if (hz != CLOCKS[0].mhz * 1000000u || i == LEN(CLOCKS))
+    return false;  // no crystal, still on HSI. Or not a clock it has
+  uint32_t s = irq_save();
+  RCC->CFGR &= ~RCC_CFGR_SW;  // to HSI, on since clocks(), while the PLL changes
+  while (RCC->CFGR & RCC_CFGR_SWS) {
+  }
+  RCC->CR &= ~RCC_CR_PLLON;
+  while (RCC->CR & RCC_CR_PLLRDY) {
+  }
+  RCC->CFGR = CLOCKS[i].cfgr | RCC_CFGR_PLLSRC_HSE;
+  RCC->CR |= RCC_CR_PLLON;
+  while (!(RCC->CR & RCC_CR_PLLRDY)) {
+  }
+  RCC->CFGR |= RCC_CFGR_SW_PLL;
+  while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
+  }
+  hz = mhz * 1000000;
+  SYSTICK->LOAD = hz / 1000 - 1;
+  SYSTICK->VAL = 0;
+  uint32_t us = board_us();  // the microseconds count on from here
+  TIM2->PSC = us_prescaler();
+  TIM2->EGR = TIM_EGR_UG;  // loads it and zeroes the count. Not a wrap, so clear its flag
+  TIM2->SR = 0;
+  TIM2->CNT = us & 0xFFFF;
+  us_hi = us >> 16;
+  bl_mhz = mhz;
+  TIM1->ARR = bl_counts(BL_TOP);  // both preloaded, they change at the end of a period
+  TIM1->CCR1 = bl_counts(bl_now);
+  irq_restore(s);
+  return true;
+}
+
+// Kept through a reset like restarts above, 0 after a power cut
+#define CLOCK_MARK_MAGIC 0x434C4B4Du
+__attribute__((section(".noinit"))) static struct {
+  uint32_t magic, mark;
+} clock_mark;
+
+uint8_t board_clock_mark(void) { return clock_mark.magic == CLOCK_MARK_MAGIC ? (uint8_t) clock_mark.mark : 0; }
+
+void board_set_clock_mark(uint8_t m) {
+  clock_mark.mark = m;
+  clock_mark.magic = CLOCK_MARK_MAGIC;
+}
 
 // ---------------------------------------------------------------- entropy
 __attribute__((section(".noinit"))) static uint32_t starts;  // not zeroed, counts on from whatever power-up left
@@ -421,9 +506,8 @@ void board_reset(void) {
 }
 
 void board_bootloader(void) {
-  RCC->APB1ENR |= RCC_APB1ENR_PWREN | RCC_APB1ENR_BKPEN;
-  PWR->CR |= PWR_CR_DBP;
-  BKP_DR(1) = 0xDEAD;  // tells the stock bootloader to stay in update mode
+  // tells the stock bootloader to stay in update mode. rtc_init() left the backup domain writable
+  BKP_DR(1) = 0xDEAD;
   board_reset();
 }
 
@@ -490,7 +574,7 @@ void board_init(void) {
   NVIC_IPR8(IRQ_USART1) = 0x10;
   SCB_SHPR3 = (SCB_SHPR3 & 0x00FFFFFF) | 0x20u << 24;
   NVIC_IPR8(IRQ_DMA1_CH3) = 0x20;
-  SYSTICK->LOAD = board_hz / 1000 - 1;
+  SYSTICK->LOAD = hz / 1000 - 1;
   SYSTICK->VAL = 0;
   SYSTICK->CTRL = SYSTICK_CTRL_ON;
   us_init();

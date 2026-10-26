@@ -1,9 +1,7 @@
 // System > About, Bus and Diagnostics pages, and the notices.
 #include "plat.h"
-#include "ui.h"
+#include "ui_int.h"
 #include "authors.h"  // AUTHORS(X), from git by config.mk
-#include <stdio.h>
-#include <string.h>
 
 #define INFO_ROWS 8  // all that fit above the key hints
 #define INFO_ROW 23
@@ -16,101 +14,120 @@ typedef struct {
 } kv_t;
 
 // KB with one decimal
-static const char *kb(char *buf, uint32_t bytes) { return fmt_dec(buf, (int32_t) (bytes * 10 / 1024), 1); }
+static const char *kb(char *buf, size_t n, uint32_t bytes) { return fmt_dec(buf, n, (int32_t) (bytes * 10 / 1024), 1); }
 
 static const char *fw_text(char buf[12]) {
-  snprintf(buf, 12, "%u.%u.%u", (unsigned) (M.fw_version >> 16 & 0xFF), (unsigned) (M.fw_version >> 8 & 0xFF),
-           (unsigned) (M.fw_version & 0xFF));
+  lv_snprintf(buf, 12, "%u.%u.%u", (unsigned) (M.fw_version >> 16 & 0xFF), (unsigned) (M.fw_version >> 8 & 0xFF),
+              (unsigned) (M.fw_version & 0xFF));
   return buf;
 }
 
-// Fills r with the rows for page INFO_*, returns how many
-static int info_rows(int page, kv_t *r) {
-  int n = 0;
-// adds a row unless the page is full
+// Adds a row to r and counts it in n, unless the page is full
 #define ROW(key, fmt, ...) \
   do { \
     if (n == INFO_ROWS) \
       break; \
     r[n].k = key; \
-    snprintf(r[n].v, sizeof r[n].v, fmt, ##__VA_ARGS__); \
+    lv_snprintf(r[n].v, sizeof r[n].v, fmt, ##__VA_ARGS__); \
     n++; \
   } while (0)
-  if (page == INFO_ABOUT) {
-    char fw[12];
-    ROW(S_PANEL_FIRMWARE, "%s", fw_text(fw));
-    if (M.cx60_version)
-      ROW(S_CX60_SOFTWARE, "%d.%02d", M.cx60_version >> 8, M.cx60_version & 0xFF);
-    else
-      ROW(S_CX60_SOFTWARE, "%s", _(S_NOT_SEEN_YET));
-    ROW(S_PANEL_ADDRESS, "%d", M.bus_addr);
-    if (HAS(FEAT_ESP))
-      ROW(S_ESP, _(S_ESP_ADDRESS), M.esp_online ? _(S_ONLINE) : _(S_OFFLINE));
-    ROW(S_FANS, "%s", HAS(FEAT_EC_FANS) ? _(S_EC_VARIABLE) : _(S_AC_STEPPED));
-    ROW(S_HEATER, "%s", HAS(FEAT_WATER_HEATER) ? _(S_WATER_COIL) : _(S_ELECTRIC));
-    ROW(S_COOLING, "%s", HAS(FEAT_COOLING) ? _(S_INSTALLED) : _(S_NOT_INSTALLED));
-    ROW(S_NONE, "%s", REPO);
-  } else if (page == INFO_DIAG) {
-    static const str_t STARTS[] = {[RESET_POWER] = S_START_POWER,
-                                   [RESET_PIN] = S_START_PIN,
-                                   [RESET_WATCHDOG] = S_START_WATCHDOG,
-                                   [RESET_SOFTWARE] = S_START_SOFTWARE};
-    plat_stats_t s;
-    plat_stats(&s);
-    uint32_t up = s.uptime_s;
-    if (up >= 86400)
-      ROW(S_UPTIME, _(S_UPTIME_DAYS), (unsigned long) (up / 86400), (unsigned) (up / 3600 % 24),
-          (unsigned) (up / 60 % 60));
-    else
-      ROW(S_UPTIME, "%02u:%02u:%02u", (unsigned) (up / 3600), (unsigned) (up / 60 % 60), (unsigned) (up % 60));
-    if (M.reset_cause == RESET_FAULT)
-      ROW(S_LAST_START, _(S_START_CRASH), (unsigned long) M.fault_pc);
-    else
-      ROW(S_LAST_START, "%s", tr(STARTS[M.reset_cause]));
-    ROW(S_RESTARTS, "%lu", (unsigned long) s.restarts);
-    ROW(S_PROCESSOR, _(S_BUSY_PCT), M.cpu_busy);
-    char used[12], peak[12];
-    ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, s.heap_used), (unsigned) (s.heap_size / 1024), kb(peak, s.heap_peak));
-    ROW(S_FREE_STACK, "%s KB", kb(used, s.stack_free));
-    ROW(S_FULL_REDRAW, _(S_REDRAW_SENDING), (unsigned long) ((s.full_us + 500) / 1000),
-        (unsigned long) ((s.full_send_us + 500) / 1000));
-    ROW(S_SETTINGS_SAVES, "%lu", (unsigned long) s.saves);
-  } else {
-    ROW(S_UNIT, "%s", M.bus_offline ? _(S_NO_CONTACT_LOWER) : _(S_TALKING));
-    ROW(S_POLLS_TO_THIS_PANEL, "%lu", (unsigned long) M.bus_ours);
-    ROW(S_FRAMES_OK, "%lu", (unsigned long) M.bus_ok);
-    uint64_t frames = (uint64_t) M.bus_ok + M.bus_err;
-    unsigned long bp = frames ? (unsigned long) (M.bus_err * 10000ull / frames) : 0;  // 0.01 % steps
-    ROW(S_ERRORS, "%lu (%lu.%02lu %%)", (unsigned long) M.bus_err, bp / 100, bp % 100);
-    if (HAS(FEAT_ESP)) {
-      const pbulk_panel_t *b = link_bulk_state();
-      const pbus_panel_t *w = link_bus_state();
-      if (M.esp_version && !link_compatible())
-        ROW(S_ESP_LINK, _(S_LINK_OTHER_VERSION), PLINK_VERSION, M.esp_version);
-      else
-        ROW(S_ESP_LINK, _(S_LINK_VERSION), PLINK_VERSION,
-            w->refused     ? _(S_REFUSED)
-            : M.esp_online ? _(S_CONNECTED)
-                           : _(S_WAITING));
-      ROW(S_LINK_FRAMES, "%lu", (unsigned long) b->frames);
-      ROW(S_LATE_BUSY_LOST, "%lu, %lu, %lu", (unsigned long) b->late, (unsigned long) b->busy,
-          (unsigned long) b->resyncs);
-      // shortest pause after the unit's status broadcast, in 0.1 ms
-      char ms[12];
-      fmt_dec(ms, (int32_t) (w->quiet_min_us / 100), 1);
-      if (w->quiet_min_us == UINT32_MAX)
-        ROW(S_UNIT_PAUSE, "%s", _(S_NOT_SEEN_YET));
-      else if (w->refused)
-        ROW(S_UNIT_PAUSE, _(S_PAUSE_TOO_SHORT), ms);
-      else if (w->gaps.off)
-        ROW(S_UNIT_PAUSE, _(S_PAUSE_NO_GAPS), ms);
-      else
-        ROW(S_UNIT_PAUSE, _(S_PAUSE_MS), ms);
-    }
-  }
-#undef ROW
+
+static int about_rows(kv_t *r) {
+  int n = 0;
+  char fw[12];
+  ROW(S_PANEL_FIRMWARE, "%s", fw_text(fw));
+  if (M.cx60_version)
+    ROW(S_CX60_SOFTWARE, "%d.%02d", M.cx60_version >> 8, M.cx60_version & 0xFF);
+  else
+    ROW(S_CX60_SOFTWARE, "%s", _(S_NOT_SEEN_YET));
+  ROW(S_PANEL_ADDRESS, "%d", M.bus_addr);
+  if (HAS(FEAT_ESP))
+    ROW(S_ESP, _(S_ESP_ADDRESS), M.esp_online ? _(S_ONLINE) : _(S_OFFLINE));
+  ROW(S_FANS, "%s", HAS(FEAT_EC_FANS) ? _(S_EC_VARIABLE) : _(S_AC_STEPPED));
+  ROW(S_HEATER, "%s", HAS(FEAT_WATER_HEATER) ? _(S_WATER_COIL) : _(S_ELECTRIC));
+  ROW(S_COOLING, "%s", HAS(FEAT_COOLING) ? _(S_INSTALLED) : _(S_NOT_INSTALLED));
+  ROW(S_NONE, "%s", REPO);
   return n;
 }
+
+static int bus_rows(kv_t *r) {
+  int n = 0;
+  ROW(S_UNIT, "%s", M.bus_offline ? _(S_NO_CONTACT_LOWER) : _(S_TALKING));
+  ROW(S_POLLS_TO_THIS_PANEL, "%lu", (unsigned long) M.bus_ours);
+  ROW(S_FRAMES_OK, "%lu", (unsigned long) M.bus_ok);
+  uint64_t frames = (uint64_t) M.bus_ok + M.bus_err;
+  unsigned long bp = frames ? (unsigned long) (M.bus_err * 10000ull / frames) : 0;  // 0.01 % steps
+  char pct[16];
+  sprint(pct, sizeof pct, "%lu.%02lu", bp / 100, bp % 100);
+  ROW(S_ERRORS, "%lu (%s)", (unsigned long) M.bus_err, add_unit(pct, sizeof pct, "%"));
+  if (HAS(FEAT_ESP)) {
+    const pbulk_panel_t *b = link_bulk_state();
+    const pbus_panel_t *w = link_bus_state();
+    if (M.esp_version && !link_compatible())
+      ROW(S_ESP_LINK, _(S_LINK_OTHER_VERSION), PLINK_VERSION, M.esp_version);
+    else
+      ROW(S_ESP_LINK, _(S_LINK_VERSION), PLINK_VERSION,
+          w->refused     ? _(S_REFUSED)
+          : M.esp_online ? _(S_CONNECTED)
+                         : _(S_WAITING));
+    ROW(S_LINK_FRAMES, "%lu", (unsigned long) b->frames);
+    ROW(S_LATE_BUSY_LOST, "%lu, %lu, %lu", (unsigned long) b->late, (unsigned long) b->busy,
+        (unsigned long) b->resyncs);
+    // shortest pause after the unit's status broadcast, in 0.1 ms
+    char ms[12];
+    fmt_dec(ms, sizeof ms, (int32_t) (w->quiet_min_us / 100), 1);
+    if (w->quiet_min_us == UINT32_MAX)
+      ROW(S_UNIT_PAUSE, "%s", _(S_NOT_SEEN_YET));
+    else if (w->refused)
+      ROW(S_UNIT_PAUSE, _(S_PAUSE_TOO_SHORT), ms);
+    else if (w->gaps.off)
+      ROW(S_UNIT_PAUSE, _(S_PAUSE_NO_GAPS), ms);
+    else
+      ROW(S_UNIT_PAUSE, _(S_PAUSE_MS), ms);
+  }
+  return n;
+}
+
+static int diag_rows(kv_t *r) {
+  int n = 0;
+  static const str_t STARTS[] = {[RESET_POWER] = S_START_POWER,
+                                 [RESET_PIN] = S_START_PIN,
+                                 [RESET_WATCHDOG] = S_START_WATCHDOG,
+                                 [RESET_SOFTWARE] = S_START_SOFTWARE};
+  plat_stats_t s;
+  plat_stats(&s);
+  uint32_t up = s.uptime_s;
+  if (up >= 86400)
+    ROW(S_UPTIME, _(S_UPTIME_DAYS), (unsigned long) (up / 86400), (unsigned) (up / 3600 % 24),
+        (unsigned) (up / 60 % 60));
+  else
+    ROW(S_UPTIME, "%02u:%02u:%02u", (unsigned) (up / 3600), (unsigned) (up / 60 % 60), (unsigned) (up % 60));
+  if (M.reset_cause == RESET_FAULT)
+    ROW(S_LAST_START, _(S_START_CRASH), (unsigned long) M.fault_pc);
+  else
+    ROW(S_LAST_START, "%s", tr(STARTS[M.reset_cause]));
+  ROW(S_RESTARTS, "%lu", (unsigned long) s.restarts);
+  ROW(S_PROCESSOR, _(S_MHZ_BUSY), (unsigned) s.cpu_mhz, M.cpu_busy);
+  char used[12], peak[12];
+  ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, sizeof used, s.heap_used), (unsigned) (s.heap_size / 1024),
+      kb(peak, sizeof peak, s.heap_peak));
+  ROW(S_FREE_STACK, "%s KB", kb(used, sizeof used, s.stack_free));
+  ROW(S_FULL_REDRAW, _(S_REDRAW_SENDING), (unsigned long) ((s.full_us + 500) / 1000),
+      (unsigned long) ((s.full_send_us + 500) / 1000));
+  ROW(S_SETTINGS_SAVES, "%lu", (unsigned long) s.saves);
+  return n;
+}
+#undef ROW
+
+// rows() fills r and returns how many
+static const struct {
+  str_t title, help;
+  int (*rows)(kv_t *r);
+} PAGES[] = {
+    [INFO_ABOUT] = {S_ABOUT, S_ABOUT_PAGE_HELP, about_rows},
+    [INFO_BUS] = {S_BUS, S_BUS_PAGE_HELP, bus_rows},
+    [INFO_DIAG] = {S_DIAGNOSTICS, S_DIAG_PAGE_HELP, diag_rows},
+};
 
 typedef struct {
   lv_obj_t *v[INFO_ROWS];
@@ -121,11 +138,10 @@ typedef struct {
 SCREEN_STATE(info_t, info);
 
 static void info_build(lv_obj_t *b, intptr_t arg) {
-  memset(info, 0, sizeof *info);
-  ui_set_title(arg == INFO_BUS ? _(S_BUS) : arg == INFO_DIAG ? _(S_DIAGNOSTICS) : _(S_ABOUT));
-  kv_t r[INFO_ROWS];
   info->page = (int) arg;
-  info->n = info_rows(info->page, r);
+  ui_set_title(tr(PAGES[info->page].title));
+  kv_t r[INFO_ROWS];
+  info->n = PAGES[info->page].rows(r);
   for (int i = 0; i < info->n; i++) {
     int y = 6 + i * INFO_ROW;
     if (i % 2 == 0)
@@ -140,13 +156,13 @@ static void info_build(lv_obj_t *b, intptr_t arg) {
     lv_obj_align(info->v[i], LV_ALIGN_TOP_RIGHT, -18, y + 1);
   }
   ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
-  ui_help(arg == INFO_BUS ? S_BUS_PAGE_HELP : arg == INFO_DIAG ? S_DIAG_PAGE_HELP : S_ABOUT_PAGE_HELP);
+  ui_help(PAGES[info->page].help);
 }
 
 // Values only, the rows themselves only change on a rebuild
 static void info_update(void) {
   kv_t r[INFO_ROWS];
-  if (info_rows(info->page, r) != info->n)
+  if (PAGES[info->page].rows(r) != info->n)
     return;
   for (int i = 0; i < info->n; i++)
     lv_label_set_text(info->v[i], r[i].v);
@@ -169,7 +185,7 @@ static bool info_key(int k) {
   return true;
 }
 
-const screen_t SCR_INFO = {.title = S_ABOUT, .build = info_build, .update = info_update, .key = info_key};
+const screen_t SCR_INFO = {.build = info_build, .update = info_update, .key = info_key};
 
 // ---------------------------------------------------------------- notices
 #define NOTICE_MS 50           // per px up
@@ -324,7 +340,6 @@ static bool notices_led(uint32_t ms) {
 
 static void notices_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  memset(notices, 0, sizeof *notices);
   notices->next_y = 70;  // the title starts a bit down rather than below the screen
   notices_fill(b);
   mk_timer(notices->l[0], notices_step, NOTICE_MS);

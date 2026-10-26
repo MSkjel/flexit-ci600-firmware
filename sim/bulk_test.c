@@ -1,8 +1,14 @@
 // The ESP link on a simulated bus, with the CX60's schedule as its firmware runs it. Fails if a link frame
-// ever overlaps the CX60, the CX60 gets more than 256 bytes at once, or a picture arrives damaged.
-//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2]
+// ever overlaps the CX60, the CX60 gets more than 256 bytes at once, a picture arrives damaged, or the panel
+// refuses the link and refused isn't 1.
+//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2] [refused]
+#include "bus.h"
+#include "link.h"
+#include "mbserver.h"
 #include "pbulk.h"
 #include "plink.h"
+#include "check.h"
+#include "cx60.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,16 +17,15 @@
 typedef int64_t ns_t;  // simulated time in ns
 #define US 1000LL
 #define MS 1000000LL
-#define BYTE 86806LL  // 10 bits at 115200
-#define STEP 1000LL   // simulation step, 1 us
+#define STEP 1000LL  // simulation step, 1 us
 
 // Timing as flexit_modbus_server.cpp assumes it. Bytes become readable at the RX FIFO threshold or 2 bytes
 // after the line goes quiet, plus ESP_ISR_US of interrupt latency.
 static int esp_threshold = 1;
 #define ESP_ISR_US 150
-#define PANEL_STATUS_ISR_US \
-  250  // us hw/rs485.c's interrupt spends on a status frame, measured 0.22 ms. Only the first byte that
-       // comes in meanwhile survives
+// What hw/rs485.c's interrupt spends on a status frame in us, measured 0.22 ms. Only the first byte that comes in
+// meanwhile survives.
+#define PANEL_STATUS_ISR_US 250
 
 static ns_t now;
 static uint32_t rnd_state = 1;
@@ -45,7 +50,6 @@ static tx_t TX[NDEV];
 typedef struct {  // what a device is receiving
   uint8_t b[600];
   int n;
-  int src;  // who sent it, -1 = more than one
   ns_t first, last;
 } burst_t;
 
@@ -78,7 +82,7 @@ static void start_tx(int dev, const uint8_t *b, int n, bool bulk) {
   t->i = 0;
   t->on = true;
   t->bulk = bulk;
-  t->next = now + BYTE;
+  t->next = now + PBUS_BYTE_NS;
   BUS.frames++;
   if (bulk)
     BUS.bulk++;
@@ -102,17 +106,9 @@ static void step_tx(void) {
       t->on = false;
       t->busy_until = now + de_tail(d);
     } else {
-      t->next += BYTE;
+      t->next += PBUS_BYTE_NS;
     }
   }
-}
-
-static uint16_t crc(const uint8_t *p, int n) { return pbus_crc16(p, n); }
-static int fin(uint8_t *f, int n) {
-  uint16_t c = crc(f, n);
-  f[n] = c & 0xFF;
-  f[n + 1] = c >> 8;
-  return n + 2;
 }
 
 // ---------------------------------------------------------------- the CX60, modelled on its firmware
@@ -163,7 +159,7 @@ static int mk(uint8_t *f, uint8_t addr, uint8_t fc, uint16_t a, uint16_t b) {
   f[3] = a & 0xFF;
   f[4] = b >> 8;
   f[5] = b & 0xFF;
-  return fin(f, 6);
+  return pbus_put_crc(f, 6);
 }
 
 static void tick(void) {  // SysTick
@@ -213,7 +209,7 @@ static void run_job(void) {
 // Coils flagged in a poll's reply, which the CX60 reads right away. All of them after the settings poll, the
 // first 20 after the counters poll, like mb_poll_panel_settings and mb_poll_panel_counters.
 static int flagged(bool settings, int *first) {
-  int bits = settings ? 0x14C : 20, n = 0;
+  int bits = settings ? PBUS_COUNTERS : 20, n = 0;
   *first = -1;
   for (int i = 0; i < bits && 3 + i / 8 < C.rx_len - 2; i++)
     if (C.rx_buf[3 + i / 8] >> (i % 8) & 1) {
@@ -224,16 +220,17 @@ static int flagged(bool settings, int *first) {
   return n;
 }
 
+// The next of main_loop's states: the status broadcast, then the settings and counters polls of each address
+static void next_state(void) { C.state = C.state == 6 ? 0 : C.state + 1; }
+
 static void poll(int p, bool settings) {
   if (!PRESENT[p]) {
-    C.state = C.state % 6 + 1;
-    if (C.state == 7)
-      C.state = 0;
+    next_state();
     return;
   }
   if (C.poll_state == 0) {
     uint8_t f[8];
-    mk(f, (uint8_t) p, 1, settings ? 0 : 0x14C, settings ? 0x14C : 0x168);
+    mk(f, (uint8_t) p, 1, settings ? 0 : PBUS_COUNTERS, settings ? PBUS_COUNTERS : 0x168);
     cu_tx(f, 8);
     C.want_src = DEV_OF[p];
     C.want_len = settings ? 47 : 50;
@@ -246,10 +243,10 @@ static void poll(int p, bool settings) {
     if (!C.rx_done)
       return;
     C.rx_done = false;
-    int first, n = C.reply_ok ? flagged(settings, &first) : 0;
+    int first = 0, n = C.reply_ok ? flagged(settings, &first) : 0;
     for (int i = 0; i < n; i++) {  // which coils doesn't matter here
       uint8_t f[8];
-      uint16_t reg = (uint16_t) ((settings ? 0 : 0x14C) + first + i);
+      uint16_t reg = (uint16_t) ((settings ? 0 : PBUS_COUNTERS) + first + i);
       mk(f, (uint8_t) p, 3, reg, 1);
       push(J_SEND, f, 8);
       mk(f, 0, 0x65, reg, (uint16_t) rnd());
@@ -257,7 +254,7 @@ static void poll(int p, bool settings) {
     }
   }
   C.poll_state = 0;
-  C.state = C.state == 6 ? 0 : C.state + 1;
+  next_state();
 }
 
 static void cx60_step(void) {  // one TMR_IO step of main_loop's state machine
@@ -281,23 +278,8 @@ static void cx60_step(void) {  // one TMR_IO step of main_loop's state machine
         C.state = 1;
       }
       return;
-    case 1:
-      poll(3, true);
-      return;
-    case 2:
-      poll(3, false);
-      return;
-    case 3:
-      poll(2, true);
-      return;
-    case 4:
-      poll(2, false);
-      return;
-    case 5:
-      poll(1, true);
-      return;
-    case 6:
-      poll(1, false);
+    default:  // 1..6, each address from 3 down, settings then counters
+      poll(3 - (C.state - 1) / 2, C.state % 2);
       return;
   }
 }
@@ -340,7 +322,7 @@ static int reply_to(const uint8_t *q, uint8_t *f, int flags) {
     f[2] = 2;
     f[3] = 0;
     f[4] = 1;
-    return fin(f, 5);
+    return pbus_put_crc(f, 5);
   }
   bool settings = !(q[2] << 8 | q[3]);
   int bytes = settings ? 42 : 45;
@@ -351,7 +333,7 @@ static int reply_to(const uint8_t *q, uint8_t *f, int flags) {
     int c = settings ? 0xA1 + i : i;
     f[3 + c / 8] |= (uint8_t) (1u << (c % 8));
   }
-  return fin(f, 3 + bytes);
+  return pbus_put_crc(f, 3 + bytes);
 }
 
 // How many coils a device flags in its reply to q. Settings now and then when something changed, counters
@@ -371,8 +353,8 @@ static int p2_answer_n;
 static ns_t p2_answer_at;
 
 static void panel2(void) {
-  if (P2.n && now >= P2.last + BYTE) {
-    if (P2.n == 8 && P2.b[0] == 2 && crc(P2.b, 6) == (P2.b[6] | P2.b[7] << 8)) {
+  if (P2.n && now >= P2.last + PBUS_BYTE_NS) {
+    if (P2.n == 8 && P2.b[0] == 2 && pbus_crc_ok(P2.b, 8)) {
       p2_answer_n = reply_to(P2.b, p2_answer, flags_for(P2.b, 50));
       p2_answer_at = now + between(200 * US, 1500 * US);
     }
@@ -400,40 +382,46 @@ static int panel_coils;
 static uint32_t panel_said, esp_heard, esp_heard_wrong;  // numbered messages from the panel to the ESP
 static long panel_gap_answers;
 
-// Like hw/rs485.c. A link frame gets an answer if pbus says there's time. Anything else goes to pbus, and gets
-// a reply if it's for us.
+// hw/bus.c sorts the bursts out as on the panel, with these three in place of link.c's and mbserver.c's. A link
+// frame is answered if pbus says there's time, the rest goes to pbus and gets a reply if it's for us.
+int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, uint8_t *answer) {
+  bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS.end_us);
+  uint8_t say;
+  uint32_t left = pbus_panel_window(&PBUS, idle_us, now_ms, &say);
+  int k = pbulk_panel_frame(&PRX, 3, f, n, left, say, PBUS.end_us, answer);
+  if (k && gap)
+    panel_gap_answers++;
+  return k;
+}
+
+void link_bus(const uint8_t *b, int n, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
+  pbus_panel_burst(&PBUS, b, n, start_us, idle_us, now_ms);
+}
+
+int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
+  if (n != 8 || q[0] != 3 || !pbus_crc_ok(q, 8))  // a poll or a read for us
+    return 0;
+  int flags = 0;
+  if (q[1] == 1 && !(q[2] << 8 | q[3])) {
+    flags = panel_coils;
+    panel_coils = 0;
+  } else
+    flags = flags_for(q, 1 << 30);
+  return reply_to(q, r, flags);
+}
+
 static void panel_burst(burst_t *b) {
-  ns_t idle = b->last + BYTE;  // the idle interrupt
-  uint32_t idle_us = (uint32_t) (idle / US), ms = (uint32_t) (idle / MS);
-  if (b->n > 0 && b->b[0] == PBULK_ADDR) {
-    if (pbulk_frame_len(b->b, b->n) != b->n)
-      return;
-    bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS.end_us);
-    uint8_t say;
-    uint32_t left = pbus_panel_window(&PBUS, idle_us, ms, &say);
-    int n = pbulk_panel_frame(&PRX, 3, b->b, b->n, left, say, PBUS.end_us, panel_answer);
-    if (n) {  // wait for the ESP's driver to let go, like hw/rs485.c
-      panel_answer_n = n;
-      panel_answer_at = idle + between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US);
-      if (gap)
-        panel_gap_answers++;
-    }
-    return;
-  }
-  pbus_panel_burst(&PBUS, b->b, b->n, (uint32_t) (b->first / US), idle_us, ms);
-  if (PBUS.after_status) {
+  ns_t idle = b->last + PBUS_BYTE_NS;  // the idle interrupt
+  bool modbus;
+  int n = bus_burst(b->b, b->n, (uint32_t) (b->first / US), (uint32_t) (idle / US), (uint32_t) (idle / MS),
+                    panel_answer, &modbus);
+  if (modbus && PBUS.after_status) {
     PW.busy_until = idle + PANEL_STATUS_ISR_US * US;
     PW.held = false;
   }
-  if (b->n == 8 && b->b[0] == 3 && crc(b->b, 6) == (b->b[6] | b->b[7] << 8)) {  // a poll or a read for us
-    int flags = 0;
-    if (b->b[1] == 1 && !(b->b[2] << 8 | b->b[3])) {
-      flags = panel_coils;
-      panel_coils = 0;
-    } else
-      flags = flags_for(b->b, 1 << 30);
-    panel_answer_n = reply_to(b->b, panel_answer, flags);
-    panel_answer_at = idle + 20 * US;
+  if (n) {  // a link answer waits for the ESP's driver to let go, like hw/rs485.c
+    panel_answer_n = n;
+    panel_answer_at = idle + (modbus ? 20 * US : between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US));
   }
 }
 
@@ -475,7 +463,7 @@ static void panel_msg(void *u, uint16_t key, const uint8_t *b, int len) {
 }
 
 static void panel(void) {
-  if (PB.n && now >= PB.last + BYTE) {
+  if (PB.n && now >= PB.last + PBUS_BYTE_NS) {
     panel_burst(&PB);
     PB.n = 0;
   }
@@ -540,6 +528,10 @@ static struct {
   ns_t link_end;             // when its last link frame was out
 } E;
 static pbus_gaps_t EG;  // the gaps, as the ESP sees them
+// how long after the panel refuses the link or the gaps the ESP asks again, like panel_link.h
+#define ASK_AGAIN (60 * 1000 * MS)
+static ns_t refused_at;
+static long retries;
 
 static void esp_rx(uint8_t c) {
   int id = (int) (E.next % NB);
@@ -558,11 +550,11 @@ static void esp_rx(uint8_t c) {
 }
 
 static void esp_uart(void) {
-  if (E.open && now >= E.last + BYTE) {
+  if (E.open && now >= E.last + PBUS_BYTE_NS) {
     E.open = false;
     E.next++;
   }  // the bus went quiet, next burst
-  if (!E.fifo || (E.fifo < esp_threshold && now < E.fifo_last + 2 * BYTE))
+  if (!E.fifo || (E.fifo < esp_threshold && now < E.fifo_last + 2 * PBUS_BYTE_NS))
     return;
   if (!E.move_at)
     E.move_at = now + between(5 * US, 60 * US);  // the driver's interrupt latency
@@ -627,8 +619,8 @@ static void esp_frame(const uint8_t *f, int n) {
   // like frame_age_us(), the UART hands bytes over at its threshold or 2 bytes after the line goes quiet
   uint32_t age = (uint32_t) ((now - E.prev_start) / US) + ESP_ISR_US +
                  (uint32_t) (esp_threshold - 1 > 2 ? esp_threshold - 1 : 2) * PBUS_BYTE_US;
-  pbus_gaps_frame(&EG, f, n, (uint32_t) (now / US) - age - (uint32_t) n * 87,
-                  (uint32_t) (now / US) - (uint32_t) n * 86);
+  pbus_gaps_frame(&EG, f, n, (uint32_t) (now / US) - age - (uint32_t) n * PBUS_BYTE_US,
+                  (uint32_t) (now / US) - (uint32_t) n * 86);  // a byte rounded down for the latest, like panel_link.h
   E.seen_at = now;
   if (pbus_is_status(f, n)) {
     E.status_new = E.status_last = true;
@@ -636,7 +628,10 @@ static void esp_frame(const uint8_t *f, int n) {
   }
   E.status_last = false;
   if (n >= 3 && f[0] == PBULK_ADDR && f[1] == PBULK_FC_ANSWER) {
+    bool refused = ETX.refused, no_gaps = ETX.no_gaps;
     pbulk_esp_answer(&ETX, f, n, esp_got, NULL);
+    if ((ETX.refused && !refused) || (ETX.no_gaps && !no_gaps))
+      refused_at = now;
     return;
   }
   if (n == 8 && f[0] == 1 && (f[1] == 1 || f[1] == 3)) {
@@ -656,6 +651,39 @@ static ns_t esp_loop_len(void) {  // one ESPHome loop over all components
 
 static ns_t esp_start(void) {  // from deciding to send to the first bit on the wire, for DE, yield and the driver
   return rnd() % 100 ? between(30 * US, 300 * US) : between(300 * US, 1500 * US);
+}
+
+// The component's splitter, a frame to esp_frame() as soon as all of it is in by length and CRC. Returns how much
+// of a status frame the partial frame at the end has.
+static int split(void) {
+  while (E.first < E.next || (E.first == E.next && E.ring > 0)) {
+    int id = (int) (E.first % NB);
+    int take = E.len[id] - E.have[id];
+    if (take > E.ring)
+      take = E.ring;
+    E.have[id] += take;
+    E.ring -= take;
+    if (E.done[id]) {
+      if (E.first == E.next)
+        break;
+      E.first++;
+      continue;
+    }
+    int n = E.len[id];
+    bool whole = E.have[id] == n && (E.first < E.next || (n <= 200 && pbus_crc_ok(E.frame[id], n)));
+    if (!whole) {  // another frame has started, so the status frame isn't the last
+      E.status_last = false;
+      break;
+    }
+    esp_frame(E.frame[id], n > 200 ? 200 : n);
+    if (E.first == E.next) {
+      E.done[id] = true;
+      break;
+    }
+    E.first++;
+  }
+  int id = (int) (E.first % NB), part = E.first <= E.next && !E.done[id] ? E.have[id] : 0;
+  return pbus_status_part(E.frame[id], part > 200 ? 200 : part);
 }
 
 static void esp(void) {
@@ -679,37 +707,7 @@ static void esp(void) {
   if (TX[ESP].on || now < TX[ESP].busy_until || now < E.loop_at)
     return;
   ns_t start = now;  // mb_.update() reads what the driver has
-  // the component's splitter, a frame as soon as all of it is in by length and CRC
-  while (E.first < E.next || (E.first == E.next && E.ring > 0)) {
-    int id = (int) (E.first % NB);
-    int take = E.len[id] - E.have[id];
-    if (take > E.ring)
-      take = E.ring;
-    E.have[id] += take;
-    E.ring -= take;
-    if (E.done[id]) {
-      if (E.first == E.next)
-        break;
-      E.first++;
-      continue;
-    }
-    int n = E.len[id];
-    bool whole = E.have[id] == n &&
-                 (E.first < E.next ||
-                  (n >= 4 && n <= 200 && crc(E.frame[id], n - 2) == (E.frame[id][n - 2] | E.frame[id][n - 1] << 8)));
-    if (!whole) {
-      E.status_last = false;
-      break;
-    }  // another frame has started, so the status frame isn't the last
-    esp_frame(E.frame[id], n > 200 ? 200 : n);
-    if (E.first == E.next) {
-      E.done[id] = true;
-      break;
-    }
-    E.first++;
-  }
-  int id = (int) (E.first % NB), part = E.first <= E.next && !E.done[id] ? E.have[id] : 0;  // the partial frame, if any
-  int k = pbus_status_part(E.frame[id], part > 200 ? 200 : part);
+  int k = split();
   // Like panel_link.h's gap(): an answer starts within PBUS_TURN_US, nothing on the way well after that means none
   if (ETX.sent && now - E.link_end > (PBUS_TURN_US + 1000) * US && !E.fifo && !E.ring && !E.open && E.first >= E.next)
     pbulk_esp_no_answer(&ETX);
@@ -722,6 +720,10 @@ static void esp(void) {
     E.replied = true;
   } else if (E.status_new && E.status_last && !E.replied_before) {  // the status window, in the component's loop()
     E.windows++;
+    if ((ETX.refused || ETX.no_gaps) && now - refused_at > ASK_AGAIN) {
+      pbulk_esp_retry(&ETX);
+      retries++;
+    }
     // panel_link.h's window(), run right after the end of the status frame was read. One frame every cycle,
     // with messages or as a poll.
     ns_t wait = pbus_wait_us(0) * US;
@@ -755,6 +757,14 @@ static void esp(void) {
   E.loop_at = now + esp_loop_len();
 }
 
+static void burst_add(burst_t *b, uint8_t c) {
+  if (!b->n)
+    b->first = now;
+  if (b->n < (int) sizeof b->b)
+    b->b[b->n++] = c;
+  b->last = now;
+}
+
 static void rx_byte(int dev, uint8_t c, int src) {
   if (dev == ESP) {
     esp_rx(c);
@@ -770,24 +780,12 @@ static void rx_byte(int dev, uint8_t c, int src) {
       }
       PW.held = true;
     }
-    if (!PB.n) {
-      PB.first = now;
-      PB.src = src;
-    } else if (PB.src != src)
-      PB.src = -1;
-    if (PB.n < 600)
-      PB.b[PB.n++] = c;
-    PB.last = now;
+    burst_add(&PB, c);
     return;
   }
   if (dev == PANEL2) {
-    if (TX[PANEL2].on)
-      return;
-    if (!P2.n)
-      P2.src = src;
-    if (P2.n < 600)
-      P2.b[P2.n++] = c;
-    P2.last = now;
+    if (!TX[PANEL2].on)
+      burst_add(&P2, c);
     return;
   }
   if (!C.rx_en)
@@ -825,7 +823,7 @@ static void cx60_rx(void) {
     cu_rx_seen = C.rx_len;
     cu_rx_last = now;
   }
-  if (C.rx_len && now >= cu_rx_last + BYTE) {  // line idle, rx_done and stop listening
+  if (C.rx_len && now >= cu_rx_last + PBUS_BYTE_NS) {  // line idle, rx_done and stop listening
     C.rx_done = true;
     C.rx_en = false;
     C.reply_ok = C.rx_src == C.want_src && C.rx_len == C.want_len;
@@ -839,16 +837,8 @@ int main(int argc, char **argv) {
   rnd_state = argc > 3 ? (uint32_t) atoi(argv[3]) : 1;
   esp_threshold = argc > 4 ? atoi(argv[4]) : 1;
   PRESENT[2] = argc > 5 ? atoi(argv[5]) : 0;
-  STATUS[0] = 0;
-  STATUS[1] = 0x10;
-  STATUS[2] = 0;
-  STATUS[3] = 0xBE;
-  STATUS[4] = 0;
-  STATUS[5] = 0x55;
-  STATUS[6] = 0xAA;
-  for (int i = 7; i < PBUS_STATUS_LEN - 2; i++)
-    STATUS[i] = (uint8_t) i;
-  fin(STATUS, PBUS_STATUS_LEN - 2);
+  bool refused_ok = argc > 6 && atoi(argv[6]);
+  cx60_status(STATUS);
 
   C.io_c = 10;
   C.ctl_c = 1000;
@@ -883,11 +873,13 @@ int main(int argc, char **argv) {
   printf("  CX60: %ld status broadcasts, longest burst it was handed %ld bytes, %ld overflows\n", C.status_n, C.longest,
          C.overflows);
   printf("  CX60 quiet after a status frame, shortest the panel saw: %.1f ms\n", PBUS.quiet_min_us / 1000.0);
-  printf("  ESP: %ld windows, %u frames with messages, %u polls, %u answered, %u missed, %u too short%s\n", E.windows,
-         ETX.frames, ETX.polls, ETX.answered, ETX.missed, ETX.short_windows, ETX.refused ? ", refused" : "");
-  printf(
-      "  panel: %u frames, %u polls, %u taken, %u busy, %u late, %u refused; it said %u, the ESP heard %u (%u wrong)\n",
-      PRX.frames, PRX.polls, PRX.taken, PRX.busy, PRX.late, PRX.refused, panel_said, esp_heard, esp_heard_wrong);
+  printf("  ESP: %ld windows, %u frames with messages, %u polls, %u answered, %u missed, %u too short", E.windows,
+         ETX.frames, ETX.polls, ETX.answered, ETX.missed, ETX.short_windows);
+  if (retries)
+    printf(", asked again %ld times", retries);
+  printf("%s\n", ETX.refused ? ", refused" : "");
+  printf("  panel: %u frames, %u busy, %u late, %u refused; it said %u, the ESP heard %u (%u wrong)\n", PRX.frames,
+         PRX.busy, PRX.late, PRX.refused, panel_said, esp_heard, esp_heard_wrong);
   printf("  gaps after polls: the ESP saw %u (the panel %u) and sent %ld frames in them, the panel answered %ld%s%s\n",
          EG.gaps, PBUS.gaps.gaps, E.gap_frames, panel_gap_answers, EG.off || PBUS.gaps.off ? ", turned off" : "",
          ETX.no_gaps ? ", the panel said no" : "");
@@ -903,12 +895,23 @@ int main(int argc, char **argv) {
   printf("  collisions: %ld of the link with the CX60, %ld answers lost to the ESP's driver staying on,\n"
          "              %ld without the link (the ESP answering the CX60 after it gave up)\n",
          BUS.cx60_hit, BUS.answers_hit, BUS.collisions - BUS.cx60_hit - BUS.answers_hit);
+  CHECK_MSG(!BUS.cx60_hit, "the link ran into the CX60 %ld times", BUS.cx60_hit);
+  CHECK_MSG(!C.overflows, "the CX60 was handed more than 256 bytes %ld times", C.overflows);
+  CHECK_MSG(!PW.overruns, "the panel lost %ld bytes while busy with a status frame", PW.overruns);
+  CHECK_MSG(worst_end <= PBUS_END_MAX_US * US, "the link was still on the bus %.2f ms after the status frame",
+            worst_end / 1e6);
   // The gaps go off when the CX60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
   // busy that long at a step. So they only have to stay on with control_tick <= 2.5 ms.
-  bool ok = !BUS.cx60_hit && !C.overflows && !PW.overruns && worst_end <= PBUS_END_MAX_US * US &&
-            (ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off)) && !pics_bad && !esp_heard_wrong &&
-            panel_said - esp_heard < 20 && (ETX.refused || pics_ok > 0) && refused_long &&
-            (ETX.refused || help_wait < HELP_WAIT_MAX);
-  printf("%s\n", ok ? "OK" : "FAILED");
-  return ok ? 0 : 1;
+  CHECK_MSG(ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off), "the gaps after polls went off");
+  CHECK_MSG(!pics_bad, "%ld pictures damaged", pics_bad);
+  CHECK_MSG(!esp_heard_wrong, "the ESP heard %u of the panel's messages wrong", esp_heard_wrong);
+  CHECK_MSG(panel_said - esp_heard < 20, "the panel said %u, the ESP heard %u", panel_said, esp_heard);
+  CHECK_MSG(refused_long, "a help text one byte too long was taken");
+  // Where the panel may refuse the link and does, nothing has to get through
+  CHECK_MSG(refused_ok || !PRX.refused, "the panel refused %u frames", PRX.refused);
+  bool excused = refused_ok && PRX.refused;
+  CHECK_MSG(excused || pics_ok > 0, "no picture arrived");
+  CHECK_MSG(excused || help_wait < HELP_WAIT_MAX, "a help text waited %.1f s", help_wait / 1e9);
+  printf("%s\n", check_fails ? "FAILED" : "OK");
+  return check_fails != 0;
 }

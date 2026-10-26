@@ -13,6 +13,7 @@ many bytes went. Stdlib only.
 import argparse
 import http.server
 import os
+import shutil
 import socket
 import sys
 
@@ -62,14 +63,8 @@ def main(argv):
             self.end_headers()
             if body:
                 with open(path, "rb") as f:
-                    sent = 0
-                    while True:
-                        chunk = f.read(16384)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        sent += len(chunk)
-                self.log_message("sent %s (%d bytes) to %s", name, sent, self.client_address[0])
+                    shutil.copyfileobj(f, self.wfile)
+                self.log_message("sent %s (%d bytes) to %s", name, size, self.client_address[0])
 
         def do_GET(self):
             self._serve(True)

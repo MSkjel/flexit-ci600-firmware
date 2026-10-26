@@ -28,9 +28,9 @@ uint16_t board_room_adc(void) { return 1990; }
 uint32_t board_rtc_get(void) { return stub_rtc; }
 void board_rtc_set(uint32_t t) { stub_rtc = t; }
 void board_rtc_poll(void) {}
-void board_reset(void) {}
+int stub_resets;
+void board_reset(void) { stub_resets++; }
 void board_bootloader(void) {}
-bool rs485_busy(void) { return false; }
 bool rs485_wait_quiet(uint32_t ms) {
   (void) ms;
   return stub_bus_quiet;

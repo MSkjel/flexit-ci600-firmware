@@ -7,7 +7,7 @@
 static const struct {
   int16_t lo;
   uint8_t step;
-} STEP[TR_N] = {[TR_OUTDOOR] = {-635, 5}, [TR_SUPPLY] = {-50, 2}, [TR_EXTRACT] = {-50, 2}, [TR_ROOM] = {-50, 2}};
+} STEP[TR_COUNT] = {[TR_OUTDOOR] = {-635, 5}, [TR_SUPPLY] = {-50, 2}, [TR_EXTRACT] = {-50, 2}, [TR_ROOM] = {-50, 2}};
 
 uint8_t trend_code(int s, int v) {
   if (v == T_NONE)
@@ -47,11 +47,11 @@ static int16_t item_point(int id) {
 
 void trend_second(void) {
   static uint16_t s;
-  if (++s < 900)
+  if (++s < TREND_STEP_S)
     return;
   s = 0;
-  const int16_t now[TR_N] = {M.t_outdoor, M.t_supply, M.t_extract, M.t_room};
-  for (int i = 0; i < TR_N; i++) {
+  const int16_t now[TR_COUNT] = {M.t_outdoor, M.t_supply, M.t_extract, M.t_room};
+  for (int i = 0; i < TR_COUNT; i++) {
     memmove(&M.trend[i][0], &M.trend[i][1], TREND_LEN - 1);
     M.trend[i][TREND_LEN - 1] = trend_code(i, now[i]);
   }

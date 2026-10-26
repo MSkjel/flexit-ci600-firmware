@@ -1,6 +1,6 @@
-# Runs on a tag like v1.2.3, or by hand. Tests, then builds ci600.fxup and ci600.bin. A tag publishes them as
-# release assets, a manual run uploads them as a workflow artifact. The ESP's update.yaml downloads the .fxup
-# from releases/latest.
+# Runs on a tag like v1.2.3, or by hand. Runs ci.yml, whose firmware job builds ci600.fxup and ci600.bin and
+# uploads them as a workflow artifact. A tag publishes them as release assets. The ESP's update.yaml downloads the
+# .fxup from releases/latest.
 name: release
 on:
   push:
@@ -8,52 +8,45 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # ci.yml's screens job asks for contents: write, and a called workflow gets no more than its caller gives. That
+  # job doesn't run from here, and ci.yml keeps the others at read.
   ci:
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: write
     secrets: inherit
 
-  # Built without ccache, the toolchain from the same .debs as ci.yml's firmware job
   release:
+    if: startsWith(github.ref, 'refs/tags/')
     needs: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # all of history and the tags, for the changelog
-      - run: git submodule update --init --depth 1
-      - uses: ./.github/actions/apt
+      - uses: actions/download-artifact@v8
         with:
-          packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache
-      - run: make -C hw
-      - run: |
-          pip install cryptography
-          if [ "$GITHUB_REF_TYPE" = tag ]; then ver="--version ${GITHUB_REF_NAME#v}"; fi  # a manual run gets config.mk's version
-          python3 tools/mkupdate.py $ver hw/build/ci600.bin ci600.fxup
-          python3 tools/mkupdate.py --verify ci600.fxup hw/build/ci600.bin
-          cp hw/build/ci600.bin ci600.bin
+          name: ci600-firmware
       - name: Changelog, the commits since the last version tag
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
           prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' HEAD^ 2>/dev/null || true)
           git log --no-merges --format='- %s' ${prev:+$prev..}HEAD > notes.md
           cat notes.md
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: notes.md
-          files: |
-            ci600.fxup
-            ci600.bin
-      - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci600-firmware
-          path: |
-            ci600.fxup
-            ci600.bin
+      # gh fails on a missing file, so there's no release without the .fxup. A re-run replaces the release's files.
+      - name: The release, with the files CI built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+            gh release upload "$TAG" ci600.fxup ci600.bin --clobber
+          else
+            gh release create "$TAG" ci600.fxup ci600.bin --title "$TAG" --notes-file notes.md --verify-tag
+          fi

@@ -1,19 +1,18 @@
 // Screensaver. A clock on black or over the ESP's picture, with the ESP's animation on top.
-#include "ui.h"
-#include <stdio.h>
-#include <string.h>
+#include "ui_int.h"
 
-#define BAND_H 74  // height of the band behind the text over a picture
-#define SHADOW 2   // text shadow offset, px
+#define BAND_H 74              // height of the band behind the text over a picture
+#define SHADOW 2               // text shadow offset, px
+#define PICTURE_TEXT 0xD4DCDE  // date and temperatures over a picture, softer than the clock's white
 
 typedef struct {
   lv_obj_t *clock, *date, *temps;
   lv_obj_t *shade[3];  // shadows of the three, with SAVER_TEXT_SHADOW
   bool over_picture;
-  bool small;  // SAVER_TEXT_SMALL: time and temps in the corners, no date
+  bool small;      // SAVER_TEXT_SMALL: time and temps in the corners, no date
+  bool shows_pic;  // the picture is on it
 } saver_t;
 SCREEN_STATE(saver_t, saver);
-static bool shows_pic;  // the picture is on it. Not in saver_t, an overlay may reuse that
 
 static const str_t MONTHS[12] = {S_JANUARY, S_FEBRUARY, S_MARCH,     S_APRIL,   S_MAY,      S_JUNE,
                                  S_JULY,    S_AUGUST,   S_SEPTEMBER, S_OCTOBER, S_NOVEMBER, S_DECEMBER};
@@ -29,22 +28,20 @@ int saver_used(val_t v, int mode) {
   return HAS(FEAT_ESP) ? mode : saver_plain(mode);
 }
 
-bool saver_picture(void) { return ui_top() == &SCR_SAVER && shows_pic; }
+bool saver_picture(void) { return ui_top() == &SCR_SAVER && saver->shows_pic; }
 
 // Clock, date and maybe temps on the band. Shadows are black, see-through and SHADOW px down and right.
 static void band_texts(lv_obj_t *band, lv_obj_t *l[3], bool temps, bool shadow) {
   int d = shadow ? SHADOW : 0;
-  lv_color_t c = shadow ? lv_color_black() : lv_color_hex(0xD4DCDE);
+  lv_color_t c = shadow ? lv_color_black() : lv_color_hex(PICTURE_TEXT);
   l[0] = mk_label(band, &font_n40, shadow ? c : lv_color_white(), "");
   lv_obj_set_pos(l[0], 14 + d, 2 + d);
   l[1] = mk_label(band, &font_f14, c, "");
   lv_obj_set_pos(l[1], 16 + d, 50 + d);
   l[2] = NULL;
   if (temps) {
-    l[2] = mk_label(band, &font_f16, c, "");
+    l[2] = mk_text(band, &font_f16, c, "", 150, LV_TEXT_ALIGN_RIGHT);
     lv_label_set_recolor(l[2], true);
-    lv_obj_set_width(l[2], 150);
-    lv_obj_set_style_text_align(l[2], LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(l[2], SCR_W - 164 + d, 14 + d);
   }
   for (int i = 0; shadow && i < 3; i++)
@@ -78,8 +75,6 @@ static void small_texts(lv_obj_t *b, bool temps) {
 
 static void saver_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  memset(saver, 0, sizeof *saver);
-  shows_pic = false;
   if (M.screensaver == SAVER_OFF) {  // switched off from the ESP while it shows
     ui_close_after(0);
     return;
@@ -90,16 +85,15 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
     mode = saver_plain(mode);  // no picture yet
   bool temps = mode == SAVER_CLOCK_TEMPS || mode == SAVER_PIC_ALL;
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
+  anim_show(b);  // over the picture, under the texts
   if (pic) {
-    shows_pic = true;
-    anim_show(b);
+    saver->shows_pic = true;
     if (mode != SAVER_PIC && M.saver_text == SAVER_TEXT_SMALL)
       small_texts(b, temps);
     else if (mode != SAVER_PIC)  // SAVER_PIC is the picture alone
       over_picture(b, temps);
     return;
   }
-  anim_show(b);
   saver->clock = mk_label(b, &font_n64, lv_color_mix(T.text, lv_color_black(), 200), "");
   saver->date = mk_label(b, &font_f16, T.dim, "");
   if (temps) {
@@ -112,14 +106,13 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
 static void temps_text(lv_obj_t *l, uint32_t in, uint32_t out) {
   char a[16], c[16];
   if (saver->over_picture)
-    set_text(l, "%s  #%06x %s#\n%s  #%06x %s#", _(S_IN), (unsigned) in, fmt_temp(a, indoor_temp(), false), _(S_OUT),
-             (unsigned) out, fmt_temp(c, M.t_outdoor, false));
+    set_text(l, "%s  #%06x %s#\n%s  #%06x %s#", _(S_IN), (unsigned) in, fmt_temp(a, sizeof a, indoor_temp(), false),
+             _(S_OUT), (unsigned) out, fmt_temp(c, sizeof c, M.t_outdoor, false));
   else
-    set_text(l, "%s  #%06x %s#      %s  #%06x %s#", _(S_INDOOR), (unsigned) in, fmt_temp(a, indoor_temp(), false),
-             _(S_OUTDOOR), (unsigned) out, fmt_temp(c, M.t_outdoor, false));
+    set_text(l, "%s  #%06x %s#      %s  #%06x %s#", _(S_INDOOR), (unsigned) in,
+             fmt_temp(a, sizeof a, indoor_temp(), false), _(S_OUTDOOR), (unsigned) out,
+             fmt_temp(c, sizeof c, M.t_outdoor, false));
 }
-
-static uint32_t hex(lv_color_t c) { return lv_color_to32(c) & 0xFFFFFF; }
 
 // Moves a few pixels every minute, like the big clock, so nothing stays in one place for hours
 static void small_update(void) {
@@ -130,8 +123,8 @@ static void small_update(void) {
   lv_obj_align(saver->clock, left, 10 + dx, y);
   if (!saver->temps)
     return;
-  set_text(saver->temps, "%s %s  %s %s", _(S_IN), fmt_temp(a, indoor_temp(), false), _(S_OUT),
-           fmt_temp(c, M.t_outdoor, false));
+  set_text(saver->temps, "%s %s  %s %s", _(S_IN), fmt_temp(a, sizeof a, indoor_temp(), false), _(S_OUT),
+           fmt_temp(c, sizeof c, M.t_outdoor, false));
   lv_obj_align(saver->temps, right, -10 + dx, y);
 }
 
@@ -149,8 +142,8 @@ static void saver_update(void) {
     return;
   }
   if (saver->temps)
-    temps_text(saver->temps, saver->over_picture ? 0xFFFFFF : hex(T.text),
-               saver->over_picture ? 0xFFFFFF : hex(T.cold));
+    temps_text(saver->temps, saver->over_picture ? 0xFFFFFF : ui_hex(T.text),
+               saver->over_picture ? 0xFFFFFF : ui_hex(T.cold));
   // shift a few pixels every minute so nothing stays in one place for hours
   int dx = (M.mi % 5 - 2) * 4, dy = (M.mi / 5 % 3 - 1) * 4;
   if (saver->over_picture) {

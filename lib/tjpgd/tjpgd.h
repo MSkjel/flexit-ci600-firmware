@@ -80,7 +80,7 @@ struct JDEC {
 /* TJpgDec API functions */
 JRESULT jd_prepare (JDEC* jd, size_t (*infunc)(JDEC*,uint8_t*,size_t), void* pool, size_t sz_pool, void* dev);
 JRESULT jd_decomp (JDEC* jd, int (*outfunc)(JDEC*,void*,JRECT*), uint8_t scale);
-JRESULT jd_decomp_rows (JDEC* jd, int (*outfunc)(JDEC*,void*,JRECT*), unsigned int row, unsigned int n);	/* CI600 */
+JRESULT jd_decomp_row (JDEC* jd, int (*outfunc)(JDEC*,void*,JRECT*), unsigned int row, unsigned int x1, unsigned int x2);	/* CI600 */
 
 #ifdef __cplusplus
 }

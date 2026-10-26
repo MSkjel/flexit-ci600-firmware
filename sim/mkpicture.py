@@ -9,7 +9,6 @@ import random
 from PIL import Image, ImageDraw
 
 W, H = 320, 240
-random.seed(7)
 
 
 def scene(moon):

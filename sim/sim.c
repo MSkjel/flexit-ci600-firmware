@@ -1,9 +1,12 @@
 // Headless simulator. Runs the UI on fake data and saves screenshots.
 //   ./sim OUTDIR            every scene as OUTDIR/<name>.ppm
 //   ./sim --perf            how much of the screen each key repaints
-#include "ui.h"
+#include "ui_int.h"
+#include "pbus.h"
 #include "plink.h"
 #include "sim.h"
+#include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,6 +133,14 @@ static bool ball_in(int x0, int y0) {
   return false;
 }
 
+// Where the animation's place 0 is
+static void anim_pos(int16_t *x, int16_t *y) {
+  anim_look_t l = {0};
+  anim_look(0, &l);
+  *x = l.x;
+  *y = l.y;
+}
+
 static void check(bool ok, const char *what) {
   if (!ok) {
     printf("%s\n", what);
@@ -171,8 +182,679 @@ static void note(const char *text) {
   ui_second();
 }
 
+// The screensaver over what's on the screen, then back
+static void saver_shot(const char *name) {
+  ui_push(&SCR_SAVER, 0);
+  shot(name);
+  ui_pop();
+}
+
+// Settles the link and prints what it sent since cycle c0, how many cycles that took and how long on the bus
+__attribute__((format(printf, 2, 3))) static void settled(unsigned long c0, const char *fmt, ...) {
+  settle();
+  va_list ap;
+  va_start(ap, fmt);
+  printf("  ");
+  vprintf(fmt, ap);
+  va_end(ap);
+  unsigned long n = sim_cycles - c0;
+  printf(", %lu cycles = %.1f s\n", n, n * (PBUS_CYCLE_US / 1e6));
+}
+
+// The home screen's views in each theme, and the fan HUD
+static void home_views(void) {
+  for (int t = 0; t < N_THEMES; t++) {
+    set_theme(t);
+    char n[32];
+    snprintf(n, sizeof n, "theme%d_dashboard", t);
+    shot(n);
+  }
+  set_theme(0);
+  shot("01_dashboard");
+  key(KEY_BACK);
+  shot("02_airflow");
+  key(KEY_BACK);
+  shot("03_trends");
+  key(KEY_BACK);
+  shot("03b_sensors");
+  key(KEY_BACK);
+  shot("04_comfort");
+  key(KEY_BACK);
+  key(KEY_UP);
+  shot("04c_fan_hud_opened");  // the first press only opens it
+  key(KEY_UP);
+  shot("05_fan_hud_max");
+  key(KEY_UP);
+  shot("06_fan_hud_boost");
+  run(3000);
+  shot("07_dashboard_boost");
+  key(KEY_DOWN);
+  key(KEY_DOWN);
+  key(KEY_DOWN);
+  run(3000);
+}
+
+// From home: the main menu, its help, and the temperature, ventilation and comfort menus
+static void menus(void) {
+  key(KEY_OK);
+  shot("08_menu");
+  key(KEY_HELP);
+  shot("08b_menu_help");
+  key(KEY_BACK);
+  go(S_SYSTEM);
+  shot("08c_menu_end");  // scrolled down to the last tiles
+  open(S_TEMPERATURE);
+  shot("09_temperature");
+  edit(S_SETPOINT);
+  key(KEY_UP);
+  key(KEY_UP);
+  shot("10_edit_setpoint");
+  key(KEY_OK);
+  shot("11_saved");
+  run(2000);
+  go(S_HEATER);
+  shot("12_temperature_scrolled");
+  key(KEY_BACK);
+  open(S_VENTILATION);
+  go(S_BOOST_NOW);
+  shot("13_ventilation");
+  key(KEY_BACK);
+  open(S_COMFORT);
+  shot("14_comfort_menu");
+  key(KEY_BACK);
+}
+
+// From the main menu: the week program and a day's periods, edited, added and removed
+static void schedule(void) {
+  open(S_WEEK_PROGRAM);
+  shot("15_schedule_menu");
+  open_as(S_WEEK_OVERVIEW, S_WEEK_PROGRAM);
+  shot("16_week_program");
+  key(KEY_BACK);
+  open(S_TUESDAY);
+  key(KEY_DOWN);
+  shot("17_day");
+  key(KEY_OK);
+  shot("17b_period");
+  edit(S_START);
+  key(KEY_UP);
+  key(KEY_UP);
+  shot("17c_period_start");
+  key(KEY_OK);
+  run(2000);
+  key(KEY_BACK);
+  shot("17d_day_changed");
+  go(S_ADD_PERIOD);
+  key(KEY_OK);
+  run(2000);
+  shot("17e_period_added");
+  edit(S_REMOVE_PERIOD);
+  key(KEY_OK);
+  run(2000);
+  shot("17f_period_removed");
+  key(KEY_BACK);
+  key(KEY_BACK);
+}
+
+// From the main menu: the theme and the dashboard's tiles
+static void display(void) {
+  open(S_DISPLAY);
+  shot("18_display_menu");
+  edit(S_THEME);
+  shot("19_theme_picker");
+  key(KEY_BACK);
+  open(S_HOME_SCREEN);
+  shot("19a_home_screen");
+  open(S_DASHBOARD_TILES);
+  shot("19b_tiles");
+  edit(S_TILE_3);
+  go_text(sim_item_label("co2"));
+  shot("19c_tile_picker");
+  key(KEY_OK);
+  edit(S_TILE_4);
+  go_text(sim_item_label("weather"));
+  key(KEY_OK);
+  run(2000);
+  ui_go_home();
+  shot("19d_dashboard_tiles");
+}
+
+// From home: the system menu, its pages and the advanced menus
+static void system_menu(void) {
+  key(KEY_OK);
+  open(S_SYSTEM);
+  shot("20_system_menu");
+  open(S_ABOUT);
+  shot("21_about");
+  key(KEY_BACK);
+  open(S_BUS);
+  shot("22_bus");
+  key(KEY_BACK);
+  open(S_DIAGNOSTICS);
+  shot("22b_diagnostics");
+  key(KEY_BACK);
+  edit(S_RESET_PANEL_SETTINGS);
+  shot("23_confirm");
+  run(2000);
+  key(KEY_BACK);
+  key(KEY_HELP);
+  shot("24_help");
+  key(KEY_BACK);
+  go(S_ADVANCED_MENU);
+  key(KEY_OK);
+  run(2000);
+  key(KEY_BACK);
+  open(S_ADVANCED);
+  shot("24b_advanced");
+  open(S_REGULATION);
+  shot("24c_advanced_regulation");
+  open(S_REGULATOR_TUNING);
+  shot("24d_advanced_tuning");
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_HEAT_RECOVERY);
+  go(S_DE_ICING);
+  key(KEY_OK);
+  run(2000);
+  shot("24e_advanced_deicing");
+  go(S_RAMP_TIME);
+  shot("24h_advanced_deicing_end");
+  key(KEY_BACK);
+  open(S_INPUTS);
+  edit(S_FIRE_SMOKE);
+  shot("24f_advanced_fire");
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_TEST);
+  go(S_HEATER);
+  key(KEY_OK);
+  run(2000);
+  shot("24g_advanced_test");
+  key(KEY_BACK);
+  open(S_UNIT);
+  shot("24i_advanced_unit");
+  go(S_PANEL_3);
+  shot("24j_advanced_unit_end");
+}
+
+// Alarms, the filter reminder and the screensaver
+static void alarms(void) {
+  fresh();
+  M.alarms[0] = (alarm_t) {10, 18, 10, 8, 14, true};
+  M.n_alarms = 1;
+  M.filter_hours = 4400;
+  run(2000);
+  ui_second();
+  shot("25_alarm_filter");
+  key(KEY_BACK);
+  M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
+  M.alarms[1] = (alarm_t) {10, 18, 10, 8, 14, true};
+  M.n_alarms = 2;
+  ui_second();
+  shot("26_alarm_rotor");
+  key(KEY_OK);
+  shot("27_alarm_list");
+  ui_go_home();
+  shot("28_dashboard_alarms");
+  fresh();
+  M.idle_after = 0;  // 15 s
+  seconds(16);
+  shot("29_screensaver");
+  key(KEY_OK);
+}
+
+// Without the ESP: its menus and views gone, and the fan settings for AC fans
+static void no_esp(void) {
+  fresh();
+  M.esp_online = false;
+  ui_replace(&SCR_HOME, VIEW_COMFORT);
+  shot("30_comfort_offline");
+  fresh();
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(S_EQUIPMENT);
+  shot("35_equipment");
+  go(S_EQUIP_ESP);
+  key(KEY_OK);
+  run(2000);
+  shot("36_equipment_esp_off");
+  ui_go_home();
+  shot("37_no_esp_dashboard");
+  key(KEY_BACK);
+  key(KEY_BACK);
+  key(KEY_BACK);
+  shot("38_no_esp_back_to_dashboard");
+  key(KEY_OK);
+  shot("39_no_esp_menu");
+  open(S_DATE_AND_TIME);
+  shot("40_no_esp_time");
+  ui_go_home();
+  key(KEY_OK);
+  M.advanced = true;
+  ui_rebuild();
+  open(S_ADVANCED);
+  open(S_FANS);
+  go(S_MIN_SUPPLY);
+  shot("41_no_esp_ventilation_ec");
+  M.features &= ~FBIT(FEAT_EC_FANS);
+  ui_rebuild();
+  shot("42_no_esp_ventilation_ac");
+}
+
+// Daylight and Graphite
+static void themes(void) {
+  fresh();
+  set_theme(1);
+  ui_replace(&SCR_HOME, VIEW_FLOW);
+  shot("31_daylight_airflow");
+  ui_push(&SCR_MENU, 0);
+  shot("32_daylight_menu");
+  set_theme(2);
+  shot("33_graphite_menu");
+  ui_show_view(VIEW_TREND);
+  shot("34_graphite_trends");
+}
+
+// No contact with the unit, the key lock, the night mode and display menus, and the fans differing
+static void usability(void) {
+  fresh();
+  set_theme(0);
+  M.bus_offline = true;
+  ui_replace(&SCR_HOME, VIEW_DASH);
+  shot("62_no_contact");
+  key(KEY_OK);
+  shot("63_no_contact_menu");
+  ui_go_home();
+  M.bus_offline = false;
+  ui_value_changed(V_NONE);
+  M.key_lock = true;
+  ui_value_changed(V_NONE);
+  key(KEY_OK);  // refused, with a toast saying why
+  shot("64_key_lock");
+  M.key_lock = false;
+  ui_value_changed(V_NONE);
+  run(2000);
+  key(KEY_OK);
+  open(S_DISPLAY);
+  open(S_NIGHT_MODE);
+  shot("65_night_menu");
+  key(KEY_BACK);
+  go(S_FAST_DISPLAY);
+  shot("66_display_menu_end");
+  ui_go_home();
+  M.heat_pct = 0;
+  M.fan_sup = M.fan_ext = 75;
+  ui_replace(&SCR_HOME, VIEW_FLOW);
+  shot("67_airflow_exhaust");
+  M.heat_pct = 12;
+  ui_go_home();
+  M.fan_ext = 60;
+  ui_replace(&SCR_HOME, VIEW_DASH);
+  shot("68_dashboard_fans_differ");
+  M.fan_ext = 75;
+  ui_value_changed(V_NONE);
+}
+
+// The ESP link: both ends run the real protocol code over a fake CX60. The scenes after this keep what it
+// sent, the items and the picture.
+static void esp_link(void) {
+  fresh();
+  printf("\nESP link, one transaction after each CX60 status broadcast:\n");
+  settle();
+  sim_esp_report("hello and state sync");
+  sim_esp_items();
+  settle();
+  sim_esp_report("the ESP's items");
+  ui_show_view(VIEW_SMART);
+  shot("50_smart_view");
+  ui_go_home();
+  key(KEY_OK);
+  open(S_SMART_HOME);
+  shot("51_smart_menu");
+  go_text(sim_item_label("hallway_light"));
+  key(KEY_OK);
+  settle();
+  sim_esp_report("light switched on the panel");
+  run(2000);
+  shot("52_smart_toggled");
+  uint16_t tile = M.tiles[3];
+  M.tiles[3] = (uint16_t) (TILE_ITEM + plink_item_id("washer"));
+  ui_show_view(VIEW_DASH);
+  run(100);
+  shot("52d_dashboard_text");
+  ui_show_view(VIEW_SMART);
+  run(100);
+  item_t *washer = (item_t *) item_by_id(plink_item_id("washer"));
+  char text[ITEM_TEXT_LEN];
+  strcpy(text, washer->u.text);
+  check(shows(lv_scr_act(), text), "the text item isn't shown on the smart view");
+  washer->u.text[0] = 0;
+  ui_value_changed(V_NONE);
+  run(100);
+  check(!shows(lv_scr_act(), text) && shows(lv_scr_act(), "\xE2\x80\x93"), "an empty text isn't a dash");
+  strcpy(washer->u.text, text);
+  M.tiles[3] = tile;
+  ui_go_home();
+  key(KEY_OK);
+  open(S_COMFORT);
+  go_text(sim_item_label("fireplace"));
+  key(KEY_HELP);
+  settle();  // the ESP's answer
+  run(2000);
+  shot("52b_item_help");
+  key(KEY_BACK);
+  go_text(sim_item_label("fireplace_minutes"));
+  key(KEY_OK);
+  key(KEY_UP);
+  shot("52c_item_edit");
+  key(KEY_BACK);
+  ui_go_home();
+  sim_esp_notify("The washing machine is done.", ICN_WASHER, 0);
+  settle();
+  ui_second();
+  shot("53_notification");
+  key(KEY_OK);
+}
+
+// The ESP's pictures on the screensaver: a whole one, a patch and a new palette
+static void pictures(void) {
+  unsigned long c0 = sim_cycles;
+  unsigned bytes = sim_esp_send_picture();
+  settled(c0, "picture 320x240, 16 colours: %u bytes compressed (38400 raw)", bytes);
+  sim_esp_report("picture");
+  M.screensaver = 3;
+  saver_shot("54_saver_picture");
+  M.screensaver = 4;
+  saver_shot("55_saver_picture_clock");
+  M.screensaver = 5;
+  saver_shot("56_saver_picture_all");
+  int y, cnt;
+  c0 = sim_cycles;
+  bytes = sim_esp_send_moon(&y, &cnt);
+  settled(c0, "moon patch: rows %d-%d, %u bytes", y, y + cnt - 1, bytes);
+  M.screensaver = 4;
+  saver_shot("57_saver_moon_patch");
+  c0 = sim_cycles;
+  sim_esp_send_dawn();
+  settled(c0, "palette only");
+  saver_shot("58_saver_dawn_palette");
+}
+
+// An animation on the screensaver: drifting round the edges, a glide, and paused with the backlight
+static void animation(void) {
+  unsigned long c0 = sim_cycles;
+  unsigned bytes = sim_esp_send_animation(250, 20);
+  settled(c0, "animation 48x48, 8 frames: %u bytes", bytes);
+  ui_push(&SCR_SAVER, 0);
+  shot("58b_saver_animation");
+  sim_run(300);  // three frames later
+  shot("58c_saver_animation_later");
+  // drifting left at 60 px/s, it goes round the edge like on a torus: half of it on each side for a while
+  sim_esp_move_animation(K_ANIM_DRIFT, -60, 0, 0);
+  settle();
+  int16_t ax, ay;
+  int stale = 0;  // pixels a step missed, against a full redraw
+  for (int i = 0; i < 200; i++) {
+    run(50);
+    stale += sim_stale();
+    anim_pos(&ax, &ay);
+    if (ax > 250 && ax <= 296)
+      break;
+  }
+  check(ax > 250 && ax <= 296 && ay == 20, "the animation didn't drift round the left edge");
+  check(ball_at(316, 20) && ball_at(4, 20) && !ball_at(160, 20), "the ball isn't drawn at both edges while wrapping");
+  shot("58d_saver_animation_wrap");
+  sim_esp_move_animation(K_ANIM_DRIFT, 0, -60, 0);  // round the top edge too, so it shows in all four corners
+  settle();
+  for (int i = 0; i < 80; i++) {
+    run(50);
+    stale += sim_stale();
+  }
+  check(!stale, "the part wrapped round an edge isn't redrawn as it moves");
+  // a glide lands on the target, the frames keep playing
+  sim_esp_move_animation(K_ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
+  settle();
+  run(500);
+  anim_pos(&ax, &ay);
+  check(ax > 100 && ay < 100, "the animation isn't on its way");
+  run(600);
+  anim_pos(&ax, &ay);
+  check(ax == 100 && ay == 100 && ball_in(100, 100), "the glide didn't land on 100,100");
+  unsigned long px = sim_px;
+  run(300);
+  anim_pos(&ax, &ay);
+  check(ax == 100 && sim_px > px, "the frames stopped after the glide");
+  // the motion pauses with the backlight: idle at night with the night idle brightness 0
+  sim_esp_move_animation(K_ANIM_DRIFT, 60, 0, 0);
+  settle();
+  ui_pop();
+  int idle_after = M.idle_after;
+  bool go_home = M.go_home;
+  M.idle_after = 0;  // 15 s
+  M.go_home = false;
+  M.night = true;
+  M.night_from = 0;
+  M.night_to = 23;
+  run(16000);  // idle, the screensaver comes up by itself, dark
+  anim_pos(&ax, &ay);
+  int16_t bx;
+  run(1000);
+  anim_pos(&bx, &ay);
+  check(bx == ax, "the animation drifts while the backlight is off");
+  M.night = false;
+  run(1000);
+  anim_pos(&bx, &ay);
+  check(bx == ax + 60, "the animation didn't drift on when the backlight came back");
+  key(KEY_OK);
+  M.idle_after = (uint8_t) idle_after;
+  M.go_home = go_home;
+  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
+  settle();
+}
+
+// A photo as a JPEG, the screen holding the old picture while a new one comes, and the ESP setting the theme
+// and the view
+static void photo(void) {
+  ui_go_home();
+  key(KEY_OK);
+  open(S_SCREENSAVER);
+  go(S_PICTURE);
+  shot("59_saver_menu_picture");
+  unsigned long c0 = sim_cycles;
+  int quality;
+  unsigned bytes = sim_esp_send_photo(&quality);
+  settled(c0, "photo 320x240 as JPEG, quality %d: %u bytes", quality, bytes);
+  shot("59b_saver_menu_photo");
+  M.screensaver = 4;
+  ui_push(&SCR_SAVER, 0);
+  shot("59c_saver_photo");
+  // The LCD keeps the old picture while a new one comes, until it's in or HOLD_MS has passed. A refused one leaves
+  // the clock.
+  uint32_t was = sim_pixel(4, 4);
+  check(was, "the photo isn't shown");
+  sim_esp_send_picture();
+  sim_link_run(3);
+  run(50);
+  check(pic_state() == PIC_RECEIVING && ui_held() && sim_pixel(4, 4) == was,
+        "the screen went black while a new picture came");
+  settle();
+  run(50);
+  check(!ui_held() && sim_pixel(4, 4) && !sim_stale(), "the new picture isn't shown");
+  was = sim_pixel(4, 4);
+  sim_esp_send_picture();
+  sim_link_run(3);  // its start, then nothing for a while
+  run(14000);
+  check(ui_held() && sim_pixel(4, 4) == was, "the screen gave up on the new picture early");
+  run(1100);
+  check(!ui_held() && !sim_pixel(4, 4) && !sim_stale(), "the screen held on past 15 s");
+  settle();
+  run(50);
+  check(sim_pixel(4, 4) && !sim_stale(), "the late picture isn't shown");
+  sim_esp_set(K_PIC_BEGIN, 0);  // one the panel refuses
+  settle();
+  run(50);
+  check(pic_state() == PIC_NONE && !sim_pixel(4, 4), "the saver kept a picture the panel dropped");
+  sim_esp_set(K_SCREENSAVER, SAVER_OFF);  // switched off from Home Assistant while it shows
+  settle();
+  run(200);
+  check(ui_top() != &SCR_SAVER, "the screensaver stayed after it was switched off");
+  M.screensaver = 4;
+  sim_esp_send_picture();  // the drawing back for the scenes after
+  settle();
+  sim_esp_set(K_THEME, 1);
+  settle();
+  sim_esp_report("theme set by the ESP");
+  ui_go_home();
+  shot("60_theme_from_esp");
+  sim_esp_set(K_SHOW_VIEW, VIEW_FLOW);
+  settle();
+  shot("61_view_from_esp");
+  ui_go_home();
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(S_BUS);
+  shot("62_bus_link");  // the link's rows, after some traffic
+}
+
+// The panel full of items: the smart home view pages, and its menu only builds the visible rows
+static void full_panel(void) {
+  sim_esp_fill();
+  settle();
+  sim_esp_report("the ESP fills the panel");
+  ui_show_view(VIEW_SMART);
+  key(KEY_BACK);
+  shot("62b_smart_page_2");
+  ui_go_home();
+  key(KEY_OK);
+  open(S_SMART_HOME);
+  key(KEY_UP);  // wraps to the last row
+  shot("62c_smart_menu_end");
+  go_text("Basement sensor  3");
+  key(KEY_OK);  // open the editor on a generated row
+  shot("62d_smart_edit");
+  key(KEY_BACK);
+}
+
+// The Display submenus, the screensaver menu, and the system and alarms menus
+static void settings(void) {
+  ui_go_home();
+  key(KEY_OK);
+  open(S_DISPLAY);
+  open(S_HOME_SCREEN);
+  open(S_VIEWS);
+  shot("80_views");
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_LIGHTS);
+  shot("82_lights");
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_SCREENSAVER);
+  shot("81_saver_menu");
+  ui_go_home();
+  key(KEY_OK);
+  open(S_SYSTEM);
+  go(S_RESET_PANEL_SETTINGS);
+  shot("83_system_menu");
+  ui_go_home();
+  key(KEY_OK);
+  open(S_ALARMS);
+  shot("84_alarms_menu");
+}
+
+// The screensaver's text, shadowed, small or plain, at the top or the bottom
+static void saver_text(void) {
+  ui_go_home();
+  M.screensaver = 5;
+  M.saver_text = 1;
+  saver_shot("85_saver_shadow");
+  M.saver_top = true;
+  saver_shot("86_saver_shadow_top");
+  M.saver_text = SAVER_TEXT_SMALL;
+  saver_shot("86b_saver_small_top");
+  M.saver_top = false;
+  saver_shot("86c_saver_small");
+  M.saver_text = SAVER_TEXT_PLAIN;
+  saver_shot("86d_saver_just_text");
+  M.saver_top = true;
+  M.saver_text = 0;
+  saver_shot("87_saver_band_top");
+  M.saver_top = false;
+}
+
+// The dashboard's outdoor temperature, the night theme and the dashboard as the only view
+static void dashboard(void) {
+  M.dash_temp = DT_OUTDOOR;
+  M.temp_dec = false;
+  ui_replace(&SCR_HOME, VIEW_DASH);
+  shot("88_dashboard_outdoor_whole");
+  M.dash_temp = DT_INDOOR;
+  M.temp_dec = true;
+  M.night = true;
+  M.night_from = 12;
+  M.night_to = 14;
+  M.night_theme = 3;  // Graphite
+  ui_second();
+  shot("89_night_theme");
+  M.night = false;
+  M.night_theme = 0;
+  ui_second();
+  for (int v = VIEW_FLOW; v < VIEW_COUNT; v++)
+    M.view_on[v] = false;
+  ui_replace(&SCR_HOME, VIEW_DASH);
+  key(KEY_BACK);
+  shot("90_only_the_dashboard");  // BACK has nowhere to go
+  for (int v = VIEW_FLOW; v < VIEW_COUNT; v++)
+    M.view_on[v] = true;
+}
+
+// Standalone, no ESP on the bus. Its views and menus are gone, and settings that pointed at them show their
+// fallbacks.
+static void standalone(void) {
+  M.home_view = VIEW_COMFORT;
+  M.screensaver = 5;
+  M.features &= ~FBIT(FEAT_ESP);
+  ui_show_view(M.home_view);
+  shot("70_standalone_dashboard");
+  key(KEY_OK);
+  shot("71_standalone_menu");
+  open(S_DISPLAY);
+  shot("72_standalone_display");
+  open(S_HOME_SCREEN);
+  open(S_DASHBOARD_TILES);
+  edit(S_TILE_3);
+  shot("73_standalone_tile_picker");  // set to CO2, shown as its fallback
+  key(KEY_BACK);
+  key(KEY_BACK);
+  edit(S_START_VIEW);
+  shot("74_standalone_view_picker");  // set to Comfort
+  key(KEY_BACK);
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_SCREENSAVER);
+  shot("75_standalone_saver_menu");  // no text or picture rows
+  edit(S_SHOW);
+  shot("76_standalone_saver_picker");  // set to "Picture, all"
+  key(KEY_BACK);
+  key(KEY_BACK);
+  open(S_DATE_AND_TIME);
+  go(S_SUMMER_TIME);
+  shot("77_standalone_time");
+  key(KEY_BACK);
+  open(S_SYSTEM);
+  open(S_ABOUT);
+  shot("78_standalone_about");
+  key(KEY_BACK);
+  open(S_BUS);
+  shot("79_standalone_bus");
+  ui_go_home();
+  saver_shot("79b_standalone_saver");
+}
+
 // Checks with no screenshot, after the scenes
-static void checks(void) {
+
+// Messages and helps over each other, and the toasts while locked
+static void check_messages(void) {
   // an item's help, a message over it and a help over that. Once the top help closes, the first one still gets
   // the ESP's answer.
   M.features |= FBIT(FEAT_ESP);  // back from standalone, the link is still up
@@ -218,8 +900,10 @@ static void checks(void) {
   run(2000);
   check(heap_used() <= before, "the toast stays");
   M.key_lock = false;
+}
 
-  // a rebuild keeps the option being picked
+// A rebuild keeps the option being picked
+static void check_rebuild(void) {
   fresh();
   key(KEY_OK);
   open(S_DISPLAY);
@@ -230,7 +914,10 @@ static void checks(void) {
   check(!strcmp(ui_selected(), tr(THEME_NAMES[1])), "a rebuild reset the editor");
   key(KEY_OK);
   check(M.theme == 1, "OK after a rebuild saved the old value");
+}
 
+// The alarm list and the alarm pop-up as alarms come and go
+static void check_alarms(void) {
   // the alarm list rebuilds under a help when alarms go, and keeps its selection in the list
   fresh();
   for (int i = 0; i < 6; i++)
@@ -338,7 +1025,10 @@ static void checks(void) {
   check(ui_top() == &SCR_HOME, "the pop-up showed the filter reminder, or a help stayed behind");
   M.n_alarms = 0;
   ui_second();
+}
 
+// Read-only ESP items, and an ESP menu with nothing in it
+static void check_esp_items(void) {
   // read-only ESP numbers, buttons and toggles do nothing on OK, and a toggle shows On or Off, not a switch
   fresh();
   M.items[3].flags |= ITEMF_RO;  // fireplace time
@@ -372,8 +1062,10 @@ static void checks(void) {
   key(KEY_OK);
   open(S_SMART_HOME);
   check(shows(lv_scr_act(), tr(S_NOTHING_HERE_YET)), "the empty smart home menu isn't shown");
+}
 
-  // going home when idle keeps a message or alarm pop-up nobody has seen yet
+// Going home when idle keeps a message or alarm pop-up nobody has seen yet
+static void check_idle(void) {
   fresh();
   M.go_home = true;
   M.screensaver = 0;
@@ -389,7 +1081,10 @@ static void checks(void) {
   M.n_alarms = 0;
   ui_alarms_changed();
   M.go_home = false;
+}
 
+// ESP numbers in the editor, and the ESP going away
+static void check_esp_numbers(void) {
   // an ESP number with min == max opens, and the editor closes when the ESP restarts and forgets its item
   fresh();
   M.items[3].min = M.items[3].max = M.items[3].value = 15;  // fireplace time
@@ -434,7 +1129,10 @@ static void checks(void) {
   key(KEY_UP);
   key(KEY_OK);
   check(M.items[3].value == 3, "an ESP number didn't step from its min");
+}
 
+// Lists that get shorter, and what the Comfort tile counts
+static void check_lists(void) {
   // the main menu and a list that get shorter while scrolled to the end don't scroll past it
   fresh();
   key(KEY_OK);
@@ -463,7 +1161,10 @@ static void checks(void) {
   sim_item(SIM_N_COMFORT, &M.items[SIM_N_COMFORT]);  // so Smart home isn't empty too
   key(KEY_OK);
   check(shows(lv_scr_act(), tr(S_NOTHING_YET)), "the Comfort tile counts items its menu doesn't list");
+}
 
+// Night mode's hours, and the idle brightness at Off
+static void check_brightness(void) {
   // night mode's hours on a 12 hour clock, and idle brightness 0 is Off in the editor
   fresh();
   M.clock_24h = false;
@@ -492,7 +1193,10 @@ static void checks(void) {
   check(input_backlight() == 5, "idle at 5 %, but not at 5 %");
   key(KEY_BACK);  // wakes it up
   check(!input_idle(), "still idle after a key");
+}
 
+// The trend axis and a long gauge label
+static void check_views(void) {
   // the trend axis goes down to -5° for a coldest -5.0°
   fresh();
   for (int i = 0; i < TREND_LEN; i++)
@@ -542,13 +1246,18 @@ static void press(const int *k, int n) {
 
 static const int ABOUT_KEYS[] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_UP, KEY_DOWN, KEY_UP, KEY_DOWN, KEY_OK};
 
+// From home: System, then page, then the keys that open the notices, which only About takes
+static void open_notices(str_t page) {
+  key(KEY_OK);
+  open(S_SYSTEM);
+  open(page);
+  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+}
+
 // The notices: the keys on About open them, not on another page, after a wrong key or after a pause
 static void notices(void) {
   fresh();
-  key(KEY_OK);
-  open(S_SYSTEM);
-  open(S_BUS);
-  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  open_notices(S_BUS);
   check(ui_top() == &SCR_INFO, "the keys did something on the Bus page");
   key(KEY_BACK);
   open(S_ABOUT);
@@ -628,36 +1337,20 @@ static bool kt_gap(int *top, int *bottom) {
   return at;
 }
 
-// Runs for steps or until the fan hits something, pressing UP with ui_key() so input.c doesn't see a key. Keeps
-// the fan around aim px below the middle of the next gap. Returns the score, 0 once it hit.
-static int kt_steer(int steps, int aim) {
+// Runs for steps, until the fan hits something or the score is points, pressing UP with ui_key() so input.c
+// doesn't see a key. Keeps the fan around aim px below the middle of the next gap. Returns the steps it took to
+// the score, -1 if it didn't get there.
+static int kt_steer(int steps, int aim, int points) {
   lv_area_t f;
   int before = 0;
   for (int i = 0; i < steps && !kt_over(); i++) {
-    int top, bottom;
-    kt_gap(&top, &bottom);
-    lv_obj_get_coords(kt_label(0), &f);
-    int y = (f.y1 + f.y2) / 2;
-    if (y > (top + bottom) / 2 + aim + 4 && y >= before)
-      ui_key(KEY_UP);
-    before = y;
-    run(40);
-  }
-  return kt_score();
-}
-
-// Steers like kt_steer until the score is points. The steps it took, -1 if it hit first.
-static int kt_steer_to(int points, int max_steps) {
-  lv_area_t f;
-  int before = 0;
-  for (int i = 0; i < max_steps && !kt_over(); i++) {
     if (kt_score() >= points)
       return i;
     int top, bottom;
     kt_gap(&top, &bottom);
     lv_obj_get_coords(kt_label(0), &f);
     int y = (f.y1 + f.y2) / 2;
-    if (y > (top + bottom) / 2 + 4 && y >= before)
+    if (y > (top + bottom) / 2 + aim + 4 && y >= before)
       ui_key(KEY_UP);
     before = y;
     run(40);
@@ -669,10 +1362,7 @@ static int kt_steer_to(int points, int max_steps) {
 // screensaver only when nobody presses UP
 static void keytest(void) {
   fresh();
-  key(KEY_OK);
-  open(S_SYSTEM);
-  open(S_ABOUT);
-  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  open_notices(S_ABOUT);
   run(500);
   key(KEY_OK);
   check(ui_top() == &SCR_KEYTEST, "OK on the notices didn't open the key test");
@@ -681,11 +1371,12 @@ static void keytest(void) {
   check(l[2], "the OK light didn't go back on with the key test");
   check_shot("92_keytest_ready");
   key(KEY_UP);
-  check(kt_steer(150, 0) >= 1, "the score didn't go up");
+  kt_steer(150, 0, INT_MAX);
+  check(kt_score() >= 1, "the score didn't go up");
   check_shot("92b_keytest_running");
   // no real key, but a running key test keeps the screensaver away
   M.idle_after = 0;  // 15 s
-  kt_steer(400, 0);
+  kt_steer(400, 0, INT_MAX);
   check(ui_top() == &SCR_KEYTEST && !kt_over(), "the run stopped");
   // a pop-up pauses it, UP after it carries on
   M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
@@ -701,7 +1392,7 @@ static void keytest(void) {
   M.n_alarms = 0;
   ui_refresh();
   key(KEY_UP);
-  kt_steer(400, 50);  // into the bottom half of a duct
+  kt_steer(400, 50, INT_MAX);  // into the bottom half of a duct
   int top, bottom;
   check(kt_over() && kt_gap(&top, &bottom), "the fan went through a duct");
   check_shot("92c_keytest_over");
@@ -709,20 +1400,82 @@ static void keytest(void) {
   // faster with every point, and still playable at full speed
   ui_replace(&SCR_KEYTEST, 0);
   key(KEY_UP);
-  int early = kt_steer_to(5, 2000) >= 0 ? kt_steer_to(10, 2000) : -1;  // steps for points 5 to 10
-  int late = kt_steer_to(35, 6000) >= 0 ? kt_steer_to(40, 2000) : -1;
+  int early = kt_steer(2000, 0, 5) >= 0 ? kt_steer(2000, 0, 10) : -1;  // steps for points 5 to 10
+  int late = kt_steer(6000, 0, 35) >= 0 ? kt_steer(2000, 0, 40) : -1;
   check(early > 0 && late > 0 && late * 5 < early * 4, "the ducts didn't speed up, or the fan hit one");
-  kt_steer(400, 50);
+  kt_steer(400, 50, INT_MAX);
   run(16000);
   check(ui_top() == &SCR_SAVER, "no screensaver once the fan hit");
-  key(KEY_OK);
-  key(KEY_OK);
-  open(S_SYSTEM);
-  open(S_ABOUT);
-  press(ABOUT_KEYS, LEN(ABOUT_KEYS));
+  key(KEY_OK);  // only wakes it
+  open_notices(S_ABOUT);
   key(KEY_OK);
   key(KEY_BACK);
   check(ui_top() == &SCR_INFO && !strcmp(ui_title(), tr(S_ABOUT)), "BACK didn't leave the key test for About");
+}
+
+// Processor speed, and a setting on trial: OK keeps it, BACK or 20 s without an answer switch it back again, also
+// under other screens
+static void check_trial(void) {
+  fresh();
+  M.advanced = true;
+  key(KEY_OK);
+  open(S_ADVANCED);
+  go(S_PROCESSOR_SPEED);
+  shot("93_processor_speed");
+  key(KEY_OK);
+  shot("93a_processor_speeds");
+  // 88 MHz turns Fast display off, and it can't go on again. The simulator doesn't restart, see hw/main.c
+  key(KEY_DOWN);
+  key(KEY_DOWN);
+  key(KEY_OK);
+  check(M.cpu_speed == 2 && !M.fast_display, "88 MHz left Fast display on");
+  key(KEY_BACK);
+  open(S_DISPLAY);
+  go(S_FAST_DISPLAY);
+  key(KEY_OK);
+  check(!M.fast_display && shows(lv_layer_top(), tr(S_ONLY_UP_TO_80_MHZ)), "Fast display went on at 88 MHz");
+  check_shot("93d_fast_display_refused");
+  ui_go_home();
+  run(2000);              // the toast
+  ui_trial(V_CPU_SPEED);  // the start after 88 MHz was picked
+  run(30);
+  shot("93b_trial");
+  char left[48], title[32];
+  sprint(title, sizeof title, _(S_KEEP_MHZ), 88);
+  sprint(left, sizeof left, _(S_BACK_TO_72_IN), 1);
+  check(shows(lv_layer_top(), title), "the trial doesn't name its speed");
+  sim_trial_answer = -1;
+  seconds(19);
+  check(ui_top() == &SCR_TRIAL && shows(lv_layer_top(), left) && sim_trial_answer < 0, "the trial didn't count down");
+  run(1000);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 0 && !M.cpu_speed, "no answer kept 88 MHz");
+  run(2000);  // the toast
+
+  M.cpu_speed = 1;  // at 80 Fast display gets a trial too
+  M.fast_display = true;
+  ui_trial(V_FAST_DISPLAY);
+  run(30);
+  check_shot("93c_trial_fast_display");
+  key(KEY_OK);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 1 && M.fast_display, "OK didn't keep Fast display");
+  ui_trial(V_FAST_DISPLAY);
+  run(30);
+  key(KEY_BACK);
+  check(ui_top() == &SCR_HOME && sim_trial_answer == 0 && !M.fast_display, "BACK kept Fast display");
+
+  // idle leaves it, and the time runs on under a message
+  M.fast_display = M.go_home = true;
+  M.screensaver = 0;
+  ui_trial(V_FAST_DISPLAY);
+  ui_idle();
+  check(ui_top() == &SCR_TRIAL, "idle closed a trial");
+  note("Front door left open");
+  sim_trial_answer = -1;
+  run(20000);
+  check(ui_top() == &SCR_NOTE && sim_trial_answer == 0 && !M.fast_display, "the trial didn't end under a message");
+  key(KEY_OK);
+  check(ui_top() == &SCR_HOME, "the trial stayed behind the message");
+  M.cpu_speed = 0;
 }
 
 // For --perf. Repainted pixels are what cost time on the panel.
@@ -754,7 +1507,7 @@ static void perf(void) {
   measure("", KEY_DOWN);
   measure("list -> menu (BACK)", KEY_BACK);
   measure("menu -> home (BACK)", KEY_BACK);
-  measure("home: next view (BACK? no: DOWN)", KEY_DOWN);
+  measure("home: next view (DOWN)", KEY_DOWN);
   ui_go_home();
   ui_push(&SCR_DAY, 1);
   measure("day: next period (DOWN)", KEY_DOWN);
@@ -782,633 +1535,36 @@ int main(int argc, char **argv) {
   }
   sim_mkdir(outdir);
 
-  for (int t = 0; t < N_THEMES; t++) {
-    set_theme(t);
-    char n[32];
-    snprintf(n, sizeof n, "theme%d_dashboard", t);
-    shot(n);
-  }
-  set_theme(0);
-  shot("01_dashboard");
-  key(KEY_BACK);
-  shot("02_airflow");
-  key(KEY_BACK);
-  shot("03_trends");
-  key(KEY_BACK);
-  shot("03b_sensors");
-  key(KEY_BACK);
-  shot("04_comfort");
-  key(KEY_BACK);
-  key(KEY_UP);
-  shot("04c_fan_hud_opened");  // the first press only opens it
-  key(KEY_UP);
-  shot("05_fan_hud_max");
-  key(KEY_UP);
-  shot("06_fan_hud_boost");
-  run(3000);
-  shot("07_dashboard_boost");
-  key(KEY_DOWN);
-  key(KEY_DOWN);
-  key(KEY_DOWN);
-  run(3000);
-
-  key(KEY_OK);
-  shot("08_menu");
-  key(KEY_HELP);
-  shot("08b_menu_help");
-  key(KEY_BACK);
-  go(S_SYSTEM);
-  shot("08c_menu_end");  // scrolled down to the last tiles
-  open(S_TEMPERATURE);
-  shot("09_temperature");
-  edit(S_SETPOINT);
-  key(KEY_UP);
-  key(KEY_UP);
-  shot("10_edit_setpoint");
-  key(KEY_OK);
-  shot("11_saved");
-  run(2000);
-  go(S_HEATER);
-  shot("12_temperature_scrolled");
-  key(KEY_BACK);
-  open(S_VENTILATION);
-  go(S_BOOST_NOW);
-  shot("13_ventilation");
-  key(KEY_BACK);
-  open(S_COMFORT);
-  shot("14_comfort_menu");
-  key(KEY_BACK);
-  open(S_SCHEDULE);
-  shot("15_schedule_menu");
-  open_as(S_WEEK_OVERVIEW, S_WEEK_PROGRAM);
-  shot("16_week_program");
-  key(KEY_BACK);
-  open(S_TUESDAY);
-  key(KEY_DOWN);
-  shot("17_day");
-  key(KEY_OK);
-  shot("17b_period");
-  edit(S_START);
-  key(KEY_UP);
-  key(KEY_UP);
-  shot("17c_period_start");
-  key(KEY_OK);
-  run(2000);
-  key(KEY_BACK);
-  shot("17d_day_changed");
-  go(S_ADD_PERIOD);
-  key(KEY_OK);
-  run(2000);
-  shot("17e_period_added");
-  edit(S_REMOVE_PERIOD);
-  key(KEY_OK);
-  run(2000);
-  shot("17f_period_removed");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_DISPLAY);
-  shot("18_display_menu");
-  edit(S_THEME);
-  shot("19_theme_picker");
-  key(KEY_BACK);
-  open(S_HOME_SCREEN);
-  shot("19a_home_screen");
-  open(S_DASHBOARD_TILES);
-  shot("19b_tiles");
-  edit(S_TILE_3);
-  go_text(sim_item_label("co2"));
-  shot("19c_tile_picker");
-  key(KEY_OK);
-  edit(S_TILE_4);
-  go_text(sim_item_label("weather"));
-  key(KEY_OK);
-  run(2000);
-  ui_go_home();
-  shot("19d_dashboard_tiles");
-  key(KEY_OK);
-  open(S_SYSTEM);
-  shot("20_system_menu");
-  open(S_ABOUT);
-  shot("21_about");
-  key(KEY_BACK);
-  open(S_BUS);
-  shot("22_bus");
-  key(KEY_BACK);
-  open(S_DIAGNOSTICS);
-  shot("22b_diagnostics");
-  key(KEY_BACK);
-  edit(S_RESET_PANEL_SETTINGS);
-  shot("23_confirm");
-  run(2000);
-  key(KEY_BACK);
-  key(KEY_HELP);
-  shot("24_help");
-  key(KEY_BACK);
-  go(S_ADVANCED_MENU);
-  key(KEY_OK);
-  run(2000);
-  key(KEY_BACK);
-  open(S_ADVANCED);
-  shot("24b_advanced");
-  open(S_REGULATION);
-  shot("24c_advanced_regulation");
-  open(S_REGULATOR_TUNING);
-  shot("24d_advanced_tuning");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_HEAT_RECOVERY);
-  go(S_DE_ICING);
-  key(KEY_OK);
-  run(2000);
-  shot("24e_advanced_deicing");
-  go(S_RAMP_TIME);
-  shot("24h_advanced_deicing_end");
-  key(KEY_BACK);
-  open(S_INPUTS);
-  edit(S_FIRE_SMOKE);
-  shot("24f_advanced_fire");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_TEST);
-  go(S_HEATER);
-  key(KEY_OK);
-  run(2000);
-  shot("24g_advanced_test");
-  key(KEY_BACK);
-  open(S_UNIT);
-  shot("24i_advanced_unit");
-  go(S_PANEL_3);
-  shot("24j_advanced_unit_end");
-  fresh();
-  M.alarms[0] = (alarm_t) {10, 18, 10, 8, 14, true};
-  M.n_alarms = 1;
-  M.filter_hours = 4400;
-  run(2000);
-  ui_second();
-  shot("25_alarm_filter");
-  key(KEY_BACK);
-  M.alarms[0] = (alarm_t) {9, 18, 10, 12, 51, true};
-  M.alarms[1] = (alarm_t) {10, 18, 10, 8, 14, true};
-  M.n_alarms = 2;
-  ui_second();
-  shot("26_alarm_rotor");
-  key(KEY_OK);
-  shot("27_alarm_list");
-  ui_go_home();
-  shot("28_dashboard_alarms");
-  fresh();
-  M.idle_after = 0;  // 15 s
-  seconds(16);
-  shot("29_screensaver");
-  key(KEY_OK);
-
-  fresh();
-  M.esp_online = false;
-  ui_replace(&SCR_HOME, VIEW_COMFORT);
-  shot("30_comfort_offline");
-  fresh();
-  key(KEY_OK);
-  open(S_SYSTEM);
-  open(S_EQUIPMENT);
-  shot("35_equipment");
-  go(S_EQUIP_ESP);
-  key(KEY_OK);
-  run(2000);
-  shot("36_equipment_esp_off");
-  ui_go_home();
-  shot("37_no_esp_dashboard");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  key(KEY_BACK);
-  shot("38_no_esp_back_to_dashboard");
-  key(KEY_OK);
-  shot("39_no_esp_menu");
-  open(S_DATE_AND_TIME);
-  shot("40_no_esp_time");
-  ui_go_home();
-  key(KEY_OK);
-  M.advanced = true;
-  ui_rebuild();
-  open(S_ADVANCED);
-  open(S_FANS);
-  go(S_MIN_SUPPLY);
-  shot("41_no_esp_ventilation_ec");
-  M.features &= ~FBIT(FEAT_EC_FANS);
-  ui_rebuild();
-  shot("42_no_esp_ventilation_ac");
-  fresh();
-  set_theme(1);
-  ui_replace(&SCR_HOME, VIEW_FLOW);
-  shot("31_daylight_airflow");
-  ui_push(&SCR_MENU, 0);
-  shot("32_daylight_menu");
-  set_theme(2);
-  shot("33_graphite_menu");
-  ui_show_view(VIEW_TREND);
-  shot("34_graphite_trends");
-
-  // ---- usability pass
-  fresh();
-  set_theme(0);
-  M.bus_offline = true;
-  ui_replace(&SCR_HOME, VIEW_DASH);
-  shot("62_no_contact");
-  key(KEY_OK);
-  shot("63_no_contact_menu");
-  ui_go_home();
-  M.bus_offline = false;
-  ui_value_changed(V_NONE);
-  M.key_lock = true;
-  ui_value_changed(V_NONE);
-  key(KEY_OK);  // refused, with a toast saying why
-  shot("64_key_lock");
-  M.key_lock = false;
-  ui_value_changed(V_NONE);
-  run(2000);
-  key(KEY_OK);
-  open(S_DISPLAY);
-  open(S_NIGHT_MODE);
-  shot("65_night_menu");
-  key(KEY_BACK);
-  go(S_FAST_DISPLAY);
-  shot("66_display_menu_end");
-  ui_go_home();
-  M.heat_pct = 0;
-  M.fan_sup = M.fan_ext = 75;
-  ui_replace(&SCR_HOME, VIEW_FLOW);
-  shot("67_airflow_exhaust");
-  M.heat_pct = 12;
-  ui_go_home();
-  M.fan_ext = 60;
-  ui_replace(&SCR_HOME, VIEW_DASH);
-  shot("68_dashboard_fans_differ");
-  M.fan_ext = 75;
-  ui_value_changed(V_NONE);
-
-  // ---- the ESP link: both ends run the real protocol code over a fake CX60. The scenes after this keep what
-  // it sent, the items and the picture.
-  fresh();
-  printf("\nESP link, one transaction after each CX60 status broadcast:\n");
-  settle();
-  sim_esp_report("hello and state sync");
-  sim_esp_items();
-  settle();
-  sim_esp_report("the ESP's items");
-  ui_show_view(VIEW_SMART);
-  shot("50_smart_view");
-  ui_go_home();
-  key(KEY_OK);
-  open(S_SMART_HOME);
-  shot("51_smart_menu");
-  go_text(sim_item_label("hallway_light"));
-  key(KEY_OK);
-  settle();
-  sim_esp_report("light switched on the panel");
-  run(2000);
-  shot("52_smart_toggled");
-  uint16_t tile = M.tiles[3];
-  M.tiles[3] = (uint16_t) (TILE_ITEM + sim_item_id("washer"));
-  ui_show_view(VIEW_DASH);
-  run(100);
-  shot("52d_dashboard_text");
-  ui_show_view(VIEW_SMART);
-  run(100);
-  item_t *washer = (item_t *) item_by_id(sim_item_id("washer"));
-  char text[ITEM_TEXT_LEN];
-  strcpy(text, washer->text);
-  check(shows(lv_scr_act(), text), "the text item isn't shown on the smart view");
-  washer->text[0] = 0;
-  ui_value_changed(V_NONE);
-  run(100);
-  check(!shows(lv_scr_act(), text) && shows(lv_scr_act(), "\xE2\x80\x93"), "an empty text isn't a dash");
-  strcpy(washer->text, text);
-  M.tiles[3] = tile;
-  ui_go_home();
-  key(KEY_OK);
-  open(S_COMFORT);
-  go_text(sim_item_label("fireplace"));
-  key(KEY_HELP);
-  settle();  // the ESP's answer
-  run(2000);
-  shot("52b_item_help");
-  key(KEY_BACK);
-  go_text(sim_item_label("fireplace_minutes"));
-  key(KEY_OK);
-  key(KEY_UP);
-  shot("52c_item_edit");
-  key(KEY_BACK);
-  ui_go_home();
-  sim_esp_notify("The washing machine is done.", ICN_WASHER, 0);
-  settle();
-  ui_second();
-  shot("53_notification");
-  key(KEY_OK);
-
-  unsigned long c0 = sim_cycles;
-  unsigned bytes = sim_esp_send_picture();
-  settle();
-  printf("  picture 320x240, 16 colours: %u bytes compressed (38400 raw), %lu cycles = %.1f min at 8 cycles/s\n", bytes,
-         sim_cycles - c0, (sim_cycles - c0) / 8.0 / 60);
-  sim_esp_report("picture");
-  M.screensaver = 3;
-  ui_push(&SCR_SAVER, 0);
-  shot("54_saver_picture");
-  ui_pop();
-  M.screensaver = 4;
-  ui_push(&SCR_SAVER, 0);
-  shot("55_saver_picture_clock");
-  ui_pop();
-  M.screensaver = 5;
-  ui_push(&SCR_SAVER, 0);
-  shot("56_saver_picture_all");
-  ui_pop();
-  int y, cnt;
-  c0 = sim_cycles;
-  bytes = sim_esp_send_moon(&y, &cnt);
-  settle();
-  printf("  moon patch: rows %d-%d, %u bytes, %lu cycles = %.1f s at 8 cycles/s\n", y, y + cnt - 1, bytes,
-         sim_cycles - c0, (sim_cycles - c0) / 8.0);
-  M.screensaver = 4;
-  ui_push(&SCR_SAVER, 0);
-  shot("57_saver_moon_patch");
-  ui_pop();
-  c0 = sim_cycles;
-  sim_esp_send_dawn();
-  settle();
-  printf("  palette only: %lu cycles = %.1f s\n", sim_cycles - c0, (sim_cycles - c0) / 8.0);
-  ui_push(&SCR_SAVER, 0);
-  shot("58_saver_dawn_palette");
-  ui_pop();
-  c0 = sim_cycles;
-  bytes = sim_esp_send_animation(250, 20);
-  settle();
-  printf("  animation 48x48, 8 frames: %u bytes, %lu cycles = %.1f s\n", bytes, sim_cycles - c0,
-         (sim_cycles - c0) / 8.0);
-  ui_push(&SCR_SAVER, 0);
-  shot("58b_saver_animation");
-  sim_run(300);  // three frames later
-  shot("58c_saver_animation_later");
-  // drifting left at 60 px/s, it goes round the edge like on a torus: half of it on each side for a while
-  sim_esp_move_animation(ANIM_DRIFT, -60, 0, 0);
-  settle();
-  int16_t ax, ay;
-  int stale = 0;  // pixels a step missed, against a full redraw
-  for (int i = 0; i < 200; i++) {
-    run(50);
-    stale += sim_stale();
-    anim_pos(0, &ax, &ay);
-    if (ax > 250 && ax <= 296)
-      break;
-  }
-  check(ax > 250 && ax <= 296 && ay == 20, "the animation didn't drift round the left edge");
-  check(ball_at(316, 20) && ball_at(4, 20) && !ball_at(160, 20), "the ball isn't drawn at both edges while wrapping");
-  shot("58d_saver_animation_wrap");
-  sim_esp_move_animation(ANIM_DRIFT, 0, -60, 0);  // round the top edge too, so it shows in all four corners
-  settle();
-  for (int i = 0; i < 80; i++) {
-    run(50);
-    stale += sim_stale();
-  }
-  check(!stale, "the part wrapped round an edge isn't redrawn as it moves");
-  // a glide lands on the target, the frames keep playing
-  sim_esp_move_animation(ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
-  settle();
-  run(500);
-  anim_pos(0, &ax, &ay);
-  check(ax > 100 && ay < 100, "the animation isn't on its way");
-  run(600);
-  anim_pos(0, &ax, &ay);
-  check(ax == 100 && ay == 100 && ball_in(100, 100), "the glide didn't land on 100,100");
-  unsigned long px = sim_px;
-  run(300);
-  anim_pos(0, &ax, &ay);
-  check(ax == 100 && sim_px > px, "the frames stopped after the glide");
-  // the motion pauses with the backlight: idle at night with the night idle brightness 0
-  sim_esp_move_animation(ANIM_DRIFT, 60, 0, 0);
-  settle();
-  ui_pop();
-  int idle_after = M.idle_after;
-  bool go_home = M.go_home;
-  M.idle_after = 0;  // 15 s
-  M.go_home = false;
-  M.night = true;
-  M.night_from = 0;
-  M.night_to = 23;
-  run(16000);  // idle, the screensaver comes up by itself, dark
-  anim_pos(0, &ax, &ay);
-  int16_t bx;
-  run(1000);
-  anim_pos(0, &bx, &ay);
-  check(bx == ax, "the animation drifts while the backlight is off");
-  M.night = false;
-  run(1000);
-  anim_pos(0, &bx, &ay);
-  check(bx == ax + 60, "the animation didn't drift on when the backlight came back");
-  key(KEY_OK);
-  M.idle_after = (uint8_t) idle_after;
-  M.go_home = go_home;
-  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
-  settle();
-  ui_go_home();
-  key(KEY_OK);
-  open(S_SCREENSAVER);
-  go(S_PICTURE);
-  shot("59_saver_menu_picture");
-  c0 = sim_cycles;
-  int quality;
-  bytes = sim_esp_send_photo(&quality);
-  settle();
-  printf("  photo 320x240 as JPEG, quality %d: %u bytes, %lu cycles = %.1f s\n", quality, bytes, sim_cycles - c0,
-         (sim_cycles - c0) / 8.0);
-  shot("59b_saver_menu_photo");
-  M.screensaver = 4;
-  ui_push(&SCR_SAVER, 0);
-  shot("59c_saver_photo");
-  // The LCD keeps the old picture while a new one comes, until it's in or HOLD_MS has passed. A refused one leaves
-  // the clock.
-  uint32_t was = sim_pixel(4, 4);
-  check(was, "the photo isn't shown");
-  sim_esp_send_picture();
-  sim_link_run(3);
-  run(50);
-  check(pic_state() == PIC_RECEIVING && ui_held() && sim_pixel(4, 4) == was,
-        "the screen went black while a new picture came");
-  settle();
-  run(50);
-  check(!ui_held() && sim_pixel(4, 4) && !sim_stale(), "the new picture isn't shown");
-  was = sim_pixel(4, 4);
-  sim_esp_send_picture();
-  sim_link_run(3);  // its start, then nothing for a while
-  run(14000);
-  check(ui_held() && sim_pixel(4, 4) == was, "the screen gave up on the new picture early");
-  run(1100);
-  check(!ui_held() && !sim_pixel(4, 4) && !sim_stale(), "the screen held on past 15 s");
-  settle();
-  run(50);
-  check(sim_pixel(4, 4) && !sim_stale(), "the late picture isn't shown");
-  sim_esp_set(K_PIC_BEGIN, 0);  // one the panel refuses
-  settle();
-  run(50);
-  check(pic_state() == PIC_NONE && !sim_pixel(4, 4), "the saver kept a picture the panel dropped");
-  sim_esp_set(K_SCREENSAVER, SAVER_OFF);  // switched off from Home Assistant while it shows
-  settle();
-  run(200);
-  check(ui_top() != &SCR_SAVER, "the screensaver stayed after it was switched off");
-  M.screensaver = 4;
-  sim_esp_send_picture();  // the drawing back for the scenes after
-  settle();
-  sim_esp_set(K_THEME, 1);
-  settle();
-  sim_esp_report("theme set by the ESP");
-  ui_go_home();
-  shot("60_theme_from_esp");
-  sim_esp_set(K_SHOW_VIEW, VIEW_FLOW);
-  settle();
-  shot("61_view_from_esp");
-  ui_go_home();
-  key(KEY_OK);
-  open(S_SYSTEM);
-  open(S_BUS);
-  shot("62_bus_link");  // the link's rows, after some traffic
-
-  // ---- the panel full of items: the smart home view pages, and its menu only builds the visible rows
-  sim_esp_fill();
-  settle();
-  sim_esp_report("the ESP fills the panel");
-  ui_show_view(VIEW_SMART);
-  key(KEY_BACK);
-  shot("62b_smart_page_2");
-  ui_go_home();
-  key(KEY_OK);
-  open(S_SMART_HOME);
-  key(KEY_UP);  // wraps to the last row
-  shot("62c_smart_menu_end");
-  go_text("Basement sensor  3");
-  key(KEY_OK);  // open the editor on a generated row
-  shot("62d_smart_edit");
-  key(KEY_BACK);
-
-  // ---- settings: the Display submenus, screensaver text, dashboard, night theme
-  ui_go_home();
-  key(KEY_OK);
-  open(S_DISPLAY);
-  open(S_HOME_SCREEN);
-  open(S_VIEWS);
-  shot("80_views");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_LIGHTS);
-  shot("82_lights");
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_SCREENSAVER);
-  shot("81_saver_menu");
-  ui_go_home();
-  key(KEY_OK);
-  open(S_SYSTEM);
-  go(S_RESET_PANEL_SETTINGS);
-  shot("83_system_menu");
-  ui_go_home();
-  key(KEY_OK);
-  open(S_ALARMS);
-  shot("84_alarms_menu");
-  ui_go_home();
-  M.screensaver = 5;
-  M.saver_text = 1;
-  ui_push(&SCR_SAVER, 0);
-  shot("85_saver_shadow");
-  ui_pop();
-  M.saver_top = true;
-  ui_push(&SCR_SAVER, 0);
-  shot("86_saver_shadow_top");
-  ui_pop();
-  M.saver_text = SAVER_TEXT_SMALL;
-  ui_push(&SCR_SAVER, 0);
-  shot("86b_saver_small_top");
-  ui_pop();
-  M.saver_top = false;
-  ui_push(&SCR_SAVER, 0);
-  shot("86c_saver_small");
-  ui_pop();
-  M.saver_text = SAVER_TEXT_PLAIN;
-  ui_push(&SCR_SAVER, 0);
-  shot("86d_saver_just_text");
-  ui_pop();
-  M.saver_top = true;
-  M.saver_text = 0;
-  ui_push(&SCR_SAVER, 0);
-  shot("87_saver_band_top");
-  ui_pop();
-  M.saver_top = false;
-  M.dash_temp = DT_OUTDOOR;
-  M.temp_dec = false;
-  ui_replace(&SCR_HOME, VIEW_DASH);
-  shot("88_dashboard_outdoor_whole");
-  M.dash_temp = DT_INDOOR;
-  M.temp_dec = true;
-  M.night = true;
-  M.night_from = 12;
-  M.night_to = 14;
-  M.night_theme = 3;  // Graphite
-  ui_second();
-  shot("89_night_theme");
-  M.night = false;
-  M.night_theme = 0;
-  ui_second();
-  for (int v = VIEW_FLOW; v < VIEW_COUNT; v++)
-    M.view_on[v] = false;
-  ui_replace(&SCR_HOME, VIEW_DASH);
-  key(KEY_BACK);
-  shot("90_only_the_dashboard");  // BACK has nowhere to go
-  for (int v = VIEW_FLOW; v < VIEW_COUNT; v++)
-    M.view_on[v] = true;
-
-  // Standalone, no ESP on the bus. Its views and menus are gone, and settings that pointed at them show their
-  // fallbacks.
-  M.home_view = VIEW_COMFORT;
-  M.screensaver = 5;
-  M.features &= ~FBIT(FEAT_ESP);
-  ui_show_view(M.home_view);
-  shot("70_standalone_dashboard");
-  key(KEY_OK);
-  shot("71_standalone_menu");
-  open(S_DISPLAY);
-  shot("72_standalone_display");
-  open(S_HOME_SCREEN);
-  open(S_DASHBOARD_TILES);
-  edit(S_TILE_3);
-  shot("73_standalone_tile_picker");  // set to CO2, shown as its fallback
-  key(KEY_BACK);
-  key(KEY_BACK);
-  edit(S_START_VIEW);
-  shot("74_standalone_view_picker");  // set to Comfort
-  key(KEY_BACK);
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_SCREENSAVER);
-  shot("75_standalone_saver_menu");  // no text or picture rows
-  edit(S_SHOW);
-  shot("76_standalone_saver_picker");  // set to "Picture, all"
-  key(KEY_BACK);
-  key(KEY_BACK);
-  open(S_DATE_AND_TIME);
-  go(S_SUMMER_TIME);
-  shot("77_standalone_time");
-  key(KEY_BACK);
-  open(S_SYSTEM);
-  open(S_ABOUT);
-  shot("78_standalone_about");
-  key(KEY_BACK);
-  open(S_BUS);
-  shot("79_standalone_bus");
-  ui_go_home();
-  ui_push(&SCR_SAVER, 0);
-  shot("79b_standalone_saver");
-  ui_pop();
-
-  checks();
+  home_views();
+  menus();
+  schedule();
+  display();
+  system_menu();
+  alarms();
+  no_esp();
+  themes();
+  usability();
+  esp_link();
+  pictures();
+  animation();
+  photo();
+  full_panel();
+  settings();
+  saver_text();
+  dashboard();
+  standalone();
+  check_messages();
+  check_rebuild();
+  check_alarms();
+  check_esp_items();
+  check_idle();
+  check_esp_numbers();
+  check_lists();
+  check_brightness();
+  check_views();
   notices();
   keytest();
+  check_trial();
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

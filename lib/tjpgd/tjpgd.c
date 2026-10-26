@@ -397,14 +397,12 @@ static int huffext (	/* >=0: decoded data, <0: error code */
 	for ( ; bl <= 16; bl++) {	/* Incremental search */
 		nc = *hb++;
 		if (nc) {
-			d = w >> (wbit - bl);
-			do {	/* Search the code word in this bit length */
-				if (d == *hc++) {		/* Matched? */
-					jd->dbit = wbit - bl;	/* Snip the huffman code */
-					return *hd;			/* Return the decoded data */
-				}
-				hd++;
-			} while (--nc);
+			d = (w >> (wbit - bl)) - *hc;	/* CI600: the codes of a length count up from the first, one compare */
+			if (d < nc) {
+				jd->dbit = wbit - bl;	/* Snip the huffman code */
+				return hd[d];		/* Return the decoded data */
+			}
+			hc += nc; hd += nc;
 		}
 	}
 #endif
@@ -699,7 +697,8 @@ static void block_idct (
 /*-----------------------------------------------------------------------*/
 
 static JRESULT mcu_load (
-	JDEC* jd		/* Pointer to the decompressor object */
+	JDEC* jd,		/* Pointer to the decompressor object */
+	int skip		/* CI600: only read past it, nothing to output */
 )
 {
 	int32_t *tmp = (int32_t*)jd->workbuf;	/* Block working buffer for de-quantize and IDCT */
@@ -733,6 +732,21 @@ static JRESULT mcu_load (
 				if (!(e & bc)) e -= (bc << 1) - 1;	/* Restore negative value if needed */
 				d += e;								/* Get current value */
 				jd->dcv[cmp] = (int16_t)d;			/* Save current DC value for next block */
+			}
+			if (skip) {								/* CI600: the AC elements only to get past them */
+				for (z = 1; z < 64; z++) {
+					d = huffext(jd, id, 1);
+					if (d == 0) break;
+					if (d < 0) return (JRESULT)(0 - d);
+					z += (unsigned int)d >> 4;
+					if (z >= 64) return JDR_FMT1;
+					if (d & 0x0F) {
+						e = bitext(jd, d & 0x0F);
+						if (e < 0) return (JRESULT)(0 - e);
+					}
+				}
+				bp += 64;
+				continue;
 			}
 			dqf = jd->qttbl[jd->qtid[cmp]];			/* De-quantizer table ID for this component */
 			tmp[0] = d * dqf[0] >> 8;				/* De-quantize, apply scale factor of Arai algorithm and descale 8 bits */
@@ -797,6 +811,7 @@ static JRESULT mcu_output (
 	jd_yuv_t *py, *pc;
 	uint8_t *pix;
 	JRECT rect;
+	int rgb565 = JD_FORMAT == 1 && !(JD_USE_SCALE && jd->scale);	/* CI600: straight to RGB565, the scaled ones go by RGB888 */
 
 
 	mx = jd->msx * 8; my = jd->msy * 8;					/* MCU size (pixel) */
@@ -814,7 +829,33 @@ static JRESULT mcu_output (
 	if (!JD_USE_SCALE || jd->scale != 3) {	/* Not for 1/8 scaling */
 		pix = (uint8_t*)jd->workbuf;
 
-		if (JD_FORMAT != 2) {	/* RGB output (build an RGB MCU from Y/C component) */
+		if (rgb565) {	/* CI600: each chroma sample worked out once */
+			uint16_t *d = (uint16_t*)pix;
+			int r, g, b;
+			unsigned int k;
+
+			for (iy = 0; iy < my; iy++) {
+				pc = py = jd->mcubuf;
+				if (my == 16) {
+					pc += 64 * 4 + (iy >> 1) * 8;
+					if (iy >= 8) py += 64;
+				} else {
+					pc += mx * 8 + iy * 8;
+				}
+				py += iy * 8;
+				for (ix = 0; ix < mx; pc++) {
+					cb = pc[0] - 128; cr = pc[64] - 128;
+					r = ((int)(1.402 * CVACC) * cr) / CVACC;
+					g = ((int)(0.344 * CVACC) * cb + (int)(0.714 * CVACC) * cr) / CVACC;
+					b = ((int)(1.772 * CVACC) * cb) / CVACC;
+					for (k = mx / 8; k; k--, ix++) {	/* the 1 or 2 pixels that share it */
+						if (ix == 8) py += 64 - 8;
+						yy = *py++;
+						*d++ = (uint16_t)((BYTECLIP(yy + r) & 0xF8) << 8 | (BYTECLIP(yy - g) & 0xFC) << 3 | BYTECLIP(yy + b) >> 3);
+					}
+				}
+			}
+		} else if (JD_FORMAT != 2) {	/* RGB output (build an RGB MCU from Y/C component) */
 			for (iy = 0; iy < my; iy++) {
 				pc = py = jd->mcubuf;
 				if (my == 16) {		/* Double block height? */
@@ -915,23 +956,17 @@ static JRESULT mcu_output (
 	mx >>= jd->scale;
 	if (rx < mx) {	/* Is the MCU spans rigit edge? */
 		uint8_t *s, *d;
-		unsigned int x, y;
+		unsigned int x, y, b = JD_FORMAT == 2 ? 1 : rgb565 ? 2 : 3;	/* CI600: bytes per pixel */
 
 		s = d = (uint8_t*)jd->workbuf;
 		for (y = 0; y < ry; y++) {
-			for (x = 0; x < rx; x++) {	/* Copy effective pixels */
-				*d++ = *s++;
-				if (JD_FORMAT != 2) {
-					*d++ = *s++;
-					*d++ = *s++;
-				}
-			}
-			s += (mx - rx) * (JD_FORMAT != 2 ? 3 : 1);	/* Skip truncated pixels */
+			for (x = 0; x < rx * b; x++) *d++ = *s++;	/* Copy effective pixels */
+			s += (mx - rx) * b;	/* Skip truncated pixels */
 		}
 	}
 
 	/* Convert RGB888 to RGB565 if needed */
-	if (JD_FORMAT == 1) {
+	if (JD_FORMAT == 1 && !rgb565) {	/* CI600: only the scaled ones are RGB888 */
 		uint8_t *s = (uint8_t*)jd->workbuf;
 		uint16_t w, *d = (uint16_t*)s;
 		unsigned int n = rx * ry;
@@ -1141,7 +1176,7 @@ JRESULT jd_decomp (
 				if (rc != JDR_OK) return rc;
 				rst = 1;
 			}
-			rc = mcu_load(jd);					/* Load an MCU (decompress huffman coded stream, dequantize and apply IDCT) */
+			rc = mcu_load(jd, 0);				/* Load an MCU (decompress huffman coded stream, dequantize and apply IDCT) */
 			if (rc != JDR_OK) return rc;
 			rc = mcu_output(jd, outfunc, x, y);	/* Output the MCU (YCbCr to RGB, scaling and output) */
 			if (rc != JDR_OK) return rc;
@@ -1155,20 +1190,22 @@ JRESULT jd_decomp (
 
 
 /*-----------------------------------------------------------------------*/
-/* CI600: decompress MCU rows row..row+n-1 of a picture that has a       */
-/* restart marker after every MCU row. The input function must deliver  */
-/* the stream from the start of row `row`: the start of the scan, or     */
-/* right after the restart marker that ends the row before it.           */
+/* CI600: decompress the MCUs of MCU row `row` that meet x1..x2, in a    */
+/* picture with a restart marker after every MCU row. The ones before x1 */
+/* are only read past, the ones after x2 not read at all. The input      */
+/* function must deliver the stream from the start of the row: the start */
+/* of the scan, or right after the restart marker before it.             */
 /*-----------------------------------------------------------------------*/
 
-JRESULT jd_decomp_rows (
+JRESULT jd_decomp_row (
 	JDEC* jd,								/* Initialized decompression object */
 	int (*outfunc)(JDEC*, void*, JRECT*),	/* RGB output function */
-	unsigned int row,						/* First MCU row */
-	unsigned int n							/* Number of MCU rows */
+	unsigned int row,						/* MCU row */
+	unsigned int x1,						/* Leftmost pixel wanted */
+	unsigned int x2							/* Rightmost pixel wanted */
 )
 {
-	unsigned int x, y, mx, my;
+	unsigned int x, mx, my;
 	JRESULT rc = JDR_OK;
 
 
@@ -1180,17 +1217,11 @@ JRESULT jd_decomp_rows (
 	jd->wreg = 0; jd->marker = 0;
 #endif
 	jd->dcv[2] = jd->dcv[1] = jd->dcv[0] = 0;
-	for (y = row * my; y < (row + n) * my && y < jd->height; y += my) {
-		if (y != row * my) {	/* The marker after the row before: RST(n & 7) follows MCU row n */
-			rc = restart(jd, (uint16_t)(y / my - 1));
-			if (rc != JDR_OK) return rc;
-		}
-		for (x = 0; x < jd->width; x += mx) {
-			rc = mcu_load(jd);
-			if (rc != JDR_OK) return rc;
-			rc = mcu_output(jd, outfunc, x, y);
-			if (rc != JDR_OK) return rc;
-		}
+	for (x = 0; x <= x2 && x < jd->width; x += mx) {
+		int skip = x + mx <= x1;
+		rc = mcu_load(jd, skip);
+		if (rc == JDR_OK && !skip) rc = mcu_output(jd, outfunc, x, row * my);
+		if (rc != JDR_OK) return rc;
 	}
 	return rc;
 }

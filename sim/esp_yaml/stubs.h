@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <memory>
@@ -46,9 +47,6 @@ template<typename T> struct RAMAllocator {  // picture.h checks free RAM before 
   T *allocate(size_t n) { return n * sizeof(T) > ram_block ? nullptr : (T *) malloc(n * sizeof(T)); }
   void deallocate(T *p, size_t) { free(p); }
 };
-inline struct {
-  void feed_wdt() {}
-} App;
 void delayMicroseconds(uint32_t us);
 uint32_t micros();
 
@@ -185,6 +183,7 @@ struct Switch {
   bool refuse = false;  // won't turn on, like fireplace with the unit stopped
   std::function<void()> on_action, off_action;
   Callbacks<bool> cb;
+  bool has_state() const { return false; }  // never for a switch, like ESPHome's
   void publish_state(bool v) {
     bool changed = v != state;
     state = v;
@@ -272,6 +271,14 @@ struct ESPTime {
   time_t timestamp = 1792359015;  // 2026-10-18 21:30:15 UTC
   bool is_valid() const { return year >= 2019; }
   static int32_t timezone_offset() { return tz_offset_s; }
+  static ESPTime from_epoch_local(time_t t) {
+    time_t l = t + tz_offset_s;
+    struct tm m;
+    gmtime_r(&l, &m);
+    ESPTime e{m.tm_year + 1900, m.tm_mon + 1, m.tm_mday, m.tm_hour, m.tm_min, m.tm_sec};
+    e.timestamp = t;
+    return e;
+  }
 };
 
 struct Time {
@@ -330,7 +337,7 @@ struct OnlineImage : Image {
   void set_url(const std::string &u) { url = u; }
 };
 
-// http_request, for online_picture.yaml's check before a download and met.h's forecast
+// http_request, for online_picture.yaml's check before a download, and met.h's forecast through esp_http_client.h
 namespace http_request {
 struct Header {
   std::string name, value;
@@ -346,13 +353,17 @@ inline HttpReadLoopResult http_read_loop_result(int r, uint32_t &, uint32_t, boo
 struct HttpContainer {
   int status_code = 200;
   size_t content_length = 0;
-  std::string type, body, last_modified, expires;
-  size_t at = 0;  // of body
+  std::string type, body, last_modified, expires, location;
+  size_t at = 0;          // of body
+  size_t cut = SIZE_MAX;  // the connection drops after this much of the body, and read() gives cut_with
+  int cut_with = 0;
   std::string get_response_header(const std::string &h) const {
     return h == "last-modified" ? last_modified : h == "expires" ? expires : type;
   }
   int read(uint8_t *buf, size_t n) {  // 512 at a time, like a real one
-    n = std::min(n, std::min<size_t>(body.size() - at, 512));
+    if (at >= cut)
+      return cut_with;
+    n = std::min({n, body.size() - at, cut - at, (size_t) 512});
     memcpy(buf, body.data() + at, n);
     at += n;
     return (int) n;
@@ -363,21 +374,37 @@ struct HttpContainer {
 struct HttpRequest {
   size_t length = 0;                         // the Content-Length the server reports
   std::string type;                          // and its Content-Type
+  int status = 200;                          // and its HTTP status
   std::string body, last_modified, expires;  // what it answers with
   bool down = false;                         // no answer at all
+  size_t cut = SIZE_MAX;                     // the connection drops after this much of the body
+  int cut_with = 0;                          // what read() gives then: 0 it closed, -1 an error
+  int moves = 0;                             // answers this many requests with a 301 first
+  std::string location;                      // to here
   std::vector<http_request::Header> sent;    // the last request's headers
+  std::string url;                           // and its URL
   uint32_t get_timeout() const { return 4500; }
-  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &h,
+  std::shared_ptr<HttpContainer> get(const std::string &u, const std::vector<http_request::Header> &h,
                                      const std::vector<std::string> &) {
     sent = h;
+    url = u;
     if (down)
       return nullptr;
     auto c = std::make_shared<HttpContainer>();
+    if (moves > 0) {
+      moves--;
+      c->status_code = 301;
+      c->location = location;
+      return c;
+    }
+    c->status_code = status;
     c->content_length = length ? length : body.size();
     c->type = type;
     c->body = body;
     c->last_modified = last_modified;
     c->expires = expires;
+    c->cut = cut;
+    c->cut_with = cut_with;
     return c;
   }
 };
@@ -389,9 +416,10 @@ struct HaAction {
 };
 inline std::vector<HaAction> ha_actions;
 
+// The component's registers the packages read
 namespace flexit_modbus_server {
-enum HoldingRegisterIndex : uint16_t {};
-}
+enum : uint16_t { REG_PERCENTAGE_HEATING = 0xC9 };
+}  // namespace flexit_modbus_server
 
 // The ESP's Modbus server, with the registers, coils and hooks the panel's link uses.
 struct Server {
@@ -399,7 +427,7 @@ struct Server {
   bool coil[0x200] = {};
   std::vector<std::pair<uint16_t, uint16_t>> cmds;  // every send_cmd() to a CX60 register
   std::vector<std::function<void(uint16_t, uint16_t)>> setting_cbs, register_cbs;
-  uint16_t read_holding_register(flexit_modbus_server::HoldingRegisterIndex r) { return hold[r]; }
+  uint16_t read_holding_register(uint16_t r) { return hold[r]; }
   void add_on_setting_callback(std::function<void(uint16_t, uint16_t)> &&f) { setting_cbs.push_back(std::move(f)); }
   void add_on_register_callback(std::function<void(uint16_t, uint16_t)> &&f) { register_cbs.push_back(std::move(f)); }
   void setting(uint16_t r, uint16_t v) {  // a setting changed for good, from us or a panel via the CX60
@@ -410,10 +438,10 @@ struct Server {
     for (auto &f : register_cbs)
       f(r, v);
   }
-  void send_cmd(flexit_modbus_server::HoldingRegisterIndex r, uint16_t v) {
+  void send_cmd(uint16_t r, uint16_t v) {
     setting(r, v);
     coil[r] = true;
-    cmds.push_back({(uint16_t) r, v});
+    cmds.push_back({r, v});
   }
 
   // For the panel's link. The harness plays the bus and feeds the panel's answers back.
@@ -433,7 +461,8 @@ struct Server {
   bool synced_ = true;  // a CX60 status broadcast has been heard since boot
   bool synced() const { return synced_; }
   uint32_t status_min_age_us() { return min_age_us; }
-  bool updating() const { return false; }    // true while a panel update from update.h owns the bus, never here
+  bool updating_ = false;  // a panel update from update.h owns the bus, the harness sets it
+  bool updating() const { return updating_; }
   void send_frame(uint8_t *f, size_t len) {  // appends the Modbus CRC like the library's sendResponse()
     uint16_t c = 0xFFFF;
     for (size_t i = 0; i < len; i++) {

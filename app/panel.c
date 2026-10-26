@@ -5,6 +5,7 @@
 #include <string.h>
 
 const uint16_t TILE_DEFAULTS[4] = {TILE_OUTDOOR, TILE_SUPPLY, TILE_ROTOR, TILE_FILTER};
+const uint8_t CPU_MHZ[N_CPU_SPEEDS] = {72, 80, 88, 96, 128};  // hw/board.c has each one's clock settings
 
 void panel_defaults(void) {
   M.theme = M.night_theme = 0;
@@ -21,6 +22,7 @@ void panel_defaults(void) {
   M.dash_temp = DT_INDOOR;
   memcpy(M.tiles, TILE_DEFAULTS, sizeof TILE_DEFAULTS);
   M.clock_24h = M.key_hints = M.temp_dec = M.fast_display = true;
+  M.cpu_speed = 0;
   M.language = 0;
   M.room_offset = -40;  // the same fixed 4.0 C the stock firmware uses
   M.indoor_source = INDOOR_EXTRACT;
@@ -57,8 +59,8 @@ bool night_active(void) {
 uint8_t theme_now(void) { return night_active() && M.night_theme ? M.night_theme - 1 : M.theme; }
 
 uint16_t idle_seconds(void) {
-  static const uint16_t S[IDLE_STEPS] = {15, 30, 60, 120, 300, 600, 1800, 0};
-  return S[M.idle_after];
+  static const uint16_t SECONDS[IDLE_STEPS] = {15, 30, 60, 120, 300, 600, 1800, 0};
+  return SECONDS[M.idle_after];
 }
 
 int16_t indoor_temp(void) {
@@ -105,7 +107,7 @@ int alarm_new_pops(void) {
   return pop;
 }
 
-void panel_leds(bool out[3], uint32_t ms) {
+void panel_leds(bool out[N_LIGHTS], uint32_t ms) {
   bool filter = false, other = false;
   for (int i = 0; i < M.n_alarms; i++) {
     if (M.alarms[i].code == ALARM_FILTER || M.alarms[i].code == ALARM_FILTER_GUARD)
@@ -114,16 +116,17 @@ void panel_leds(bool out[3], uint32_t ms) {
       other = true;
   }
   bool ok = !other && !filter && (M.led_ok == LED_OK_ALWAYS || (M.led_ok == LED_OK_NOT_NIGHT && !night_active()));
-  bool want[3] = {other && M.led_alarm, filter && M.led_filter, ok};
-  for (int i = 0; i < 3; i++) {
-    switch ((M.leds >> (2 * i)) & 3) {  // ESP override, LED_*. 1 = off, 2 = on, 3 = blink
-      case 1:
+  bool want[N_LIGHTS] = {
+      [LIGHT_ALARM] = other && M.led_alarm, [LIGHT_FILTER] = filter && M.led_filter, [LIGHT_OK] = ok};
+  for (int i = 0; i < N_LIGHTS; i++) {
+    switch ((M.leds >> (2 * i)) & 3) {  // the ESP's LED_*
+      case LED_OFF:
         want[i] = false;
         break;
-      case 2:
+      case LED_ON:
         want[i] = true;
         break;
-      case 3:
+      case LED_BLINK:
         want[i] = ms / 500 % 2;
         break;
     }
@@ -131,5 +134,21 @@ void panel_leds(bool out[3], uint32_t ms) {
   }
   int screen = ui_ok_led(ms);
   if (screen >= 0)
-    out[2] = screen;
+    out[LIGHT_OK] = screen;
 }
+
+int cpu_clock_choice(uint8_t speed, uint8_t last, uint8_t reset_cause, bool *revert) {
+  unsigned ran = CLOCK_RAN(last), trial = CLOCK_TRIAL(last), i = trial && trial < N_CPU_SPEEDS ? trial : speed;
+  *revert = ran && ran < N_CPU_SPEEDS && (reset_cause == RESET_FAULT || reset_cause == RESET_WATCHDOG);
+  return CPU_MHZ[!*revert && i < N_CPU_SPEEDS ? i : 0];
+}
+
+int cpu_speed_of(int mhz) {
+  for (int i = 0; i < N_CPU_SPEEDS; i++)
+    if (CPU_MHZ[i] == mhz)
+      return i;
+  return 0;
+}
+
+// Over 80 MHz its pixels at core / 4 would pass the SPI's 20 MHz cap, see lcd_spi_div()
+bool fast_display_ok(void) { return CPU_MHZ[M.cpu_speed] <= 80; }

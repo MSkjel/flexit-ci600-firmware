@@ -6,12 +6,13 @@
 OUT is only written when it changes, so make rebuilds only then. Without git the list is empty.
 """
 
-import ast
 import os
 import subprocess
 import sys
 import unicodedata
 from collections import Counter
+
+from mkfonts import TEXT_RANGE
 
 MAX_NAMES = 16
 MAX_LEN = 24  # characters, fits a line in font_f16
@@ -31,17 +32,10 @@ EXTRA = {
 }
 
 
-def font_chars(root):
-    """TEXT_RANGE of tools/mkfonts.py as a set. Parsed, importing it needs fontTools."""
-    with open(os.path.join(root, "tools", "mkfonts.py"), encoding="utf-8") as f:
-        tree = ast.parse(f.read())
-    text = next(
-        ast.literal_eval(n.value)
-        for n in tree.body
-        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "TEXT_RANGE" for t in n.targets)
-    )
+def font_chars():
+    """The characters the text fonts have"""
     chars = set()
-    for part in text.split(","):
+    for part in TEXT_RANGE.split(","):
         lo, _, hi = part.partition("-")
         chars.update(chr(c) for c in range(int(lo, 16), int(hi or lo, 16) + 1))
     return chars
@@ -72,7 +66,7 @@ def from_git(root):
 
 def main():
     root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
-    chars = font_chars(root)
+    chars = font_chars()
     keep = []
     for n in names or from_git(root):
         c = clean(n, chars)

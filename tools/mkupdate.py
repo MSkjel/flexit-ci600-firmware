@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Build a .fxup update stream for the CI600's stock bootloader from the application image.
 
-uv run --with cryptography tools/mkupdate.py --stock DUMP hw/build/ci600.bin ci600.fxup [--version X.Y.Z] [--no-guard]
+uv run --with cryptography tools/mkupdate.py --stock DUMP hw/build/ci600.bin ci600.fxup
 uv run --with cryptography tools/mkupdate.py --stock DUMP --verify ci600.fxup hw/build/ci600.bin
 
 The bootloader's key isn't in this repo. --stock reads it from a stock flash dump, or set CI600_FXUP_KEY to it
-(64 hex digits). CI has it as the CI600_FXUP_KEY secret. The stream's name is "ci600 X.Y.Z", the version config.mk
-builds in unless --version says otherwise. The ESP reads it to tell the file's version from the panel's.
+(64 hex digits). CI has it as the CI600_FXUP_KEY secret. The stream's name is "ci600 X.Y.Z", the version the image
+was built with, from the version file the build writes next to it. The ESP reads it to tell the file's version
+from the panel's.
 """
 
+import argparse
 import hashlib
 import os
 import re
 import struct
-import subprocess
 import sys
+from pathlib import Path
 
 import layout
 
@@ -25,7 +27,6 @@ KEY_SHA256 = "858c7eced24b95c7363d3de2190613e312c1f438cad79e5c8d4a059e3ffe7d82"
 
 APP_BASE, APP_END = layout.APP, layout.SETTINGS  # the bootloader writes the image from APP_BASE
 NAME_MAX = 0xEF  # longest name in field 1 the bootloader accepts
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 # The stream is a protobuf message:
 #   field 1  name, the bootloader stores it at 0x08002010 and returns it for sub-command 8
@@ -34,9 +35,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 #
 # The guard is a list of varints. An even v pushes v >> 1, an odd v runs operator v >> 1. It passes if it leaves
 # exactly one value, 1. The bootloader runs it before erasing anything and rejects the image with detail 1 if it
-# fails. The default guard checks the CI600 bootloader's identity fields 3=500, 5=97 and 7=3. Operator 18 reads
-# a bootloader field with a default, 7 is equal and 9 is and. b"\x02" just pushes 1 and accepts any panel.
-GUARD_ACCEPT_ALL = b"\x02"
+# fails. Ours checks the CI600 bootloader's identity fields 3=500, 5=97 and 7=3. Operator 18 reads a bootloader
+# field with a default, 7 is equal and 9 is and.
 
 
 def varint(v):
@@ -69,17 +69,16 @@ def pb_bytes(field, data):
     return varint(field << 3 | 2) + varint(len(data)) + data
 
 
-def tag_version():
-    """X.Y.Z like config.mk: the newest vX.Y.Z tag, the next patch level on a later commit, 0.0.0 without one."""
-    tag = subprocess.run(
-        ["git", "-C", ROOT, "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*", "--exclude", "v*[!0-9.]*"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if not tag:
-        return "0.0.0"
-    v = re.split(r"[.-]", tag[1:])
-    return "%s.%s.%d" % (v[0], v[1], int(v[2]) + (len(v) > 3))
+def built_version(app_path):
+    """X.Y.Z from the version file next to the image, which config.mk writes with every build."""
+    path = Path(app_path).with_name("version")
+    try:
+        version = path.read_text().strip()
+    except OSError:
+        sys.exit("no %s: give the image the firmware build made, hw/build/ci600.bin" % path)
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        sys.exit("%s holds %r, not X.Y.Z" % (path, version))
+    return version
 
 
 def name_version(name):
@@ -107,16 +106,10 @@ def key_from(stock=None):
     return key
 
 
-def encrypt(key, plaintext, name, guard):
+def aessiv(key):
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
 
-    return AESSIV(key).encrypt(plaintext, [name, guard])  # SIV(16) || ciphertext
-
-
-def decrypt(key, blob, name, guard):
-    from cryptography.hazmat.primitives.ciphers.aead import AESSIV
-
-    return AESSIV(key).decrypt(blob, [name, guard])
+    return AESSIV(key)
 
 
 def check_app(app):
@@ -135,32 +128,40 @@ def check_app(app):
         )
 
 
-def build(key, app, name, guard=True, check=True):
-    if check:
-        check_app(app)
+def build(key, app, name):
+    check_app(app)
     if len(name) > NAME_MAX:
         raise ValueError("name is %d bytes, the bootloader takes at most %d" % (len(name), NAME_MAX))
-    program = GUARD if guard else GUARD_ACCEPT_ALL
-    return pb_bytes(1, name) + pb_bytes(2, program) + pb_bytes(3, encrypt(key, app, name, program))
+    blob = aessiv(key).encrypt(app, [name, GUARD])  # SIV(16) || ciphertext
+    return pb_bytes(1, name) + pb_bytes(2, GUARD) + pb_bytes(3, blob)
 
 
 def parse(stream):
-    """Split a stream into (name, guard, blob). Like the bootloader, rejects anything after field 3."""
+    """Split a stream into (name, guard, blob). Raises ValueError unless field 3 ends where the stream does: a
+    cut-off download is refused, and like the bootloader nothing may follow it."""
     fields = {}
     i = 0
-    while i < len(stream):
+    while 3 not in fields:
+        if i == len(stream):
+            raise ValueError("the stream ends before field 3")
         key, i = read_varint(stream, i)
-        if 3 in fields or key & 7 != 2 or key >> 3 not in (1, 2, 3) or key >> 3 in fields:
+        if key & 7 != 2 or key >> 3 not in (1, 2, 3) or key >> 3 in fields:
             raise ValueError("unexpected protobuf key 0x%x before offset %d" % (key, i))
         n, i = read_varint(stream, i)
+        if i + n > len(stream):
+            raise ValueError("field %d runs %d bytes past the end of the stream" % (key >> 3, i + n - len(stream)))
         fields[key >> 3] = stream[i : i + n]
         i += n
-    return fields.get(1), fields.get(2), fields.get(3)
+    if i != len(stream):
+        raise ValueError("%d bytes after field 3" % (len(stream) - i))
+    return fields.get(1), fields.get(2), fields[3]
 
 
 def read_varint(buf, i):
     v = s = 0
     while True:
+        if i >= len(buf):
+            raise ValueError("the stream ends inside a varint")
         b = buf[i]
         i += 1
         v |= (b & 0x7F) << s
@@ -169,56 +170,47 @@ def read_varint(buf, i):
         s += 7
 
 
-def main(argv):
-    stock = None
-    if "--stock" in argv:
-        i = argv.index("--stock")
-        if i + 1 == len(argv):
-            sys.exit(__doc__)
-        stock = argv[i + 1]
-        argv = argv[:i] + argv[i + 2 :]
-    key = key_from(stock)
-    if argv and argv[0] == "--verify":
-        if len(argv) != 3:
-            sys.exit(__doc__)
-        stream = open(argv[1], "rb").read()
-        app = open(argv[2], "rb").read()
-        name, guard, blob = parse(stream)
-        pt = decrypt(key, blob, name, guard)
-        ok = pt == app
-        print("name   : %r" % name)
-        print("version: %s" % (name_version(name) or "none"))
-        print("guard  : %s" % guard.hex())
-        print("stream : %d bytes, %d ciphertext" % (len(stream), len(blob)))
-        print("verify : %s (%d plaintext bytes, authenticates)" % ("OK" if ok else "MISMATCH", len(pt)))
-        return 0 if ok else 1
+def decrypt(key, stream):
+    """The image in a stream. Raises if it isn't one or doesn't authenticate."""
+    name, guard, blob = parse(stream)
+    return aessiv(key).decrypt(blob, [name, guard])
 
-    no_guard = "--no-guard" in argv
-    argv = [a for a in argv if a != "--no-guard"]
-    version = tag_version()
-    if "--version" in argv:
-        i = argv.index("--version")
-        if i + 1 == len(argv) or not re.fullmatch(r"\d+\.\d+\.\d+", argv[i + 1]):
-            sys.exit(__doc__)
-        version = argv[i + 1]
-        argv = argv[:i] + argv[i + 2 :]
-    if len(argv) != 2:
-        sys.exit(__doc__)
-    app_path, out = argv[0], argv[1]
-    name = ("ci600 " + version).encode()
-    app = open(app_path, "rb").read()
+
+def verify(key, stream, app):
+    """Print what's in the stream, True if it decrypts to app."""
+    name, guard, blob = parse(stream)
+    image = decrypt(key, stream)
+    print("name   : %r" % name)
+    print("version: %s" % (name_version(name) or "none"))
+    print("guard  : %s" % guard.hex())
+    print("stream : %d bytes, %d ciphertext" % (len(stream), len(blob)))
+    print("verify : %s (%d plaintext bytes, authenticates)" % ("OK" if image == app else "MISMATCH", len(image)))
+    return image == app
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="Build a .fxup update stream for the CI600's stock bootloader")
+    ap.add_argument("app", help="the application image, hw/build/ci600.bin")
+    ap.add_argument("out", nargs="?", help="the stream to write")
+    ap.add_argument("--stock", metavar="DUMP", help="a stock flash dump to take the key from, else $CI600_FXUP_KEY")
+    ap.add_argument("--verify", metavar="FXUP", help="check that FXUP decrypts to the image instead")
+    a = ap.parse_args(argv)
+    if (a.out is None) == (a.verify is None):
+        ap.error("give either OUT or --verify FXUP")
+    key = key_from(a.stock)
+    app = open(a.app, "rb").read()
+    if a.verify:
+        return 0 if verify(key, open(a.verify, "rb").read(), app) else 1
+
     try:
-        stream = build(key, app, name, guard=not no_guard)
+        stream = build(key, app, ("ci600 " + built_version(a.app)).encode())
     except ValueError as e:
         sys.exit("refusing to build: %s" % e)
-    open(out, "wb").write(stream)
     # check that the stream decrypts back to the image before anyone flashes it
-    name2, guard2, blob2 = parse(stream)
-    assert decrypt(key, blob2, name2, guard2) == app, "self-test failed"
-    print(
-        "%s: %r, %d bytes of firmware -> %d-byte stream (%d ciphertext bytes), self-test OK"
-        % (out, name, len(app), len(stream), len(blob2))
-    )
+    if not verify(key, stream, app):
+        sys.exit("the stream doesn't decrypt back to the image")
+    open(a.out, "wb").write(stream)
+    print("%s: %d bytes of firmware -> %d-byte stream" % (a.out, len(app), len(stream)))
     return 0
 
 

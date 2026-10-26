@@ -1,6 +1,6 @@
-// Checks the translations for missing texts, printf conversions that differ from the English, glyphs the
-// fonts don't have and help texts too long for the help card.
-#include "ui.h"
+// Checks the translations for missing texts, printf conversions that differ from the English, a % not spaced the
+// way the language writes it, glyphs the fonts don't have and help texts too long for the help card.
+#include "ui_int.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -64,6 +64,12 @@ int main(void) {
         printf("%s %s: \"%s\" where the English has \"%s\"\n", name, NAMES[s], got, want);
         bad++;
       }
+      for (const char *p = strstr(t, "%%"); p; p = strstr(p + 2, "%%"))
+        if (p > t && (p[-1] == ' ') != lang_pct_space(lang)) {
+          printf("%s %s: \"%s\", the language writes %s\n", name, NAMES[s], t, lang_pct_space(lang) ? "50 %" : "50%");
+          bad++;
+          break;
+        }
       bad += glyphs(name, s, t);
       lv_point_t size;
       lv_txt_get_size(&size, t, &font_f14, 0, 0, HELP_W, LV_TEXT_FLAG_NONE);

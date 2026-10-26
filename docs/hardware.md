@@ -54,11 +54,11 @@ Flexit's bootloader is the reason this can be flashed over the bus. At power-on 
 
 While it's running the screen is dark and all three lights are on. It always answers at address 1, whatever
 address the panel had, and only knows one Modbus function, 0x64. Update files are encrypted and signed with
-Flexit's key, so it only takes files made with that key. The key isn't in this repo.
+Flexit's key, so it only takes files made with that key.
 
-When an update starts it erases everything after itself, settings included. The firmware isn't marked valid
-until the whole file has been checked, so a broken or half-done update just leaves the panel in the bootloader,
-waiting for another try.
+When an update starts it erases everything after itself. The firmware isn't marked valid until the whole file
+has been checked, so a broken or half-done update just leaves the panel in the bootloader, waiting for another
+try.
 
 It also answers really fast, without the pause Modbus wants between frames. An ESP that switches its RS-485
 direction pin in software is often still sending when the reply comes, and misses it.
@@ -67,7 +67,7 @@ direction pin in software is often still sending when the reply comes, and misse
 
 The STM32 is read protected from the factory. SWD can't read the flash, and turning the protection off erases
 the whole chip, the bootloader too. Getting a dump of a stock panel takes hardware mods and glitching the chip.
-That's why the bus is the normal way in, and why going back to stock is hard.
+That's why the bus is the normal way in.
 
 ## Forcing the bootloader
 
@@ -77,6 +77,9 @@ panel up, hold it for a second and let go. Dark screen and three lights means it
 
 ## SWD
 
-With an ST-LINK and pyocd, see [Update files and SWD](../README.md#update-files-and-swd). You need a stock dump
-for the bootloader, since the chip is erased once the protection is off. Leave the ST-LINK's 3.3 V off when the
-unit powers the panel. SWD keeps the settings, an update over the bus doesn't.
+With an ST-LINK and `pip install pyocd`:
+
+    make -C hw flash STOCK=<a stock flash dump>
+
+The bootloader comes from the dump, since the chip is erased once the protection is off. Leave the ST-LINK's
+3.3 V off when the unit powers the panel. SWD keeps the panel's settings.

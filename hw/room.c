@@ -21,3 +21,5 @@ void room_second(void) {
   int16_t t = (int16_t) (convert(board_room_adc()) + M.room_offset);
   M.t_room = M.t_room == T_NONE ? t : (int16_t) ((M.t_room * 7 + t + 4) / 8);
 }
+
+void room_offset_changed(void) { M.t_room = T_NONE; }  // start over with the new offset instead of smoothing toward it

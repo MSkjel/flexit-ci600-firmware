@@ -1,15 +1,16 @@
 // The home views besides the dashboard.
-#include "ui.h"
-#include <stdio.h>
+#include "ui_int.h"
 #include <string.h>
 
 static const str_t AXIS[5] = {S_AXIS_24H, S_AXIS_18H, S_AXIS_12H, S_AXIS_6H, S_AXIS_NOW};
 
-// Time labels under a chart w wide, from -24 h on the left to now on the right
+// Labels -24 h to now under a chart w wide. The ends flush with its edges, the rest centred on grid lines.
 static void time_axis(lv_obj_t *b, int w) {
   for (int i = 0; i < 5; i++) {
-    lv_obj_t *l = mk_label(b, &font_f12, T.faint, tr(AXIS[i]));
-    lv_obj_set_pos(l, CHART_X + i * (w / 4) - (i ? (i == 4 ? 24 : 12) : 0), CHART_Y + CHART_H + 4);
+    const char *t = tr(AXIS[i]);
+    int tw = lv_txt_get_width(t, (uint32_t) strlen(t), &font_f12, 0, LV_TEXT_FLAG_NONE);
+    lv_obj_t *l = mk_label(b, &font_f12, T.faint, t);
+    lv_obj_set_pos(l, CHART_X + w * i / 4 - (i == 4 ? tw : i ? tw / 2 : 0), CHART_Y + CHART_H + 4);
   }
 }
 
@@ -21,6 +22,23 @@ static lv_obj_t *legend(lv_obj_t *b, int x, lv_color_t c, const char *text) {
   return l;
 }
 
+// How many of the ESP's items pass pred
+static int count_items(bool (*pred)(const item_t *)) {
+  int n = 0;
+  for (int i = 0; i < N_ITEMS; i++)
+    n += pred(&M.items[i]);
+  return n;
+}
+
+// Indexes into M.items of up to max items that pass pred, after the first ones that do. Returns how many.
+static int pick_items(bool (*pred)(const item_t *), int first, uint8_t *out, int max) {
+  int n = 0;
+  for (int i = 0, seen = 0; i < N_ITEMS && n < max; i++)
+    if (pred(&M.items[i]) && seen++ >= first)
+      out[n++] = (uint8_t) i;
+  return n;
+}
+
 // ---------------------------------------------------------------- airflow
 typedef struct {
   lv_obj_t *t[4], *rotor, *rotor_lbl, *fan_s, *fan_e, *heat_lbl, *eff;
@@ -28,10 +46,10 @@ typedef struct {
 SCREEN_STATE(flow_t, flow);
 
 // Outdoor to supply along the top, extract to exhaust along the bottom, each with an arrowhead
-static lv_point_t flow_pts[2][2] = {{{4, 46}, {316, 46}}, {{316, 150}, {4, 150}}};
-static lv_point_t arrow_pts[2][3] = {{{306, 40}, {316, 46}, {306, 52}}, {{14, 144}, {4, 150}, {14, 156}}};
+static const lv_point_t flow_pts[2][2] = {{{4, 46}, {316, 46}}, {{316, 150}, {4, 150}}};
+static const lv_point_t arrow_pts[2][3] = {{{306, 40}, {316, 46}, {306, 52}}, {{14, 144}, {4, 150}, {14, 156}}};
 
-static void line(lv_obj_t *p, lv_point_t *pts, int n, lv_color_t c) {
+static void line(lv_obj_t *p, const lv_point_t *pts, int n, lv_color_t c) {
   lv_obj_t *l = lv_line_create(p);
   lv_line_set_points(l, pts, n);
   lv_obj_set_style_line_color(l, c, 0);
@@ -46,9 +64,7 @@ static void node(lv_obj_t *p, int cx, int cy, const char *ic, lv_color_t c, lv_o
   lv_obj_set_style_border_color(n, T.surface, 0);
   lv_obj_center(mk_icon(n, &icons_16, c, ic));
   if (lbl) {
-    *lbl = mk_label(p, &font_f12, T.dim, "");
-    lv_obj_set_width(*lbl, 44);
-    lv_obj_set_style_text_align(*lbl, LV_TEXT_ALIGN_CENTER, 0);
+    *lbl = mk_text(p, &font_f12, T.dim, "", 44, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(*lbl, cx - 22, cy + 16);
   }
 }
@@ -57,7 +73,7 @@ static void node(lv_obj_t *p, int cx, int cy, const char *ic, lv_color_t c, lv_o
 static void port(lv_obj_t *p, int i, int x, int y, str_t cap, lv_color_t c, bool right) {
   lv_obj_t *l = mk_label(p, &font_f12, T.dim, tr(cap));
   lv_obj_t *v = flow->t[i] = mk_label(p, &font_f20, c, "");
-  if (right) {
+  if (right) {  // not mk_text(): creating both labels first leaves LVGL's heap in fewer pieces
     lv_obj_set_width(l, 64);
     lv_obj_set_width(v, 66);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
@@ -67,8 +83,8 @@ static void port(lv_obj_t *p, int i, int x, int y, str_t cap, lv_color_t c, bool
   lv_obj_set_pos(v, x - (right ? 2 : 0), y + 13);
 }
 
-static void flow_build(lv_obj_t *b) {
-  memset(flow, 0, sizeof *flow);
+static void flow_build(lv_obj_t *b, int first) {
+  (void) first;
   mk_box(b, 74, 10, 172, 176, T.surface, CARD_RADIUS);
   line(b, flow_pts[0], 2, T.cold);
   line(b, arrow_pts[0], 3, T.ok);
@@ -86,47 +102,36 @@ static void flow_build(lv_obj_t *b) {
   node(b, 124, 150, IC_FAN, T.accent, &flow->fan_e);
   node(b, 224, 150, IC_FILTER, T.dim, NULL);
 
-  lv_obj_t *r = flow->rotor = lv_arc_create(b);
-  lv_obj_remove_style_all(r);
-  lv_obj_set_size(r, 70, 70);
+  lv_obj_t *r = flow->rotor = mk_arc(b, 70, 7, 0, 100, T.accent);  // a full circle, from the top
   lv_obj_set_pos(r, 125, 63);
   lv_arc_set_bg_angles(r, 0, 360);
   lv_arc_set_rotation(r, 270);
-  lv_arc_set_range(r, 0, 100);
-  lv_obj_set_style_arc_color(r, T.surface2, LV_PART_MAIN);
-  lv_obj_set_style_arc_width(r, 7, LV_PART_MAIN);
-  lv_obj_set_style_arc_color(r, T.accent, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_width(r, 7, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_rounded(r, true, LV_PART_INDICATOR);
   lv_obj_align_to(mk_icon(b, &icons_22, T.accent, IC_ROTOR), r, LV_ALIGN_CENTER, 0, -8);
-  flow->rotor_lbl = mk_label(b, &font_f12, T.text, "");
-  lv_obj_set_width(flow->rotor_lbl, 50);
-  lv_obj_set_style_text_align(flow->rotor_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  flow->rotor_lbl = mk_text(b, &font_f12, T.text, "", 50, LV_TEXT_ALIGN_CENTER);
   lv_obj_align_to(flow->rotor_lbl, r, LV_ALIGN_CENTER, 0, 13);
-  flow->eff = mk_label(b, &font_f12, T.dim, "");
-  lv_obj_set_width(flow->eff, 160);
-  lv_obj_set_style_text_align(flow->eff, LV_TEXT_ALIGN_CENTER, 0);
+  flow->eff = mk_text(b, &font_f12, T.dim, "", 160, LV_TEXT_ALIGN_CENTER);
   lv_obj_set_pos(flow->eff, 80, 14);
 }
 
 static void flow_update(void) {
   char a[24];
-  set_text(flow->t[0], "%s", fmt_temp(a, M.t_outdoor, false));
-  set_text(flow->t[1], "%s", fmt_temp(a, M.t_supply, false));
-  set_text(flow->t[2], "%s", fmt_temp(a, M.t_extract, false));
+  set_text(flow->t[0], "%s", fmt_temp(a, sizeof a, M.t_outdoor, false));
+  set_text(flow->t[1], "%s", fmt_temp(a, sizeof a, M.t_supply, false));
+  set_text(flow->t[2], "%s", fmt_temp(a, sizeof a, M.t_extract, false));
   // No exhaust sensor, so estimate it. With the heater off, what the supply air gained came out of the extract
   // air, scaled by the airflows. Fan % stands in for airflow.
   if (!M.heat_pct && M.fan_sup && M.fan_ext && M.t_supply != T_NONE && M.t_outdoor != T_NONE && M.t_extract != T_NONE)
-    set_text(flow->t[3], "~ %s",
-             fmt_temp(a, (int16_t) (M.t_extract - (M.t_supply - M.t_outdoor) * M.fan_sup / M.fan_ext), false));
+    set_text(
+        flow->t[3], "~ %s",
+        fmt_temp(a, sizeof a, (int16_t) (M.t_extract - (M.t_supply - M.t_outdoor) * M.fan_sup / M.fan_ext), false));
   else
     lv_label_set_text(flow->t[3], "");
   lv_arc_set_value(flow->rotor, M.rotor_pct);
-  set_text(flow->rotor_lbl, "%d%%", M.rotor_pct);
-  set_text(flow->fan_s, "%d%%", M.fan_sup);
-  set_text(flow->fan_e, "%d%%", M.fan_ext);
+  lv_label_set_text(flow->rotor_lbl, fmt_pct(a, sizeof a, M.rotor_pct));
+  lv_label_set_text(flow->fan_s, fmt_pct(a, sizeof a, M.fan_sup));
+  lv_label_set_text(flow->fan_e, fmt_pct(a, sizeof a, M.fan_ext));
   if (M.heat_pct)
-    set_text(flow->heat_lbl, "%d%%", M.heat_pct);
+    lv_label_set_text(flow->heat_lbl, fmt_pct(a, sizeof a, M.heat_pct));
   else
     lv_label_set_text(flow->heat_lbl, _(S_OFF_LOWER));
   int eff = heat_recovery();
@@ -153,19 +158,16 @@ static uint8_t trend_series(int i) {
   return i == 2 && M.indoor_source == INDOOR_PANEL ? TR_ROOM : SERIES[i];
 }
 
-static void trend_build(lv_obj_t *b) {
-  memset(trend, 0, sizeof *trend);
+static void trend_build(lv_obj_t *b, int first) {
+  (void) first;
   const lv_color_t cols[3] = {T.cold, T.ok, T.warm};
   for (int i = 0; i < 3; i++)
     trend->legend[i] = legend(b, 40 + i * 92, cols[i], "");
   trend->chart = mk_chart(b, TREND_W, 4);
   for (int i = 0; i < 3; i++)
     trend->ser[i] = lv_chart_add_series(trend->chart, cols[i], LV_CHART_AXIS_PRIMARY_Y);
-  for (int i = 0; i < 4; i++) {
-    trend->ylbl[i] = mk_label(b, &font_f12, T.faint, "");
-    lv_obj_set_width(trend->ylbl[i], 30);
-    lv_obj_set_style_text_align(trend->ylbl[i], LV_TEXT_ALIGN_RIGHT, 0);
-  }
+  for (int i = 0; i < 4; i++)
+    trend->ylbl[i] = mk_text(b, &font_f12, T.faint, "", 30, LV_TEXT_ALIGN_RIGHT);
   time_axis(b, TREND_W);
 }
 
@@ -190,7 +192,7 @@ static void trend_update(void) {
     hi = lo + ((hi - lo) / 150 + 1) * 150;  // 3 equal steps of whole degrees
   lv_chart_set_range(trend->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
   for (int i = 0; i < 4; i++) {
-    set_text(trend->ylbl[i], "%d\xC2\xB0", (hi - (hi - lo) * i / 3) / 10);
+    set_text(trend->ylbl[i], "%d" DEG, (hi - (hi - lo) * i / 3) / 10);
     lv_obj_set_pos(trend->ylbl[i], 2, CHART_Y + CHART_H * i / 3 - 8);
   }
   char a[16];
@@ -198,7 +200,7 @@ static void trend_update(void) {
   const int16_t now[3] = {M.t_outdoor, M.t_supply, panel ? M.t_room : M.t_extract};
   const str_t names[3] = {S_OUTDOOR, S_SUPPLY, panel ? S_ROOM : S_EXTRACT};
   for (int i = 0; i < 3; i++)
-    set_text(trend->legend[i], "%s %s", tr(names[i]), fmt_temp(a, now[i], false));
+    set_text(trend->legend[i], "%s %s", tr(names[i]), fmt_temp(a, sizeof a, now[i], false));
   lv_chart_refresh(trend->chart);
 }
 
@@ -216,44 +218,20 @@ typedef struct {
   int n;
 } sensors_t;
 SCREEN_STATE(sensors_t, sens);
-static uint8_t sens_page;
 
-// Ids of the items with a trend, in item order. Returns how many.
-static int trended(uint16_t *ids, int max) {
-  int n = 0;
-  for (int i = 0; i < N_ITEMS && n < max; i++)
-    if ((M.items[i].flags & ITEMF_TREND) && trend_of(M.items[i].id))
-      ids[n++] = M.items[i].id;
-  return n;
-}
+// An item with a 24 h trend
+static bool trended(const item_t *it) { return (it->flags & ITEMF_TREND) && trend_of(it->id); }
 
-static bool sensors_avail(void) {
-  uint16_t id;
-  return trended(&id, 1) > 0;
-}
+static int sens_count(void) { return count_items(trended); }
 
-static bool sensors_next_page(void) {
-  uint16_t ids[N_TRENDS];
-  if ((sens_page + 1) * 2 < trended(ids, N_TRENDS)) {
-    sens_page++;
-    return true;
-  }
-  sens_page = 0;
-  return false;
-}
-
-static void sens_build(lv_obj_t *b) {
-  memset(sens, 0, sizeof *sens);
-  uint16_t ids[N_TRENDS];
-  int n = trended(ids, N_TRENDS);
-  if (sens_page * 2 >= n)
-    sens_page = 0;  // some have gone
-  n -= sens_page * 2;
-  sens->n = n > 2 ? 2 : n;
+static void sens_build(lv_obj_t *b, int first) {
+  uint8_t pick[2];
+  sens->n = pick_items(trended, first, pick, 2);
+  for (int i = 0; i < sens->n; i++)
+    sens->id[i] = M.items[pick[i]].id;
   const lv_color_t cols[2] = {T.accent, T.cold};
   sens->chart = mk_chart(b, SENS_W, 5);  // quarters, so both axes' labels sit on the lines
   for (int i = 0; i < sens->n; i++) {
-    sens->id[i] = ids[sens_page * 2 + i];
     sens->legend[i] = legend(b, 40 + 140 * i, cols[i], "");
     sens->ser[i] = lv_chart_add_series(sens->chart, cols[i], i ? LV_CHART_AXIS_SECONDARY_Y : LV_CHART_AXIS_PRIMARY_Y);
     for (int k = 0; k < 5; k++) {  // as wide as their text, out from the chart's sides
@@ -310,9 +288,9 @@ static void sens_update(void) {
     }
     char a[24];
     for (int k = 0; k < 5; k++)
-      lv_label_set_text(sens->ylbl[i][k], fmt_dec(a, (base + (4 - k) * step) / div, (uint8_t) dec));
+      lv_label_set_text(sens->ylbl[i][k], fmt_dec(a, sizeof a, (base + (4 - k) * step) / div, (uint8_t) dec));
     if (it && M.esp_online)
-      set_text(sens->legend[i], "%s %s", it->label, item_text(a, it, true));
+      set_text(sens->legend[i], "%s %s", it->label, item_text(a, sizeof a, it, true));
     else
       lv_label_set_text(sens->legend[i], it ? it->label : "");
   }
@@ -322,72 +300,60 @@ static void sens_update(void) {
 const view_t SENSORS_VIEW = {.build = sens_build,
                              .update = sens_update,
                              .help = S_SENSORS_VIEW_HELP,
+                             .per_page = 2,
                              .need = FBIT(FEAT_ESP),
-                             .avail = sensors_avail,
-                             .next_page = sensors_next_page};
+                             .count = sens_count};
 
 // ---------------------------------------------------------------- comfort: ESP items marked for it
 // The first two sensors as gauges, toggles as chips highlighted when on
 #define COMFORT_CHIPS 8
 
 typedef struct {
+  lv_obj_t *pill, *icon, *name;
+} chip_t;
+
+typedef struct {
   uint8_t gauge[2], chip[COMFORT_CHIPS], n_gauges, n_chips;  // indexes into M.items
-  lv_obj_t *arc[2], *val[2], *chips[COMFORT_CHIPS];
+  lv_obj_t *arc[2], *val[2];
+  chip_t chips[COMFORT_CHIPS];
 } comfort_t;
 SCREEN_STATE(comfort_t, comfort);
 
 static bool on_comfort_view(const item_t *it) {
-  return (it->flags & (ITEMF_COMFORT | ITEMF_VIEW)) == (ITEMF_COMFORT | ITEMF_VIEW);
+  return it->type && (it->flags & (ITEMF_COMFORT | ITEMF_VIEW)) == (ITEMF_COMFORT | ITEMF_VIEW);
 }
 
-static bool comfort_avail(void) {
-  for (int i = 0; i < N_ITEMS; i++)
-    if (M.items[i].type && on_comfort_view(&M.items[i]))
-      return true;
-  return false;
-}
+static int comfort_count(void) { return count_items(on_comfort_view); }
 
 // Arc gauge with the value, unit and label
 static void gauge(lv_obj_t *b, int x, const item_t *it, lv_obj_t **arc, lv_obj_t **val) {
   *arc = mk_arc(b, 104, 8, 0, 100, T.ok);
   lv_obj_set_pos(*arc, x, 4);
-  *val = mk_label(b, &font_f28, T.text, "");
-  lv_obj_set_width(*val, 100);
-  lv_obj_set_style_text_align(*val, LV_TEXT_ALIGN_CENTER, 0);
+  *val = mk_text(b, &font_f28, T.text, "", 100, LV_TEXT_ALIGN_CENTER);
   lv_obj_align_to(*val, *arc, LV_ALIGN_CENTER, 0, -6);
   lv_obj_align_to(mk_label(b, &font_f12, T.dim, it->unit), *arc, LV_ALIGN_CENTER, 0, 20);
-  lv_obj_t *cap = mk_label(b, &font_f12, T.dim, it->label);
-  lv_obj_set_size(cap, 100, lv_font_get_line_height(&font_f12));  // one line, so a long label gets dots
-  lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_t *cap = mk_text(b, &font_f12, T.dim, it->label, 100, LV_TEXT_ALIGN_CENTER);
+  lv_obj_set_height(cap, lv_font_get_line_height(&font_f12));  // one line, so a long label gets dots
   label_dots(cap);
   lv_obj_align_to(cap, *arc, LV_ALIGN_BOTTOM_MID, 0, 4);
 }
 
-// Toggle chip, an icon and name on a pill, highlighted when on
-static lv_obj_t *chip(lv_obj_t *row, const item_t *it) {
-  lv_obj_t *c = lv_obj_create(row);
-  lv_obj_remove_style_all(c);
-  lv_obj_set_size(c, LV_SIZE_CONTENT, 28);
-  lv_obj_set_style_radius(c, 14, 0);
-  lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-  lv_obj_set_style_pad_hor(c, 10, 0);
-  lv_obj_set_style_pad_column(c, 5, 0);
-  lv_obj_set_flex_flow(c, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  mk_icon(c, &icons_16, T.text, icon_glyph(it->icon));
-  mk_label(c, &font_f12, T.text, it->label);
-  return c;
+// Toggle chip, icon and name on a pill. comfort_update highlights it when on.
+static void chip(lv_obj_t *row, const item_t *it, chip_t *c) {
+  c->pill = mk_pill(row, 28, T.surface, 10, 0, 5);
+  c->icon = mk_icon(c->pill, &icons_16, T.text, icon_glyph(it->icon));
+  c->name = mk_label(c->pill, &font_f12, T.text, it->label);
 }
 
-static void comfort_build(lv_obj_t *b) {
-  memset(comfort, 0, sizeof *comfort);
+static void comfort_build(lv_obj_t *b, int first) {
+  (void) first;
   if (!M.esp_online) {
     mk_empty(b, T.faint, IC_WIFI_OFF, _(S_ESP_NOT_CONNECTED), _(S_COMFORT_NEEDS_ESP));
     return;
   }
   for (int i = 0; i < N_ITEMS; i++) {
     const item_t *it = &M.items[i];
-    if (!it->type || !on_comfort_view(it))
+    if (!on_comfort_view(it))
       continue;
     if (it->type == ITEM_SENSOR && comfort->n_gauges < 2)
       comfort->gauge[comfort->n_gauges++] = (uint8_t) i;
@@ -397,16 +363,14 @@ static void comfort_build(lv_obj_t *b) {
   int x = comfort->n_gauges == 2 ? 36 : 108;
   for (int g = 0; g < comfort->n_gauges; g++, x = 180)
     gauge(b, x, &M.items[comfort->gauge[g]], &comfort->arc[g], &comfort->val[g]);
-  lv_obj_t *row = lv_obj_create(b);
-  lv_obj_remove_style_all(row);
+  lv_obj_t *row = mk_group(b, 304, 72);
   lv_obj_set_pos(row, 8, comfort->n_gauges ? 126 : 70);
-  lv_obj_set_size(row, 304, 72);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
   lv_obj_set_style_pad_row(row, 6, 0);
   lv_obj_set_style_pad_column(row, 6, 0);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
   for (int c = 0; c < comfort->n_chips; c++)
-    comfort->chips[c] = chip(row, &M.items[comfort->chip[c]]);
+    chip(row, &M.items[comfort->chip[c]], &comfort->chips[c]);
 }
 
 static void comfort_update(void) {
@@ -415,13 +379,14 @@ static void comfort_update(void) {
     const item_t *it = &M.items[comfort->gauge[g]];
     lv_arc_set_value(comfort->arc[g], item_pct(it));
     lv_obj_set_style_arc_color(comfort->arc[g], item_color(it), LV_PART_INDICATOR);
-    lv_label_set_text(comfort->val[g], item_text(a, it, false));
+    lv_label_set_text(comfort->val[g], item_text(a, sizeof a, it, false));
   }
   for (int c = 0; c < comfort->n_chips; c++) {
     bool on = item_on(&M.items[comfort->chip[c]]);
-    lv_obj_set_style_bg_color(comfort->chips[c], on ? T.accent : T.surface, 0);
-    for (uint32_t k = 0; k < lv_obj_get_child_cnt(comfort->chips[c]); k++)
-      lv_obj_set_style_text_color(lv_obj_get_child(comfort->chips[c], k), on ? T.on_accent : T.dim, 0);
+    const chip_t *ch = &comfort->chips[c];
+    lv_obj_set_style_bg_color(ch->pill, on ? T.accent : T.surface, 0);
+    lv_obj_set_style_text_color(ch->icon, on ? T.on_accent : T.dim, 0);
+    lv_obj_set_style_text_color(ch->name, on ? T.on_accent : T.dim, 0);
   }
 }
 
@@ -429,7 +394,7 @@ const view_t COMFORT_VIEW = {.build = comfort_build,
                              .update = comfort_update,
                              .help = S_COMFORT_VIEW_HELP,
                              .need = FBIT(FEAT_ESP),
-                             .avail = comfort_avail};
+                             .count = comfort_count};
 
 // ---------------------------------------------------------------- smart home: ESP items as tiles
 #define SMART_MAX 6  // tiles per page, three per row. BACK shows the next page before moving on.
@@ -442,41 +407,19 @@ typedef struct {
   lv_obj_t *icon[SMART_MAX], *val[SMART_MAX], *unit[SMART_MAX];
 } smart_t;
 SCREEN_STATE(smart_t, smart);
-static uint8_t smart_page;
 
 static bool on_smart_view(const item_t *it) {
   return it->type && (it->flags & (ITEMF_COMFORT | ITEMF_VIEW)) == ITEMF_VIEW;
 }
 
-static int smart_count(void) {
-  int n = 0;
-  for (int i = 0; i < N_ITEMS; i++)
-    n += on_smart_view(&M.items[i]);
-  return n;
-}
+static int smart_count(void) { return count_items(on_smart_view); }
 
-static bool smart_avail(void) { return smart_count() > 0; }
-
-static bool smart_next_page(void) {
-  if ((smart_page + 1) * SMART_MAX < smart_count()) {
-    smart_page++;
-    return true;
-  }
-  smart_page = 0;
-  return false;
-}
-
-static void smart_build(lv_obj_t *b) {
-  memset(smart, 0, sizeof *smart);
+static void smart_build(lv_obj_t *b, int first) {
   if (!M.esp_online) {  // its values would be stale
     mk_empty(b, T.faint, IC_WIFI_OFF, _(S_ESP_NOT_CONNECTED), _(S_SMART_NEEDS_ESP));
     return;
   }
-  if (smart_page * SMART_MAX >= smart_count())
-    smart_page = 0;  // some have gone
-  for (int i = 0, seen = 0; i < N_ITEMS && smart->n < SMART_MAX; i++)
-    if (on_smart_view(&M.items[i]) && seen++ >= smart_page * SMART_MAX)
-      smart->item[smart->n++] = (uint8_t) i;
+  smart->n = pick_items(on_smart_view, first, smart->item, SMART_MAX);
   for (int k = 0; k < smart->n; k++) {
     const item_t *it = &M.items[smart->item[k]];
     lv_obj_t *t = mk_box(b, 8 + (k % 3) * (SMART_W + 8), 4 + (k / 3) * (SMART_H + 6), SMART_W, SMART_H, T.surface, 12);
@@ -501,9 +444,9 @@ static void smart_update(void) {
   for (int k = 0; k < smart->n; k++) {
     const item_t *it = &M.items[smart->item[k]];
     if (it->type == ITEM_TEXT)
-      label_fit(smart->val[k], item_text(buf, it, false), SMART_W - 20);
+      label_fit(smart->val[k], item_text(buf, sizeof buf, it, false), SMART_W - 20);
     else
-      lv_label_set_text(smart->val[k], item_text(buf, it, false));
+      lv_label_set_text(smart->val[k], item_text(buf, sizeof buf, it, false));
     if (it->type == ITEM_TOGGLE) {
       lv_color_t c = item_on(it) ? T.accent : T.faint;
       lv_obj_set_style_text_color(smart->val[k], c, 0);
@@ -515,10 +458,9 @@ static void smart_update(void) {
   }
 }
 
-// smart_avail hides it when there are no items
 const view_t SMART_VIEW = {.build = smart_build,
                            .update = smart_update,
                            .help = S_SMART_VIEW_HELP,
+                           .per_page = SMART_MAX,
                            .need = FBIT(FEAT_ESP),
-                           .avail = smart_avail,
-                           .next_page = smart_next_page};
+                           .count = smart_count};

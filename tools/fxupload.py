@@ -12,7 +12,7 @@ import argparse
 import sys
 import time
 
-from mkupdate import parse
+from mkupdate import name_version, parse
 
 BL_ADDR = 1  # the bootloader always uses address 1, whatever the panel address is
 FC = 0x64  # function code of all bootloader commands
@@ -59,17 +59,6 @@ def frame(addr, sub, payload=b""):
     return body + crc16(body)
 
 
-def skip_echo(bus, buf):
-    """What's in buf after our own frame, which some adapters hear first. Our status poll coming back means the
-    adapter echoes. None until the whole echo is in."""
-    at = buf.find(bus.sent)
-    if at >= 0 and bus.sent[2] == SUB_STATUS:
-        bus.echo = True
-    if not bus.echo:
-        return buf
-    return buf[at + len(bus.sent) :] if at >= 0 else None
-
-
 def find_reply(buf):
     """The first bootloader reply in buf, [01 64 sub len data crc] or [01 e4 code crc], or None. The CX60's polls
     to address 1 and the bootloader's exceptions to those have other function codes."""
@@ -86,6 +75,22 @@ def find_reply(buf):
         if len(f) == n and crc16(f[:-2]) == f[-2:]:
             return f
     return None
+
+
+def reply_in(bus, buf):
+    """The bootloader's reply in what came back on the bus, or None. Some adapters hear our own frame first, which
+    our status poll coming back shows. Then only what comes after it counts."""
+    at = buf.find(bus.sent)
+    if at >= 0 and bus.sent[2] == SUB_STATUS:
+        bus.echo = True
+    if bus.echo:
+        if at < 0:
+            return None  # not all of the echo yet
+        buf = buf[at + len(bus.sent) :]
+    f = find_reply(buf)
+    if f and bus.verbose:
+        print("  < " + f.hex())
+    return f
 
 
 class Bus:
@@ -113,11 +118,8 @@ class Bus:
             chunk = self.s.read(64)
             if chunk:
                 buf += chunk
-                rest = skip_echo(self, buf)
-                f = find_reply(rest) if rest is not None else None
+                f = reply_in(self, buf)
                 if f:
-                    if self.verbose:
-                        print("  < " + f.hex())
                     return f
         return None
 
@@ -163,9 +165,13 @@ def status(bus, tries=4):
     return f[4], f[5]
 
 
+def detail(d):
+    return DETAILS.get(d, "error %d" % d)
+
+
 def state_text(st):
     s = "state %d (%s)" % (st[0], STATES.get(st[0], "?"))
-    return s + ": " + DETAILS.get(st[1], "error %d" % st[1]) if st[0] == 5 else s
+    return s + ": " + detail(st[1]) if st[0] == 5 else s
 
 
 def refused(what, f, e):
@@ -182,7 +188,7 @@ def wait_state(bus, want, timeout=90.0):
             if st[0] in want:
                 return st
             if st[0] == 5:
-                raise Failed("the panel reports failure: %s" % DETAILS.get(st[1], "error %d" % st[1]))
+                raise Failed("the panel reports failure: " + detail(st[1]))
         bus.pause(0.02)
     raise Failed("the panel stopped answering (waited for state %s)" % sorted(want))
 
@@ -197,7 +203,7 @@ def piece_taken(bus):
         if st is None:
             unanswered = True
         elif st[0] == 5:
-            raise Failed("the panel reports failure: %s" % DETAILS.get(st[1], "error %d" % st[1]))
+            raise Failed("the panel reports failure: " + detail(st[1]))
         elif st[0] in (3, 4, 6):
             return True
         elif st[0] == 2:
@@ -273,9 +279,9 @@ def main(argv):
     a = ap.parse_args(argv)
     if not 1 <= a.panel_addr <= 247:
         ap.error("--panel-addr must be 1..247")
-    bus = Bus(a.port, a.baud, a.verbose)
 
     if a.status:
+        bus = Bus(a.port, a.baud, a.verbose)
         try:
             st = status(bus)
         except Failed as ex:
@@ -286,13 +292,18 @@ def main(argv):
         return 0
     if not a.fxup:
         sys.exit("give a .fxup file (or --status)")
+    # The first piece erases the panel's firmware, so a cut-off or foreign file is refused before the port opens.
+    # Without the key only its shape is checked here, the bootloader checks the rest.
     stream = open(a.fxup, "rb").read()
     try:
         name = parse(stream)[0]
-    except (ValueError, IndexError):
-        sys.exit("%s isn't a firmware stream" % a.fxup)
-    print("Firmware stream: %d bytes, %s" % (len(stream), name.decode(errors="replace") if name else "no name"))
+    except ValueError as ex:
+        sys.exit("%s isn't a whole firmware stream: %s" % (a.fxup, ex))
+    if name_version(name) is None:
+        sys.exit("%s is named %r, not ci600 X.Y.Z: it isn't a stream from mkupdate.py" % (a.fxup, name))
+    print("Firmware stream: %d bytes, %s" % (len(stream), name.decode()))
 
+    bus = Bus(a.port, a.baud, a.verbose)
     try:
         if not a.no_enter:  # the running app reboots into the bootloader on 0x64/2 and doesn't answer
             status(bus, tries=2)  # only a panel already in the bootloader may answer at 1

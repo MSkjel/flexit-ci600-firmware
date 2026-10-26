@@ -51,47 +51,26 @@ Plus:
 With an ESP:
 
 - Any Home Assistant sensor, switch, number, button or text on the panel. You pick them in the ESP config.
-- 24 h charts of the ESP's sensors, like CO₂ and humidity
+- 24 h charts of the ESP's sensors, like CO2 and humidity
 - Messages from Home Assistant
 - A picture, photo, animation or the local weather (MET Norway) as the screensaver
 - The clock from Home Assistant, and panel updates from Home Assistant
 
 ## Installing
 
-Works on a stock panel, nothing to open. Grab `ci600.fxup` from the
-[latest release](https://github.com/MSkjel/flexit-ci600-firmware/releases/latest) and send it to the panel one of
-these ways:
-
-**From Home Assistant (ESP).** Add `packages/panel.yaml` and `packages/panel/update.yaml` to the ESP config and
-press **Flash Panel Firmware**. It fetches the latest release by itself. A stock panel is at address 1, so the ESP
-has to be at 2 until the panel is flashed. The new panel comes up at 3, so move the ESP to 1 then. To flash a file
-you downloaded, point **Panel Firmware URL** at it, e.g. `http://homeassistant.local:8123/local/ci600.fxup` for a
-file in `/config/www`, or run `python3 tools/fxserve.py ci600.fxup` and use the URL it prints.
-
-**USB-RS485 adapter.** Hook it up to the panel's bus and run:
-
-    uv run --with pyserial tools/fxupload.py --port /dev/ttyUSB0 ci600.fxup
-
-A stock panel is always at address 1. For one that isn't, add `--panel-addr N`. On Windows the port is something
-like `COM3`. The bootloader answers at address 1, so unplug the ESP (or whatever else is at 1) or move it to
-another address before flashing.
-
-The screen goes dark with all three lights on for a few minutes. When it's back:
-
-1. Restart the ventilation unit (power off and on). The CX60, the unit's controller, only looks for panels when
-   it starts.
-2. Do the [first setup](#first-setup). Every update wipes the panel's own settings, since the bootloader erases
-   all of its flash. Stuff the unit keeps, like fan speeds, setpoint and the week program, is untouched.
-
-More on flashing, and what to do when it doesn't work, in [docs/flashing.md](docs/flashing.md).
+Works on a stock panel, nothing to open. Flash it from Home Assistant through the ESP, which fetches the
+[latest release](https://github.com/MSkjel/flexit-ci600-firmware/releases/latest) by itself, or grab `ci600.fxup`
+from there and flash it with a USB RS-485 adapter. How, and what to do when it doesn't work, is in
+[docs/flashing.md](docs/flashing.md).
 
 ## First setup
 
 OK on the home screen opens the menu.
 
-- **System > Panel address:** 1 without an ESP, 3 if the ESP is at 1. The CX60 only runs the week program and
-  the boost timer if something answers at 1, and only takes the setpoint and NORMAL fan speeds from the lowest
-  address. Restart the unit after changing it.
+- **System > Panel address:** 1 without an ESP, 3 if the ESP is at 1. The CX60, the unit's controller, only runs
+  the week program and the boost timer if something answers at 1, and only takes the setpoint and NORMAL fan
+  speeds from the lowest address. Restart the unit (power off and on) after changing it, the CX60 only looks for
+  panels when it starts.
 - **System > Equipment:** make it match your unit (ESP, cooling). EC fans and water heater come from the unit's
   DIP switches.
 - **Display:** language and theme.
@@ -101,18 +80,18 @@ OK on the home screen opens the menu.
 
 | Key | Does |
 |---|---|
-| ▲ ▼ | Move or change a value. Fan speed on the home screen. |
+| Up, down | Move or change a value. Fan speed on the home screen. |
 | OK | Open or save. Menu on the home screen. |
-| ◀ | Back. Next view on the home screen. |
+| Back | Back. Next view on the home screen. |
 | ? | Help. Hold 3 s to lock or unlock the keys. |
 
 The bottom line shows what the keys do. Stuff that can't be undone wants OK held for 2 s.
 
 ## Troubleshooting
 
-**"No contact with the unit" or empty values.** Restart the ventilation unit, it only finds panels at start-up.
-Make sure nothing else on the bus (another panel, the ESP) has the same address. System > Bus shows the traffic.
-If *Polls to this panel* stays at 0 after a restart, check the wiring.
+**"No contact with the unit" or empty values.** Restart the ventilation unit. Make sure nothing else on the bus
+(another panel, the ESP) has the same address. System > Bus shows the traffic. If *Polls to this panel* stays at 0
+after a restart, check the wiring.
 
 **Setpoint or a NORMAL fan speed jumps back.** Only the lowest address can change those. Put the panel at 1, or
 change them from Home Assistant if the ESP is at 1.
@@ -123,12 +102,11 @@ menu, the clock is right, and that something is at address 1. The CX60 only runs
 **Clock jumps back after setting it.** A stock panel on the bus keeps its own time and sends it every second, so
 set it on that one.
 
-**Update stopped halfway, screen dark, all lights on.** The panel is sitting in the bootloader, which won't start
-anything it hasn't fully checked. Just flash again. With `fxupload.py` add `--no-enter`, and `--status` shows
-what the bootloader is up to.
+**Update stopped halfway, screen dark, all lights on.** See
+[When it doesn't work](docs/flashing.md#when-it-doesnt-work).
 
-**Settings gone after an update.** Normal, see [Installing](#installing). Set the address again and restart the
-unit.
+**Settings gone after an update.** See [Before you start](docs/flashing.md#before-you-start), and do the
+[first setup](#first-setup) again.
 
 **ESP stuff doesn't show up.** Look at System > Bus > ESP link.
 - *waiting*: the ESP isn't answering. Is it online, with `packages/panel.yaml`? It only talks to the panel at
@@ -150,20 +128,18 @@ from System > About.
 
 ## Going back to stock
 
-Needs SWD and a dump of a stock CI600's flash: `python3 tools/flash.py <the dump>`. It writes everything after the
-bootloader, which also clears this firmware's settings. Over the bus you'd need a stock update file, and that's not
-in here.
+Needs SWD and a dump of a stock CI600's flash, which is [hard to get](docs/hardware.md#read-protection):
+`python3 tools/flash.py <the dump>`. It writes everything after the bootloader, which also clears this firmware's
+settings. Over the bus you'd need a stock update file, and that's not in here.
 
 ## Disclaimer
 
-- It's a hobby project. Flexit didn't make it, doesn't support it and has nothing to do with it. Flexit and CI600
-  are their names, used here to say what this runs on.
-- Flashing it is your call. It can void your warranty, and don't expect Flexit's support to help with a panel
-  running this. Going back to stock needs SWD and a stock dump.
+- Flexit doesn't support it. Flexit and CI600 are their names, used here to say what this runs on.
+- It can void your warranty, and don't expect Flexit's support to help with a panel running this. Going back to
+  stock isn't easy, see [above](#going-back-to-stock).
 - No warranty, none at all. If your panel, your unit or anything else gets hurt by it, that's on you.
 - The unit's own controller still runs the ventilation. The panel just shows things and changes settings, same as
   the stock one, so a setting changed here does reach the unit.
-- Flexit's firmware and the bootloader's key aren't in this repo. They're not ours to share.
 
 ## Screens
 
@@ -253,11 +229,7 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
   secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`. The newest `vX.Y.Z`
   tag is the version the panel reports, 0.0.0 without one. A build from a later commit gets the next patch level,
   so the ESP can tell it from the release.
-- **SWD:** `make -C hw flash STOCK=<a stock flash dump>` with an ST-LINK and `pip install pyocd`. Leave the
-  ST-LINK's 3.3 V off when the unit powers the panel. The bootloader comes from the dump. SWD keeps the panel's
-  settings.
-
-The firmware starts at 0x08002100, right after the bootloader.
+- **SWD:** see [docs/hardware.md](docs/hardware.md#swd).
 
 ### The ESP link
 
@@ -271,7 +243,7 @@ frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a c
 
 - **Something from Home Assistant:** nothing to do here, the ESP sends it as an item.
 - **A value or setting:** a line in `proto/plink_values.h` if the ESP should see it, otherwise in `app/values.h`.
-  Then a menu row in `ui/ui_menu.c` and the default in `panel_defaults()` (`app/panel.c`). The key is also its id
+  Then a menu row in `ui/ui_menus.c` and the default in `panel_defaults()` (`app/panel.c`). The key is also its id
   in flash.
 - **Optional equipment:** a line in `app/equipment.h`. Anything with `.need = FBIT(FEAT_x)` hides without it.
 - **A text:** name and English text in `ui/lang.h`, the translation in each `ui/lang_*.c`.

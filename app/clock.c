@@ -11,7 +11,7 @@ int clock_month_days(unsigned yy, unsigned mo) {
   return mo >= 1 && mo <= 12 ? DIM[mo - 1] + (mo == 2 && leap(yy)) : 31;
 }
 
-void unix_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh, uint8_t *mi) {
+void clock_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh, uint8_t *mi) {
   uint32_t days = t / 86400, s = t % 86400;
   unsigned y = 1970, m = 0;
   while (days >= (uint32_t) (365 + leap(y)))
@@ -26,7 +26,7 @@ void unix_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh,
 }
 
 void clock_from_unix(uint32_t t) {
-  unix_split(t, &M.yy, &M.mo, &M.dd, &M.hh, &M.mi);
+  clock_split(t, &M.yy, &M.mo, &M.dd, &M.hh, &M.mi);
   M.ss = t % 60;
   M.wday = (uint8_t) ((t / 86400 + 3) % 7);  // 1970-01-01 was a Thursday, 0 = Monday
 }
@@ -48,11 +48,19 @@ static uint32_t change(unsigned y, unsigned mo) {
   return (d - (d + 4) % 7) * 86400 + 2 * 3600u;  // weekday of day d is (d + 3) % 7, 0 = Monday. Step back to Sunday
 }
 
-bool clock_summer(uint32_t t) {
+// The switches in t's year, in standard time
+static void dst_bounds(uint32_t t, uint32_t *spring, uint32_t *autumn) {
   uint16_t y;
   uint8_t mo, dd, hh, mi;
-  unix_split(t, &y, &mo, &dd, &hh, &mi);
-  return t >= change(y, 3) && t < change(y, 10);
+  clock_split(t, &y, &mo, &dd, &hh, &mi);
+  *spring = change(y, 3);
+  *autumn = change(y, 10);
+}
+
+bool clock_summer(uint32_t t) {
+  uint32_t spring, autumn;
+  dst_bounds(t, &spring, &autumn);
+  return t >= spring && t < autumn;
 }
 
 // dst_now is saved so a restart knows which side of a switch the clock is on. Saved right away: after a restart
@@ -60,22 +68,20 @@ bool clock_summer(uint32_t t) {
 static void set_dst(bool summer) {
   if (summer == M.dst_now)
     return;
-  val_set_bus(V_DST_NOW, summer);
+  val_update(V_DST_NOW, summer);
   plat_save_now();
 }
 
 // October's 02:xx comes twice, so only a step back of an hour there is the switch. March's 02:xx doesn't exist, so
 // a panel without summer time set it and the flag stays.
 void clock_follow(uint32_t t, uint32_t from) {
-  uint16_t y;
-  uint8_t mo, dd, hh, mi;
-  unix_split(t, &y, &mo, &dd, &hh, &mi);
-  uint32_t spring = change(y, 3), autumn = change(y, 10);
+  uint32_t spring, autumn;
+  dst_bounds(t, &spring, &autumn);
   if (t >= autumn && t < autumn + 3600) {
     if (from - t >= 3600 - 60 && from - t <= 3600 + 60)
       set_dst(false);
   } else if (t < spring || t >= spring + 3600)
-    set_dst(t >= spring && t < autumn);
+    set_dst(clock_summer(t));
 }
 
 // Summer time is 02:00 last Sunday of March to 03:00 last Sunday of October. Sets the CX60's clock too. Only
@@ -83,13 +89,10 @@ void clock_follow(uint32_t t, uint32_t from) {
 void clock_second(void) {
   if (!M.auto_dst || HAS(FEAT_ESP))
     return;
-  uint32_t w = clock_to_unix();
-  uint16_t y;
-  uint8_t mo, dd, hh, mi;
-  unix_split(w, &y, &mo, &dd, &hh, &mi);
-  uint32_t spring = change(y, 3), autumn = change(y, 10) + 3600;
-  bool forward = !M.dst_now && w >= spring && w < spring + 3600;  // 02:xx on the March Sunday doesn't exist
-  bool back = M.dst_now && w >= autumn && w < autumn + 3600;      // 03:xx summer time is 02:xx again
+  uint32_t w = clock_to_unix(), spring, autumn;
+  dst_bounds(w, &spring, &autumn);
+  bool forward = !M.dst_now && w >= spring && w < spring + 3600;         // 02:xx on the March Sunday doesn't exist
+  bool back = M.dst_now && w >= autumn + 3600 && w < autumn + 2 * 3600;  // 03:xx summer time is 02:xx again
   if (!forward && !back)
     return;
   set_dst(forward);

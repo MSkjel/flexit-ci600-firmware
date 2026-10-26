@@ -9,7 +9,6 @@ struct Uart {
 static Uart modbus_uart_obj, *modbus_uart = &modbus_uart_obj;
 
 static Switch fireplace_mode_switch;
-static int fireplace_duration_minutes = 60;
 static Number fireplace_duration{1, 240, 1, 60};
 static Switch humidity_boost_enable;
 static Number humidity_trigger_delta{2, 30, 0.5, 8};

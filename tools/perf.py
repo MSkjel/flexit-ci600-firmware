@@ -12,9 +12,10 @@ import sys
 import time
 
 import swd
+from layout import ROOT
 
 KEYS = {"up": 1, "down": 2, "ok": 3, "back": 4, "help": 5, "home": 6}
-ELF = __file__.rsplit("/", 2)[0] + "/hw/build/ci600.elf"
+ELF = ROOT / "hw" / "build" / "ci600.elf"
 
 
 def symbol(name):
