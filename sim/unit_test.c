@@ -1,5 +1,6 @@
 // Unit tests. The firmware's hw/ code runs on board_stub.c.
 #include "board.h"
+#include "bus.h"
 #include "clock.h"
 #include "layout.h"
 #include "link.h"
@@ -1970,6 +1971,35 @@ static void test_mbserver(void) {
   CHECK(MB.hold[0] == 0 && !(MB.pending[0] & 1));
 }
 
+// What the RX interrupt does with a burst. Here a link frame gets no answer, the link hasn't started.
+static void test_bus_burst(void) {
+  model_defaults();
+  unit_init();
+  uint8_t b[64], r[MB_MAX_FRAME];
+  uint8_t link[PBULK_FRAME(0)] = {PBULK_ADDR, PBULK_FC_SEND, 0, 3};
+  int nl = pbus_put_crc(link, PBULK_PAYLOAD);
+  uint8_t rd[8] = {3, 0x03, 0, 0x0C, 0, 1}, wr[8] = {0, 0x06, 0, 0x0C, 0, 200};
+  pbus_put_crc(rd, 6);
+  pbus_put_crc(wr, 6);
+  bool modbus = true;
+  CHECK(bus_burst(link, nl, 0, 2000, 2, r, &modbus) == 0 && !modbus);
+  // the CX60 right behind a link frame: the link frame goes unanswered, the CX60's is handled
+  memcpy(b, link, (size_t) nl);
+  memcpy(b + nl, wr, 8);
+  uint16_t reg;
+  CHECK(bus_burst(b, nl + 8, 0, 2000, 2, r, &modbus) == 0 && modbus);
+  CHECK(MB.hold[0x0C] == 200 && mb_take_changed(&reg) && reg == 0x0C);
+  memcpy(b + nl, rd, 8);
+  CHECK(bus_burst(b, nl + 8, 0, 2000, 2, r, &modbus) == 7 && modbus && r[0] == 3 && r[4] == 200);
+  // a noise byte that looks like a link frame's start, in front of the CX60's
+  b[0] = PBULK_ADDR;
+  memcpy(b + 1, rd, 8);
+  CHECK(bus_burst(b, 9, 0, 2000, 2, r, &modbus) == 7 && modbus && r[0] == 3 && r[4] == 200);
+  // a link frame cut short is dropped
+  modbus = true;
+  CHECK(bus_burst(link, nl - 1, 0, 2000, 2, r, &modbus) == 0 && !modbus);
+}
+
 // ---------------------------------------------------------------- the CX60's clock, which the panels keep
 static void relay(uint16_t reg, uint16_t v) {  // the CX60 passing a panel's change on to all panels
   uint8_t q[8] = {0, 0x65, (uint8_t) (reg >> 8), (uint8_t) reg, (uint8_t) (v >> 8), (uint8_t) v}, r[MB_MAX_FRAME];
@@ -2243,6 +2273,39 @@ static void test_runtime(void) {
   stub_ms += 6000;
   settings_poll();
   CHECK(stub_flash_erases == erases + 3);
+}
+
+// The de-icing settings sit among the counters, 0x158..0x15B, but they're saved like the other settings
+static void test_deice_saved(void) {
+  model_defaults();
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  unit_init();
+  settings_load();
+  plat_save(true);
+  settings_flush();  // so the hourly save isn't due
+  // with an ESP a relayed change waits for the hourly save, the ESP sends it again when we restart
+  int erases = stub_flash_erases;
+  relay(0x158, 1);
+  unit_poll();
+  stub_ms += 6000;
+  settings_poll();
+  CHECK(stub_flash_erases == erases);
+  // without one it's another panel's, which nobody sends again
+  M.features &= ~FBIT(FEAT_ESP);
+  const int16_t v[4] = {0, -200, -150, 60};
+  for (int i = 0; i < 4; i++) {
+    relay((uint16_t) (0x158 + i), (uint16_t) v[i]);
+    unit_poll();
+    stub_ms += 6000;
+    settings_poll();
+    CHECK(stub_flash_erases == erases + 1 + i);
+  }
+  // and they're back after a restart
+  model_defaults();
+  unit_init();
+  settings_load();
+  unit_poll();
+  CHECK(!M.adv.deice && M.adv.deice_temp == -200 && M.adv.less_air_temp == -150 && M.adv.deice_rotor == 60);
 }
 
 // ---------------------------------------------------------------- the LEDs
@@ -2902,9 +2965,11 @@ int main(void) {
   test_items();
   test_clock();
   test_mbserver();
+  test_bus_burst();
   test_bus_clock();
   test_settings();
   test_runtime();
+  test_deice_saved();
   test_leds();
   test_schedule();
   test_input();

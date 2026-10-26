@@ -6,8 +6,19 @@
 
 mb_t MB;
 
-#define FC_BOOTLOADER 0x64  // enter the bootloader, from the updaters
-#define FC_RELAY 0x65       // Flexit's relay of a panel's change
+// Function codes, Modbus's and then Flexit's own
+enum {
+  FC_READ_COILS = 0x01,
+  FC_READ_DISCRETE = 0x02,
+  FC_READ_HOLDING = 0x03,
+  FC_READ_INPUT = 0x04,
+  FC_WRITE_COIL = 0x05,
+  FC_WRITE_REG = 0x06,
+  FC_WRITE_COILS = 0x0F,
+  FC_WRITE_REGS = 0x10,
+  FC_BOOTLOADER = 0x64,  // enter the bootloader, from the updaters
+  FC_RELAY = 0x65,       // the CX60's relay of a panel's change
+};
 // Exception codes
 enum { EX_FUNCTION = 1, EX_ADDRESS = 2, EX_VALUE = 3 };
 
@@ -41,6 +52,7 @@ static bool set_pending(uint16_t reg, bool on) {
 bool mb_written(uint16_t reg) { return reg < MB_REGS && bit(MB.written, reg); }
 bool mb_relayed(uint16_t reg) { return reg < MB_REGS && bit(MB.relayed, reg); }
 bool mb_pending(uint16_t reg) { return reg < MB_REGS && bit(MB.pending, reg); }
+bool mb_bootloader_requested(void) { return MB.enter_bootloader; }
 
 // Only flags the main loop if it's the first value or a different one.
 static void stored(uint16_t reg, uint16_t value, bool relayed) {
@@ -80,56 +92,57 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
   if (!bcast)
     MB.ours++;
   uint8_t fc = q[1];
-  uint16_t a = n >= 6 ? (uint16_t) (q[2] << 8 | q[3]) : 0;
-  uint16_t cnt = n >= 8 ? (uint16_t) (q[4] << 8 | q[5]) : 0;
+  uint16_t a = n >= 6 ? (uint16_t) (q[2] << 8 | q[3]) : 0;     // the first register or coil
+  uint16_t word = n >= 8 ? (uint16_t) (q[4] << 8 | q[5]) : 0;  // a single write's value
+  uint16_t cnt = word;                                         // or how many the others are for
 
   switch (fc) {
-    case 0x01:  // read coils, the pending flags. The CX60 reads past the end too, those are 0
-    case 0x02:  // read discrete inputs, always 0
+    case FC_READ_COILS:     // the pending flags. The CX60 reads past the end too, those are 0
+    case FC_READ_DISCRETE:  // always 0
       if (bcast || n != 8 || !cnt || cnt > 2000)
         return exception(q, r, EX_VALUE);
       r[0] = q[0];
       r[1] = fc;
       r[2] = (uint8_t) ((cnt + 7) / 8);
       memset(r + 3, 0, r[2]);
-      if (fc == 0x01)
+      if (fc == FC_READ_COILS)
         for (uint16_t i = 0; i < cnt; i++)
           if (a + i < MB_REGS && bit(MB.pending, a + i))
             r[3 + i / 8] |= 1u << (i % 8);
       return pbus_put_crc(r, 3 + r[2]);
 
-    case 0x03:  // read holding registers
-    case 0x04:  // read input registers (discovery)
+    case FC_READ_HOLDING:
+    case FC_READ_INPUT:  // discovery
       if (bcast || n != 8 || !cnt || cnt > 125)
         return exception(q, r, EX_VALUE);
-      if (fc == 0x03 ? a + cnt > MB_REGS : a + cnt > 5)
+      if (a + cnt > (fc == FC_READ_HOLDING ? MB_REGS : MB_INPUTS))
         return exception(q, r, EX_ADDRESS);
       r[0] = q[0];
       r[1] = fc;
       r[2] = (uint8_t) (cnt * 2);
       for (uint16_t i = 0; i < cnt; i++) {
-        uint16_t v = fc == 0x03 ? (uint16_t) MB.hold[a + i] : MB.input[a + i];
+        uint16_t v = fc == FC_READ_HOLDING ? (uint16_t) MB.hold[a + i] : MB.input[a + i];
         r[3 + 2 * i] = v >> 8;
         r[4 + 2 * i] = v & 0xFF;
       }
       return pbus_put_crc(r, 3 + r[2]);
 
-    case 0x05:  // write single coil
+    case FC_WRITE_COIL:
       if (n != 8)
         return 0;
       if (a < MB_REGS)
-        set_pending(a, cnt == 0xFF00);
+        set_pending(a, word == 0xFF00);
       break;
 
-    case 0x06:      // write single register
+    case FC_WRITE_REG:
     case FC_RELAY:  // write the register and clear its coil
       if (n != 8)
         return 0;
       if (a < MB_REGS && (fc != FC_RELAY || set_pending(a, false)))
-        stored(a, cnt, fc == FC_RELAY);
+        stored(a, word, fc == FC_RELAY);
       break;
 
-    case 0x0F:  // write multiple coils
+    case FC_WRITE_COILS:
       if (n < 9 || n != 9 + q[6] || !cnt || q[6] != (cnt + 7) / 8)
         return exception(q, r, EX_VALUE);
       for (uint16_t i = 0; i < cnt; i++)
@@ -137,7 +150,7 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
           set_pending(a + i, (q[7 + i / 8] >> (i % 8)) & 1);
       break;
 
-    case 0x10:  // write multiple registers
+    case FC_WRITE_REGS:
       if (n < 9 || n != 9 + q[6] || q[6] != cnt * 2)
         return exception(q, r, EX_VALUE);
       for (uint16_t i = 0; i < cnt; i++)
@@ -170,11 +183,11 @@ static int frame_len(const uint8_t *q, int n) {
   int c[4], k = 0;
   if (fc & 0x80)
     c[k++] = 5;
-  if (fc <= 0x06 || fc == FC_RELAY)
+  if (fc <= FC_WRITE_REG || fc == FC_RELAY)
     c[k++] = 8;
-  if (fc >= 0x01 && fc <= 0x04)
+  if (fc >= FC_READ_COILS && fc <= FC_READ_INPUT)
     c[k++] = 5 + q[2];
-  if ((fc == 0x0F || fc == 0x10) && n >= 7) {
+  if ((fc == FC_WRITE_COILS || fc == FC_WRITE_REGS) && n >= 7) {
     c[k++] = 9 + q[6];
     c[k++] = 8;
   }
@@ -219,7 +232,7 @@ void mb_write(uint16_t reg, int16_t value) {
 bool mb_take_changed(uint16_t *reg) {
   if (!MB.any_changed)
     return false;
-  for (unsigned w = 0; w < sizeof MB.changed / sizeof *MB.changed; w++) {
+  for (unsigned w = 0; w < MB_WORDS; w++) {
     if (!MB.changed[w])
       continue;
     unsigned b = (unsigned) __builtin_ctz(MB.changed[w]);

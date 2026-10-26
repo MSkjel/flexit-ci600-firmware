@@ -5,9 +5,7 @@
 #include "mbserver.h"
 #include "model.h"
 #include "plat.h"
-#include "rs485.h"
 #include "schedule.h"
-#include "settings.h"
 #include "ui.h"
 #include <string.h>
 
@@ -34,9 +32,9 @@
 #define R_ST_FAN 0x0CA
 #define R_ST_TOTAL_H 0x0CB
 #define R_FILTER_RESETS 0x0CC
-#define R_ALARMS 0x0CD  // active alarms, 10 x (code, since hi, since lo)
+#define R_ALARMS 0x0CD  // active alarms, ALARM_SLOTS x (code, since hi, since lo)
 #define R_ALARMS_END 0x0EA
-#define R_LOG 0x0EB  // alarm log, 5 x (code, start hi, start lo, end hi, end lo)
+#define R_LOG 0x0EB  // alarm log, LOG_SLOTS x (code, start hi, start lo, end hi, end lo)
 #define R_LOG_END 0x103
 #define R_ST_HEATER 0x10E     // the heater may run: the panels' flags below ORed, and the unit has one
 #define R_DS1_ELECTRIC 0x10F  // the DIP switches DS1..DS4
@@ -65,7 +63,16 @@
 #define R_RT_HEATER 0x156
 #define R_RT_TOTAL 0x15C
 #define R_RT_LAST 0x15F
+_Static_assert(R_DEICE == R_RT_HEATER + 2 && R_DEICE_ROTOR + 1 == R_RT_TOTAL, "the de-icing settings in between");
 #define WEEK_SLOT_REGS 4  // start, end, mode, setpoint
+#define ALARM_SLOTS 10
+#define ALARM_SLOT_REGS 3
+#define LOG_SLOTS 5
+#define LOG_SLOT_REGS 5
+_Static_assert(R_WEEK_FIRST + 7 * PERIODS_PER_DAY * WEEK_SLOT_REGS - 1 == R_WEEK_LAST, "the week program");
+_Static_assert(R_WEEK_EN + 7 * PERIODS_PER_DAY - 1 == R_WEEK_EN_END, "its enables");
+_Static_assert(R_ALARMS + ALARM_SLOTS * ALARM_SLOT_REGS - 1 == R_ALARMS_END, "the active alarms");
+_Static_assert(R_LOG + LOG_SLOTS * LOG_SLOT_REGS - 1 == R_LOG_END, "the alarm log");
 
 // a day's week program slot, and its enable
 static uint16_t week_reg(int day, int slot) {
@@ -81,7 +88,8 @@ static void bus_write(uint16_t reg, int16_t v) {
     plat_save(true);  // only the panel's own menu writes these
 }
 
-static uint16_t reg16(uint16_t reg) { return (uint16_t) MB.hold[reg]; }  // a register, unsigned
+int16_t unit_reg(uint16_t reg) { return MB.hold[reg]; }
+static uint16_t reg16(uint16_t reg) { return (uint16_t) unit_reg(reg); }  // a register, unsigned
 
 static uint32_t reg32(uint16_t hi) {  // a hi/lo pair, interrupts off so the halves match
   uint32_t s = board_irq_save();
@@ -102,10 +110,10 @@ static void stamp(alarm_t *a, uint32_t t) {
 }
 
 static void read_alarms(void) {
-  alarm_t a[10];
+  alarm_t a[ALARM_SLOTS];
   int n = 0;
-  for (int i = 0; i < 10; i++) {
-    uint16_t r = R_ALARMS + 3 * i;
+  for (int i = 0; i < ALARM_SLOTS; i++) {
+    uint16_t r = R_ALARMS + ALARM_SLOT_REGS * i;
     if (!reg16(r))
       continue;
     a[n] = (alarm_t) {.code = (uint8_t) reg16(r), .active = true};
@@ -131,8 +139,8 @@ static void read_alarms(void) {
 static void read_log(void) {
   alarm_t log[LEN(M.history)];
   int n = 0;
-  for (unsigned i = 0; i < LEN(M.history); i++) {
-    uint16_t r = R_LOG + 5 * i;
+  for (int i = 0; i < LOG_SLOTS && n < (int) LEN(log); i++) {
+    uint16_t r = R_LOG + LOG_SLOT_REGS * i;
     if (!reg16(r))
       continue;
     alarm_t *a = &log[n++];
@@ -193,6 +201,9 @@ static void read_runtime(void) {
   M.h_total = mb_written(R_ST_TOTAL_H) ? h + (uint32_t) (int16_t) (h16 - (uint16_t) h) : h;
 }
 
+// A word of a runtime counter, not one of the de-icing settings among them
+static bool rt_counter(uint16_t r) { return r >= R_RT_STOP && r <= R_RT_LAST && (r < R_DEICE || r > R_DEICE_ROTOR); }
+
 static void set_fan_ext(void) { M.fan_ext = M.mode_now >= MODE_MIN ? M.fan_pct[M.mode_now - 1][1] : 0; }
 
 // The CX60 relays the clock's two words in separate exchanges, a few ms apart. A new high word with the old low one
@@ -218,18 +229,28 @@ static bool stock_panel(void) {
   return false;
 }
 
-static void reg_changed(uint16_t r) {
-  int16_t v = MB.hold[r];
-  if (r >= R_DS1_ELECTRIC && r <= R_DS4_FAN_AC) {
-    uint8_t bit = (uint8_t) (1u << (r - R_DS1_ELECTRIC));
-    M.dip = v ? M.dip | bit : M.dip & ~bit;
-  }
+// The DIP switches, DS1 on for an electric heater and DS4 for AC fans
+static void dip_changed(uint16_t r, int16_t v) {
+  uint8_t bit = (uint8_t) (1u << (r - R_DS1_ELECTRIC));
+  M.dip = v ? M.dip | bit : M.dip & ~bit;
+  if (r == R_DS1_ELECTRIC)
+    val_update(V_FEAT_FIRST + FEAT_WATER_HEATER, v == 0);
+  else if (r == R_DS4_FAN_AC)
+    val_update(V_FEAT_FIRST + FEAT_EC_FANS, v == 0);
+}
+
+// A register of the status broadcast, R_ST_SETPOINT..R_DS4_FAN_AC
+static void status_changed(uint16_t r, int16_t v) {
+  if (r >= R_ALARMS && r <= R_ALARMS_END)
+    read_alarms();
+  else if (r >= R_LOG && r <= R_LOG_END)
+    read_log();
+  else if (r >= R_DS1_ELECTRIC && r <= R_DS4_FAN_AC)
+    dip_changed(r, v);
   switch (r) {
-    case R_MODE:
-      val_update(V_MODE, v & 3);
-      break;
-    case R_REGULATION:
-      v = v != 0;  // the CX60 takes anything but 0 as supply air
+    case R_ST_SETPOINT:
+      if (!mb_written(R_SETPOINT))
+        M.setpoint = v;  // a starting value for the editor until the real setpoint arrives
       break;
     case R_ST_MODE:
       M.mode_now = (uint8_t) (v & 3);
@@ -239,12 +260,14 @@ static void reg_changed(uint16_t r) {
     case R_ST_FILTER_H:
       M.filter_hours = (uint16_t) v;
       break;
-    case R_FILTER_RESETS:
-      M.filter_resets = (uint16_t) v;
-      break;
     case R_ST_BOOST_S:
       M.boost_left = (uint16_t) ((v + 59) / 60);
       val_update(V_BOOST, v > 0);
+      break;
+    case R_ST_SETPOINT_NOW:
+      // In extract regulation it's min + 6 or max - 6 while the supply air is out of bounds, not a target
+      if (M.regulation != REG_EXTRACT || (v != M.supply_min + 6 && v != M.supply_max - 6))
+        M.setpoint_now = v;
       break;
     case R_ST_SUPPLY:
       M.t_supply = v;
@@ -271,29 +294,40 @@ static void reg_changed(uint16_t r) {
       M.fan_sup = (uint8_t) v;
       set_fan_ext();
       break;
-    case R_ST_SETPOINT:
-      if (!mb_written(R_SETPOINT))
-        M.setpoint = v;  // a starting value for the editor until the real setpoint arrives
+    case R_ST_TOTAL_H:
+      read_runtime();
       break;
-    case R_ST_SETPOINT_NOW:
-      // In extract regulation it's min + 6 or max - 6 while the supply air is out of bounds, not a target
-      if (M.regulation != REG_EXTRACT || (v != M.supply_min + 6 && v != M.supply_max - 6))
-        M.setpoint_now = v;
+    case R_FILTER_RESETS:
+      M.filter_resets = (uint16_t) v;
       break;
     case R_ST_HEATER:
       val_update(V_HEATER, v != 0);  // what the unit made of the panels' flags, see unit_value_changed()
       break;
-    case R_ST_TOTAL_H:
-      read_runtime();
+    default:
+      break;
+  }
+}
+
+static void reg_changed(uint16_t r) {
+  int16_t v = unit_reg(r);
+  if (r == R_REGULATION)
+    v = v != 0;  // the CX60 takes anything but 0 as supply air
+  if (r >= R_ST_SETPOINT && r <= R_DS4_FAN_AC)
+    status_changed(r, v);
+  else if (r >= R_WEEK_FIRST && r <= R_WEEK_LAST)
+    read_week((r - R_WEEK_FIRST) / (PERIODS_PER_DAY * WEEK_SLOT_REGS));
+  else if (r >= R_WEEK_EN && r <= R_WEEK_EN_END)
+    read_week((r - R_WEEK_EN) / PERIODS_PER_DAY);
+  else if (rt_counter(r))
+    read_runtime();
+  else if (r >= R_PANEL1_VERSION && r <= R_PANEL3_VERSION && !((r - R_PANEL1_VERSION) & 1))
+    M.panel_version[(r - R_PANEL1_VERSION) / 2] = (uint16_t) v;
+  switch (r) {
+    case R_MODE:
+      val_update(V_MODE, v & 3);
       break;
     case R_CX60_VERSION:
       M.cx60_version = (uint16_t) v;
-      break;
-    case R_DS1_ELECTRIC:
-      val_update(V_FEAT_FIRST + FEAT_WATER_HEATER, v == 0);
-      break;
-    case R_DS4_FAN_AC:
-      val_update(V_FEAT_FIRST + FEAT_EC_FANS, v == 0);
       break;
     case R_CLOCK_HI:
     case R_CLOCK_LO:
@@ -306,18 +340,6 @@ static void reg_changed(uint16_t r) {
         clock_minute = 0;
       break;
     default:
-      if (r >= R_ALARMS && r <= R_ALARMS_END)
-        read_alarms();
-      else if (r >= R_LOG && r <= R_LOG_END)
-        read_log();
-      else if (r >= R_WEEK_FIRST && r <= R_WEEK_LAST)
-        read_week((r - R_WEEK_FIRST) / (PERIODS_PER_DAY * WEEK_SLOT_REGS));
-      else if (r >= R_WEEK_EN && r <= R_WEEK_EN_END)
-        read_week((r - R_WEEK_EN) / PERIODS_PER_DAY);
-      else if (r >= R_RT_STOP && r <= R_RT_LAST)
-        read_runtime();
-      else if (r >= R_PANEL1_VERSION && r <= R_PANEL3_VERSION && !((r - R_PANEL1_VERSION) & 1))
-        M.panel_version[(r - R_PANEL1_VERSION) / 2] = (uint16_t) v;
       break;
   }
   // settings kept in the CX60 like the fan % and setpoint, see values.h
@@ -377,15 +399,16 @@ bool unit_cached(uint16_t r) {
 // Nobody sends these again when we restart: a counter's high word, which the CX60 sends once, and another
 // device's week program change. Without an ESP every relay is someone on another panel, so those too.
 static bool save_soon(uint16_t r) {
-  if (r >= R_RT_STOP)
+  if (rt_counter(r))
     return !((r - R_RT_STOP) & 1);
   bool week = (r >= R_WEEK_FIRST && r <= R_WEEK_LAST) || (r >= R_WEEK_EN && r <= R_WEEK_EN_END);
   return mb_relayed(r) && (week || !HAS(FEAT_ESP));
 }
 
-void unit_start(void) {
-  MB.addr = M.bus_addr;  // the saved address, now that the settings are loaded
-}
+// The CX60 only notices a new one after its next restart
+static void use_bus_addr(void) { MB.addr = M.bus_addr; }
+
+void unit_start(void) { use_bus_addr(); }  // the saved address, now that the settings are loaded
 
 void unit_poll(void) {
   uint16_t r;
@@ -405,12 +428,6 @@ void unit_poll(void) {
   }
   M.bus_ok = MB.frames;
   M.bus_err = MB.errors;
-  if (MB.enter_bootloader) {
-    for (uint32_t t = board_ms(); rs485_busy() && board_ms() - t < 20;) {
-    }  // let the reply go out first
-    settings_flush();
-    board_bootloader();
-  }
 }
 
 // The manual tests in Advanced > Test. The CX60 only uses a test value while its enable register is set, and clears
@@ -498,6 +515,8 @@ void unit_second(void) {
 // ---------------------------------------------------------------- changes made on the panel
 void unit_value_changed(val_t v) {
   val_def_t d = val_def(v);
+  if (v == V_BUS_ADDR)
+    use_bus_addr();
   if (test_changed(v))
     return;
   if (d.flags & VF_CLOCK) {

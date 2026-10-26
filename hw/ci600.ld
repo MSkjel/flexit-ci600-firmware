@@ -37,7 +37,7 @@ SECTIONS
         _ebss = .;
     } > RAM
 
-    /* not zeroed at start-up, survives a reset. The fault record and start counter live here */
+    /* not zeroed at start-up, survives a reset. The fault record and the restart and start counters live here */
     .noinit (NOLOAD) : {
         *(.noinit*)
         . = ALIGN(4);

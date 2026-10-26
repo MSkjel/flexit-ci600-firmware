@@ -1,6 +1,9 @@
 // The ESP link on a simulated bus, with the CX60's schedule as its firmware runs it. Fails if a link frame
 // ever overlaps the CX60, the CX60 gets more than 256 bytes at once, or a picture arrives damaged.
 //   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2]
+#include "bus.h"
+#include "link.h"
+#include "mbserver.h"
 #include "pbulk.h"
 #include "plink.h"
 #include <stdint.h>
@@ -376,40 +379,46 @@ static int panel_coils;
 static uint32_t panel_said, esp_heard, esp_heard_wrong;  // numbered messages from the panel to the ESP
 static long panel_gap_answers;
 
-// Like hw/rs485.c. A link frame gets an answer if pbus says there's time. Anything else goes to pbus, and gets
-// a reply if it's for us.
+// hw/bus.c sorts the bursts out as on the panel, with these three in place of link.c's and mbserver.c's. A link
+// frame is answered if pbus says there's time, the rest goes to pbus and gets a reply if it's for us.
+int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, uint8_t *answer) {
+  bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS.end_us);
+  uint8_t say;
+  uint32_t left = pbus_panel_window(&PBUS, idle_us, now_ms, &say);
+  int k = pbulk_panel_frame(&PRX, 3, f, n, left, say, PBUS.end_us, answer);
+  if (k && gap)
+    panel_gap_answers++;
+  return k;
+}
+
+void link_bus(const uint8_t *b, int n, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
+  pbus_panel_burst(&PBUS, b, n, start_us, idle_us, now_ms);
+}
+
+int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
+  if (n != 8 || q[0] != 3 || !pbus_crc_ok(q, 8))  // a poll or a read for us
+    return 0;
+  int flags = 0;
+  if (q[1] == 1 && !(q[2] << 8 | q[3])) {
+    flags = panel_coils;
+    panel_coils = 0;
+  } else
+    flags = flags_for(q, 1 << 30);
+  return reply_to(q, r, flags);
+}
+
 static void panel_burst(burst_t *b) {
   ns_t idle = b->last + PBUS_BYTE_NS;  // the idle interrupt
-  uint32_t idle_us = (uint32_t) (idle / US), ms = (uint32_t) (idle / MS);
-  if (b->n > 0 && b->b[0] == PBULK_ADDR) {
-    if (pbulk_frame_len(b->b, b->n) != b->n)
-      return;
-    bool gap = !(PBUS.after_status && idle_us - PBUS.status_end_us < PBUS.end_us);
-    uint8_t say;
-    uint32_t left = pbus_panel_window(&PBUS, idle_us, ms, &say);
-    int n = pbulk_panel_frame(&PRX, 3, b->b, b->n, left, say, PBUS.end_us, panel_answer);
-    if (n) {  // wait for the ESP's driver to let go, like hw/rs485.c
-      panel_answer_n = n;
-      panel_answer_at = idle + between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US);
-      if (gap)
-        panel_gap_answers++;
-    }
-    return;
-  }
-  pbus_panel_burst(&PBUS, b->b, b->n, (uint32_t) (b->first / US), idle_us, ms);
-  if (PBUS.after_status) {
+  bool modbus;
+  int n = bus_burst(b->b, b->n, (uint32_t) (b->first / US), (uint32_t) (idle / US), (uint32_t) (idle / MS),
+                    panel_answer, &modbus);
+  if (modbus && PBUS.after_status) {
     PW.busy_until = idle + PANEL_STATUS_ISR_US * US;
     PW.held = false;
   }
-  if (b->n == 8 && b->b[0] == 3 && pbus_crc_ok(b->b, 8)) {  // a poll or a read for us
-    int flags = 0;
-    if (b->b[1] == 1 && !(b->b[2] << 8 | b->b[3])) {
-      flags = panel_coils;
-      panel_coils = 0;
-    } else
-      flags = flags_for(b->b, 1 << 30);
-    panel_answer_n = reply_to(b->b, panel_answer, flags);
-    panel_answer_at = idle + 20 * US;
+  if (n) {  // a link answer waits for the ESP's driver to let go, like hw/rs485.c
+    panel_answer_n = n;
+    panel_answer_at = idle + (modbus ? 20 * US : between(PBUS_PANEL_WAIT_US * US, PBUS_PANEL_US * US));
   }
 }
 

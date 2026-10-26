@@ -27,7 +27,7 @@ LDLIBS   := $(SANFLAGS) -lm
 
 obj = $(patsubst %,$(OBJ_DIR)/%.o,$(1))
 SIMLIB   := $(APP_OBJ) $(call obj,sim/simlib sim/ppm)
-HW_OBJ   := $(call obj,sim/board_stub hw/mbserver hw/unit hw/room hw/settings)  # hw/ on a fake board
+HW_OBJ   := $(call obj,sim/board_stub hw/bus hw/mbserver hw/unit hw/room hw/settings)  # hw/ on a fake board
 LINK_OBJ := $(call obj,proto/pbulk proto/pbus proto/plink proto/pdeflate)
 
 PROGS := sim lang_test unit_test replay link_test bulk_test
@@ -38,7 +38,7 @@ $(BUILD)/replay: $(SIMLIB) $(HW_OBJ) $(call obj,sim/replay)
 # unit_test records the calls input.c, link.c and the week program make into the UI
 $(BUILD)/unit_test: LDLIBS += -Wl,--wrap=ui_key,--wrap=ui_idle,--wrap=ui_wake,--wrap=ui_toast,--wrap=ui_layout_changed,--wrap=ui_show_view,--wrap=ui_value_changed
 $(BUILD)/link_test: $(LINK_OBJ) $(call obj,sim/link_test)
-$(BUILD)/bulk_test: $(LINK_OBJ) $(call obj,sim/bulk_test)
+$(BUILD)/bulk_test: $(LINK_OBJ) $(call obj,sim/bulk_test hw/bus)  # bulk_test has its own link.c and Modbus server
 $(addprefix $(BUILD)/,$(PROGS)):
 	$(CC) -o $@ $^ $(LDLIBS)
 

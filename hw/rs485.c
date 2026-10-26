@@ -3,6 +3,7 @@
 // from the TXE interrupt so the core can sleep.
 #include "rs485.h"
 #include "board.h"
+#include "bus.h"
 #include "link.h"
 #include "mbserver.h"
 #include "stm32f1.h"
@@ -15,7 +16,7 @@ static int tx_len, tx_pos;    // the reply being sent, only used by the interrup
 
 void rs485_init(void) {
   RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
-  USART1->BRR = (board_hz + 57600) / 115200;
+  USART1->BRR = (board_hz() + 57600) / 115200;
   USART1->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE | USART_CR1_IDLEIE;
   irq_enable(IRQ_USART1);
 }
@@ -75,38 +76,23 @@ void USART1_IRQHandler(void) {
   } else if (sr & USART_SR_ERRORS) {
     (void) USART1->DR;  // reading DR clears an overrun, noise or framing error
   }
-  if (sr & USART_SR_IDLE) {  // line idle, the frame is complete
+  if (sr & USART_SR_IDLE) {  // line idle, the burst is complete
     uint32_t idle = board_us();
-    (void) USART1->DR;
+    // An SR read and then a DR read clear IDLE. Once DR was read above, another read could lose a new byte.
+    if (!(sr & (USART_SR_RXNE | USART_SR_ERRORS)))
+      (void) USART1->DR;
     int n = rx_len;
     rx_len = 0;
-    int r = 0, skip = 0;  // skip = bytes in front of the CX60's
-    bool modbus = true;
-    if (n > 0 && rx[0] == PBULK_ADDR) {  // the ESP link, or noise that looks like it
-      int k = pbulk_frame_len(rx, n);
-      if (k == n) {
-        r = link_bulk_frame(rx, n, idle, board_ms(), tx);
-        while (r > 0 && board_us() - idle < PBUS_PANEL_WAIT_US) {
-        }  // give the ESP's driver time to let go of the bus
-        modbus = false;
-      } else if (k && k < n && pbus_crc_ok(rx, k)) {
-        skip = k;  // the CX60 sent right behind a link frame. That goes unanswered, the ESP sends it again
-      } else if (pbus_is_cx60(rx + 1, n - 1)) {
-        skip = 1;  // a noise byte in front of a CX60 frame
-      } else {
-        modbus = false;  // a link frame cut short, or noise
-      }
-    }
-    if (modbus) {
-      link_bus(rx + skip, n - skip, burst_start + (uint32_t) skip * PBUS_BYTE_US, idle, board_ms());
-      r = mb_chunk(rx + skip, n - skip, tx);
-    }
+    bool modbus;
+    int r = bus_burst(rx, n, burst_start, idle, board_ms(), tx, &modbus);
     if (r > 0) {
+      while (!modbus && board_us() - idle < PBUS_PANEL_WAIT_US) {
+      }  // give the ESP's driver time to let go of the bus
       uint32_t start = board_us();
       send(r);
       if (modbus)  // link.c needs to see our own reply on the bus too
         link_bus(tx, r, start, start + (uint32_t) (r + 1) * PBUS_BYTE_US, board_ms());
     }
   }
-  board_isr_us += board_us() - entry;
+  board_isr_time(board_us() - entry);
 }

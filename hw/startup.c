@@ -9,7 +9,7 @@ extern void (*const vectors[])(void);
 
 #define PAINT 0xC1600C16u  // unused stack fill, board_stack_free() looks for it
 
-// FAULT_MAGIC and the faulting PC, for board_reset_cause() after the reset
+// for board_reset_cause() after the reset
 __attribute__((section(".noinit"))) uint32_t fault_record[2];
 
 void Reset_Handler(void) {

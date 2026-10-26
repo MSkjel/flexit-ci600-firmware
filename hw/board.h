@@ -11,7 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define FAULT_MAGIC 0xFA017EC0u  // marks a valid fault record
+#define FAULT_MAGIC 0xFA017EC0u   // marks a valid fault record
+extern uint32_t fault_record[2];  // FAULT_MAGIC and the faulting PC from startup.c, kept through the reset
 
 // Pins the code drives or reads, as port, pin for stm32f1.h's pin_*()
 #define PIN_LCD_RESET GPIOA, 1
@@ -27,16 +28,15 @@
 #define PIN_RS485_RX_OFF GPIOA, 11  // receiver disable
 #define PIN_RS485_TX_ON GPIOA, 12   // driver enable
 
-extern uint32_t board_hz;  // core clock
-
 void board_init(void);
+uint32_t board_hz(void);  // core clock
 uint32_t board_ms(void);
 uint32_t board_us(void);  // free-running, wraps every 71 minutes, keeps counting during sleep
 void board_delay_ms(uint32_t ms);
-void board_kick(void);                  // feed the watchdog
-void board_sleep(void);                 // until the next interrupt, the 1 ms tick at the latest
-uint16_t board_busy_pm(void);           // time awake since the last call, per mille
-extern volatile uint32_t board_isr_us;  // long interrupts add their run time here so it isn't counted as sleep
+void board_kick(void);             // feed the watchdog
+void board_sleep(void);            // until the next interrupt, the 1 ms tick at the latest
+uint16_t board_busy_pm(void);      // time awake since the last call, per mille
+void board_isr_time(uint32_t us);  // a long interrupt's run time, so it isn't counted as sleep
 uint32_t board_irq_save(void);
 void board_irq_restore(uint32_t s);
 uint8_t board_keys(void);               // debounced, 1 << IN_x

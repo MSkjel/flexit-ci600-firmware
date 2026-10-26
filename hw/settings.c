@@ -43,25 +43,16 @@ static uint32_t page_after(uint32_t page) {
   return FLASH_SETTINGS + (page - FLASH_SETTINGS + FLASH_PAGE) % (FLASH_SETTINGS_PAGES * FLASH_PAGE);
 }
 
-// Next record to save, start with *i = 0. Values go before the cached registers because the bus address among
-// them decides which per-panel registers are ours.
-static bool next_record(int *i, record_t *out) {
-  if (*i < V_ITEM_FIRST) {
-    val_t v = val_next((val_t) *i, VF_SAVED, 0);
-    if (v != V_COUNT) {
-      *out = (record_t) {val_def(v).key, (int16_t) val_get(v)};
-      *i = v;
-      return true;
-    }
-    *i = V_ITEM_FIRST;
-  }
-  for (int r; (r = *i - V_ITEM_FIRST) < MB_REGS; (*i)++)
-    if (unit_cached((uint16_t) r)) {
-      *out = (record_t) {(uint16_t) (REG_KEY | r), MB.hold[r]};
-      (*i)++;
-      return true;
-    }
-  return false;
+// Calls f with each record to save until it returns false, then returns false. Values go before the cached
+// registers, the bus address among them decides which per-panel registers are ours.
+static bool for_each_record(bool (*f)(void *u, record_t it), void *u) {
+  for (val_t v = val_next(V_NONE, VF_SAVED, 0); v != V_COUNT; v = val_next(v, VF_SAVED, 0))
+    if (!f(u, (record_t) {val_def(v).key, (int16_t) val_get(v)}))
+      return false;
+  for (uint16_t r = 0; r < MB_REGS; r++)
+    if (unit_cached(r) && !f(u, (record_t) {(uint16_t) (REG_KEY | r), unit_reg(r)}))
+      return false;
+  return true;
 }
 
 static const head_t *valid_head(uint32_t page) {
@@ -95,18 +86,40 @@ void settings_load(void) {
   }
 }
 
+typedef struct {
+  const head_t *h;
+  unsigned n;  // records that matched so far
+} compare_t;
+
+static bool same(void *u, record_t now) {
+  compare_t *c = u;
+  const record_t *it = (const record_t *) (c->h + 1);
+  if (c->n >= c->h->count || it[c->n].key != now.key || it[c->n].value != now.value)
+    return false;
+  c->n++;
+  return true;
+}
+
 // The newest copy already has exactly these records.
 static bool unchanged(void) {
   const head_t *h = cur_page ? valid_head(cur_page) : NULL;
-  if (!h)
+  compare_t c = {h, 0};
+  return h && for_each_record(same, &c) && c.n == h->count;
+}
+
+typedef struct {
+  head_t h;
+  uint32_t at;  // where the next record goes
+} writer_t;
+
+static bool put(void *u, record_t it) {
+  writer_t *w = u;
+  w->h.crc = plink_crc32(w->h.crc, &it, sizeof it);
+  if (!board_flash_write(w->at, &it, sizeof it))
     return false;
-  const record_t *it = (const record_t *) (h + 1);
-  record_t now;
-  unsigned n = 0;
-  for (int i = 0; next_record(&i, &now); n++)
-    if (n >= h->count || it[n].key != now.key || it[n].value != now.value)
-      return false;
-  return n == h->count;
+  w->h.count++;
+  w->at += sizeof it;
+  return true;
 }
 
 // force saves even if the bus never gets quiet
@@ -119,20 +132,12 @@ static void save(bool force) {
   if (!rs485_wait_quiet(QUIET_WAIT_MS) && !force)
     return;
   written_ms = board_ms();
-  head_t h = {.magic = MAGIC, .seq = seq + 1, .pad = 0xFFFF, .crc = 0};
-  uint32_t page = next_page, at = page + sizeof h;
+  uint32_t page = next_page;
+  writer_t w = {.h = {.magic = MAGIC, .seq = seq + 1, .pad = 0xFFFF, .crc = 0}, .at = page + sizeof(head_t)};
   next_page = page_after(page);
-  if (!board_flash_erase(page))
+  if (!board_flash_erase(page) || !for_each_record(put, &w) || !board_flash_write(page, &w.h, sizeof w.h))
     return;
-  record_t it;
-  for (int i = 0; next_record(&i, &it); h.count++, at += sizeof it) {
-    h.crc = plink_crc32(h.crc, &it, sizeof it);
-    if (!board_flash_write(at, &it, sizeof it))
-      return;
-  }
-  if (!board_flash_write(page, &h, sizeof h))
-    return;
-  seq = h.seq;
+  seq = w.h.seq;
   cur_page = page;
   dirty = soon = false;
 }

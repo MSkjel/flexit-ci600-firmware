@@ -5,7 +5,7 @@
 #include "model.h"  // RESET_*
 #include "stm32f1.h"
 
-uint32_t board_hz = 8000000;
+static uint32_t hz = 8000000;
 static volatile uint32_t ms;
 static volatile uint8_t keys, key_down, key_up;  // debounced state, presses and releases not read yet
 static uint8_t key_hist[IN_COUNT];
@@ -34,8 +34,10 @@ static void clocks(void) {
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
-  board_hz = 72000000;
+  hz = 72000000;
 }
+
+uint32_t board_hz(void) { return hz; }
 
 // Same as stock's gpio_init and gpio_init_early. Level goes in before mode so outputs don't glitch.
 static const struct {
@@ -114,7 +116,7 @@ uint32_t board_us(void) {
 
 static void us_init(void) {
   RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
-  TIM2->PSC = board_hz / 1000000 - 1;  // APB1 is /2 but its timers get x2 back, so this is the core clock
+  TIM2->PSC = hz / 1000000 - 1;  // APB1 is /2 but its timers get x2 back, so this is the core clock
   TIM2->ARR = 0xFFFF;
   TIM2->EGR = TIM_EGR_UG;  // load the prescaler
   TIM2->SR = 0;
@@ -124,9 +126,9 @@ static void us_init(void) {
 }
 
 // ---------------------------------------------------------------- sleeping
-// Awake time is the main loop plus long interrupts. The bus adds its time to board_isr_us, the 1 ms tick and
-// the display DMA are too short to count.
-volatile uint32_t board_isr_us;
+// Awake time is the main loop plus long interrupts. The bus adds its time with board_isr_time(), the 1 ms tick
+// and the display DMA are too short to count.
+static volatile uint32_t isr_us;
 static uint32_t slept_us, busy_from_us;
 static bool debugger;
 
@@ -146,11 +148,13 @@ void board_sleep(void) {
   slept_us += board_us() - t;
 }
 
+void board_isr_time(uint32_t us) { isr_us += us; }
+
 uint16_t board_busy_pm(void) {
   uint32_t s = irq_save();
-  uint32_t now = board_us(), span = now - busy_from_us, isr = board_isr_us, slept = slept_us;
+  uint32_t now = board_us(), span = now - busy_from_us, isr = isr_us, slept = slept_us;
   busy_from_us = now;
-  board_isr_us = slept_us = 0;
+  isr_us = slept_us = 0;
   irq_restore(s);
   uint32_t idle = slept > isr ? slept - isr : 0;
   if (!span || idle > span)
@@ -365,7 +369,6 @@ void board_rtc_set(uint32_t t) {
 }
 
 // ---------------------------------------------------------------- reset cause
-extern uint32_t fault_record[2];  // FAULT_MAGIC and the faulting PC from startup.c, kept through the reset
 // Kept through a reset. Starts over at power on, and on the first start after flashing, when it holds whatever
 // was in that RAM.
 #define RESTARTS_MAGIC 0x52535443u
@@ -492,7 +495,7 @@ void board_init(void) {
   NVIC_IPR8(IRQ_USART1) = 0x10;
   SCB_SHPR3 = (SCB_SHPR3 & 0x00FFFFFF) | 0x20u << 24;
   NVIC_IPR8(IRQ_DMA1_CH3) = 0x20;
-  SYSTICK->LOAD = board_hz / 1000 - 1;
+  SYSTICK->LOAD = hz / 1000 - 1;
   SYSTICK->VAL = 0;
   SYSTICK->CTRL = SYSTICK_CTRL_ON;
   us_init();
