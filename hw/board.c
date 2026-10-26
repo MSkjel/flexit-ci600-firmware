@@ -1,5 +1,6 @@
 // see board.h
 #include "board.h"
+#include "input.h"  // IN_*
 #include "layout.h"
 #include "model.h"  // RESET_*
 #include "stm32f1.h"
@@ -7,7 +8,7 @@
 uint32_t board_hz = 8000000;
 static volatile uint32_t ms;
 static volatile uint8_t keys, key_down, key_up;  // debounced state, presses and releases not read yet
-static uint8_t key_hist[BK_COUNT];
+static uint8_t key_hist[IN_COUNT];
 static volatile uint16_t bl_now, bl_want;  // backlight compare, now and where it's fading to
 
 // ---------------------------------------------------------------- clocks and pins
@@ -41,49 +42,49 @@ static const struct {
   gpio_t *port;
   uint8_t pin, mode, level;  // output level, or the pull for inputs, 1 = up
 } PINS[] = {
-    {GPIOA, 1, PIN_OUT, 1},       // LCD reset, released
-    {GPIOA, 4, PIN_OUT, 1},       // LCD CS, idle
-    {GPIOA, 5, PIN_AF, 0},        // SPI1 SCK
-    {GPIOA, 6, PIN_IN_PULL, 1},   // SPI1 MISO
-    {GPIOA, 7, PIN_AF, 0},        // SPI1 MOSI
-    {GPIOC, 4, PIN_OUT, 0},       // LCD lines the stock firmware holds low
-    {GPIOC, 5, PIN_OUT, 0},       //
-    {GPIOA, 8, PIN_AF, 0},        // TIM1 CH1, backlight
-    {GPIOB, 0, PIN_AIN, 0},       // backlight LED current, not read
-    {GPIOC, 0, PIN_AIN, 0},       // room thermistor
-    {GPIOA, 9, PIN_AF, 0},        // USART1 TX
-    {GPIOA, 10, PIN_IN, 0},       // USART1 RX
-    {GPIOA, 11, PIN_OUT, 0},      // RS-485 receiver disable
-    {GPIOA, 12, PIN_OUT, 0},      // RS-485 driver enable
-    {GPIOB, 5, PIN_IN_PULL, 0},   // down key, keys are high when pressed
-    {GPIOB, 6, PIN_IN_PULL, 0},   // OK key
-    {GPIOB, 7, PIN_IN_PULL, 0},   // up key
-    {GPIOB, 8, PIN_IN_PULL, 0},   // help key
-    {GPIOB, 9, PIN_IN_PULL, 0},   // back key
-    {GPIOC, 10, PIN_OUT_OD, 1},   // alarm LED, LEDs are lit when low
-    {GPIOC, 11, PIN_OUT_OD, 1},   // filter LED
-    {GPIOC, 12, PIN_OUT_OD, 1},   // OK LED
-    {GPIOA, 0, PIN_IN_PULL, 1},   // not used from here on
-    {GPIOA, 3, PIN_IN, 0},        //
-    {GPIOB, 10, PIN_OUT, 0},      //
-    {GPIOB, 11, PIN_IN, 0},       //
-    {GPIOB, 12, PIN_IN_PULL, 0},  //
-    {GPIOB, 13, PIN_IN_PULL, 0},  //
-    {GPIOB, 14, PIN_IN_PULL, 0},  //
-    {GPIOB, 15, PIN_IN_PULL, 0},  //
-    {GPIOC, 1, PIN_OUT, 0},       //
-    {GPIOC, 2, PIN_IN, 0},        //
-    {GPIOC, 3, PIN_OUT, 1},       //
-    {GPIOC, 6, PIN_IN_PULL, 0},   //
-    {GPIOC, 7, PIN_IN_PULL, 0},   //
-    {GPIOC, 8, PIN_IN_PULL, 0},   //
-    {GPIOC, 9, PIN_IN_PULL, 0},   //
-    {GPIOC, 13, PIN_IN, 0},       //
+    {PIN_LCD_RESET, PIN_OUT, 1},      // released
+    {PIN_LCD_CS, PIN_OUT, 1},         // idle
+    {GPIOA, 5, PIN_AF, 0},            // SPI1 SCK
+    {GPIOA, 6, PIN_IN_PULL, 1},       // SPI1 MISO
+    {GPIOA, 7, PIN_AF, 0},            // SPI1 MOSI
+    {GPIOC, 4, PIN_OUT, 0},           // LCD lines the stock firmware holds low
+    {GPIOC, 5, PIN_OUT, 0},           //
+    {GPIOA, 8, PIN_AF, 0},            // TIM1 CH1, backlight
+    {GPIOB, 0, PIN_AIN, 0},           // backlight LED current, not read
+    {GPIOC, 0, PIN_AIN, 0},           // room thermistor
+    {GPIOA, 9, PIN_AF, 0},            // USART1 TX
+    {GPIOA, 10, PIN_IN, 0},           // USART1 RX
+    {PIN_RS485_RX_OFF, PIN_OUT, 0},   //
+    {PIN_RS485_TX_ON, PIN_OUT, 0},    //
+    {PIN_KEY_DOWN, PIN_IN_PULL, 0},   // keys are high when pressed
+    {PIN_KEY_OK, PIN_IN_PULL, 0},     //
+    {PIN_KEY_UP, PIN_IN_PULL, 0},     //
+    {PIN_KEY_HELP, PIN_IN_PULL, 0},   //
+    {PIN_KEY_BACK, PIN_IN_PULL, 0},   //
+    {PIN_LED_ALARM, PIN_OUT_OD, 1},   // LEDs are lit when low
+    {PIN_LED_FILTER, PIN_OUT_OD, 1},  //
+    {PIN_LED_OK, PIN_OUT_OD, 1},      //
+    {GPIOA, 0, PIN_IN_PULL, 1},       // not used from here on
+    {GPIOA, 3, PIN_IN, 0},            //
+    {GPIOB, 10, PIN_OUT, 0},          //
+    {GPIOB, 11, PIN_IN, 0},           //
+    {GPIOB, 12, PIN_IN_PULL, 0},      //
+    {GPIOB, 13, PIN_IN_PULL, 0},      //
+    {GPIOB, 14, PIN_IN_PULL, 0},      //
+    {GPIOB, 15, PIN_IN_PULL, 0},      //
+    {GPIOC, 1, PIN_OUT, 0},           //
+    {GPIOC, 2, PIN_IN, 0},            //
+    {GPIOC, 3, PIN_OUT, 1},           //
+    {GPIOC, 6, PIN_IN_PULL, 0},       //
+    {GPIOC, 7, PIN_IN_PULL, 0},       //
+    {GPIOC, 8, PIN_IN_PULL, 0},       //
+    {GPIOC, 9, PIN_IN_PULL, 0},       //
+    {GPIOC, 13, PIN_IN, 0},           //
 };
 
 static void pins(void) {
   RCC->APB2ENR |= RCC_APB2ENR_AFIOEN | RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN | RCC_APB2ENR_IOPCEN;
-  for (unsigned i = 0; i < sizeof PINS / sizeof *PINS; i++) {
+  for (unsigned i = 0; i < LEN(PINS); i++) {
     pin_set(PINS[i].port, PINS[i].pin, PINS[i].level);
     pin_mode(PINS[i].port, PINS[i].pin, PINS[i].mode);
   }
@@ -163,11 +164,11 @@ void SysTick_Handler(void) {
   static const struct {
     gpio_t *g;
     uint8_t pin;
-  } K[BK_COUNT] = {
-      [BK_UP] = {GPIOB, 7},   [BK_DOWN] = {GPIOB, 5}, [BK_OK] = {GPIOB, 6},
-      [BK_BACK] = {GPIOB, 9}, [BK_HELP] = {GPIOB, 8},
+  } K[IN_COUNT] = {
+      [IN_UP] = {PIN_KEY_UP},     [IN_DOWN] = {PIN_KEY_DOWN}, [IN_OK] = {PIN_KEY_OK},
+      [IN_BACK] = {PIN_KEY_BACK}, [IN_HELP] = {PIN_KEY_HELP},
   };
-  for (int k = 0; k < BK_COUNT; k++) {  // debounce: 8 equal samples in a row
+  for (int k = 0; k < IN_COUNT; k++) {  // debounce: 8 equal samples in a row
     uint8_t bit = (uint8_t) (1u << k);
     key_hist[k] = (uint8_t) (key_hist[k] << 1 | pin_get(K[k].g, K[k].pin));
     if (key_hist[k] == 0xFF && !(keys & bit)) {
@@ -208,9 +209,9 @@ uint8_t board_key_events(uint8_t *up) {
 }
 
 void board_leds(bool alarm, bool filter, bool ok) {
-  pin_set(GPIOC, 10, !alarm);
-  pin_set(GPIOC, 11, !filter);
-  pin_set(GPIOC, 12, !ok);
+  pin_set(PIN_LED_ALARM, !alarm);
+  pin_set(PIN_LED_FILTER, !filter);
+  pin_set(PIN_LED_OK, !ok);
 }
 
 // ---------------------------------------------------------------- backlight
@@ -302,6 +303,14 @@ static bool rtc_sync(void) {  // wait until the registers show the counter again
   return false;
 }
 
+// a two-word register pair like PRLH/PRLL, in configuration mode
+static void rtc_write(volatile uint32_t *hi, uint32_t v) {
+  RTC->CRL |= RTC_CRL_CNF;
+  hi[0] = v >> 16;
+  hi[1] = v & 0xFFFF;
+  RTC->CRL &= ~RTC_CRL_CNF;
+}
+
 static bool rtc_on_crystal(void) {
   return (RCC->BDCR & (RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL | RCC_BDCR_LSERDY)) ==
          (RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL_LSE | RCC_BDCR_LSERDY);
@@ -328,10 +337,7 @@ void board_rtc_poll(void) {
   RCC->BDCR |= RCC_BDCR_RTCSEL_LSE | RCC_BDCR_RTCEN;
   if (!rtc_wait())
     return;
-  RTC->CRL |= RTC_CRL_CNF;
-  RTC->PRLH = 0;
-  RTC->PRLL = 0x7FFF;  // 32768 Hz -> seconds
-  RTC->CRL &= ~RTC_CRL_CNF;
+  rtc_write(&RTC->PRLH, 0x7FFF);  // 32768 Hz -> seconds
   if (!rtc_wait() || !rtc_sync())
     return;
   rtc_ok = true;
@@ -354,10 +360,7 @@ void board_rtc_set(uint32_t t) {
   soft_ms = ms;
   if (!rtc_ok || !rtc_wait())
     return;
-  RTC->CRL |= RTC_CRL_CNF;
-  RTC->CNTH = t >> 16;
-  RTC->CNTL = t & 0xFFFF;
-  RTC->CRL &= ~RTC_CRL_CNF;
+  rtc_write(&RTC->CNTH, t);
   rtc_wait();
 }
 
@@ -421,9 +424,8 @@ void board_reset(void) {
 }
 
 void board_bootloader(void) {
-  RCC->APB1ENR |= RCC_APB1ENR_PWREN | RCC_APB1ENR_BKPEN;
-  PWR->CR |= PWR_CR_DBP;
-  BKP_DR(1) = 0xDEAD;  // tells the stock bootloader to stay in update mode
+  // tells the stock bootloader to stay in update mode. rtc_init() left the backup domain writable
+  BKP_DR(1) = 0xDEAD;
   board_reset();
 }
 

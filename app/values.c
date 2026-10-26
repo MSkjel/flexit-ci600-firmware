@@ -7,11 +7,46 @@
 #include "schedule.h"
 #include <string.h>
 
+// Where each PLINK_VALUES value lives. proto/ leaves that out, the ESP has the table too. PANEL_VALUES rows have it.
+#define PLINK_FIELDS(F) \
+  F(THEME, M.theme) \
+  F(BRIGHTNESS, M.brightness) \
+  F(IDLE_BRIGHTNESS, M.idle_brightness) \
+  F(IDLE_AFTER, M.idle_after) \
+  F(SCREENSAVER, M.screensaver) \
+  F(HOME_VIEW, M.home_view) \
+  F(LANGUAGE, M.language) \
+  F(CLOCK_24H, M.clock_24h) \
+  F(KEY_HINTS, M.key_hints) \
+  F(NIGHT, M.night) \
+  F(NIGHT_FROM, M.night_from) \
+  F(NIGHT_TO, M.night_to) \
+  F(NIGHT_BRIGHTNESS, M.night_brightness) \
+  F(NIGHT_IDLE_BRIGHTNESS, M.night_idle_brightness) \
+  F(TILE1, M.tiles[0]) \
+  F(TILE2, M.tiles[1]) \
+  F(TILE3, M.tiles[2]) \
+  F(TILE4, M.tiles[3]) \
+  F(BUS_ADDR, M.bus_addr) \
+  F(KEY_LOCK, M.key_lock) \
+  F(LEDS, M.leds) \
+  F(ROOM_OFFSET, M.room_offset) \
+  F(INDOOR_SOURCE, M.indoor_source) \
+  F(ROOM_TEMP, M.t_room) \
+  F(FW_VERSION, M.fw_version) \
+  F(SETPOINT, M.setpoint) \
+  F(FAN_NORM_SUP, M.fan_pct[1][0]) \
+  F(FAN_NORM_EXT, M.fan_pct[1][1])
+#define ONE(...) +1
+_Static_assert(0 PLINK_FIELDS(ONE) == 0 PLINK_VALUES(ONE), "a field for each PLINK_VALUES row");
+#undef ONE
+
 // the VALUES() table, by value id
 static const val_def_t DEFS[V_FEAT_FIRST] = {
-#define X(id, k, field, lo, hi, fl, reg, sc) \
-  [V_##id] = {.min = lo, .max = hi, .key = k, .flags = fl, .cx60 = reg, .scale = sc},
-    VALUES(X)
+#define X(id, k, lo, hi, fl, reg) [V_##id] = {.min = lo, .max = hi, .key = k, .flags = fl, .cx60 = reg},
+#define X_FIELD(id, k, field, ...) X(id, k, __VA_ARGS__)
+    PLINK_VALUES(X) PANEL_VALUES(X_FIELD)
+#undef X_FIELD
 #undef X
 };
 
@@ -32,7 +67,7 @@ val_def_t val_def(val_t v) {
     // the unit's DIP switches say which fans and heater it has, see unit.c
     bool dip = v == V_FEAT_FIRST + FEAT_EC_FANS || v == V_FEAT_FIRST + FEAT_WATER_HEATER;
     uint16_t fl = VF_PANEL | VF_LAYOUT | (dip ? VF_RO : 0);
-    return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = fl, .scale = 1};
+    return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = fl};
   }
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST) {
     const item_t *it = &M.items[v - V_ITEM_FIRST];
@@ -40,8 +75,7 @@ val_def_t val_def(val_t v) {
     return (val_def_t) {.min = it->min,
                         .max = it->max,
                         .key = K_ITEM_VALUE + (v - V_ITEM_FIRST),
-                        .flags = VF_ESP | VF_LINK_RW | (ro ? VF_RO : 0),
-                        .scale = 1};
+                        .flags = VF_ESP | VF_LINK_RW | (ro ? VF_RO : 0)};
   }
   return (val_def_t) {0};
 }
@@ -54,9 +88,18 @@ uint16_t val_cx60_reg(val_t v) {
 // Linear search, a few microseconds per register the CX60 changed
 val_t val_by_cx60(uint16_t reg) {
   for (int v = V_NONE + 1; v < V_FEAT_FIRST; v++)
-    if ((DEFS[v].flags & (VF_CX60 | VF_CMD)) == VF_CX60 && val_cx60_reg((val_t) v) == reg)
+    if ((DEFS[v].flags & (VF_CX60 | VF_BY_HAND)) == VF_CX60 && val_cx60_reg((val_t) v) == reg)
       return (val_t) v;
   return V_NONE;
+}
+
+val_t val_next(val_t v, uint16_t want, uint16_t skip) {
+  while (++v < V_ITEM_FIRST) {
+    uint16_t f = val_def(v).flags;
+    if ((f & want) && !(f & skip))
+      return v;
+  }
+  return V_COUNT;
 }
 
 val_t val_by_key(uint16_t key) {
@@ -97,11 +140,14 @@ int32_t val_get(val_t v) {
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST)
     return M.items[v - V_ITEM_FIRST].value;
   switch (v) {
-#define X(id, key, field, ...) \
+#define F(id, field) \
   case V_##id: \
     return (int32_t) (field);
-    VALUES(X)
+#define X(id, key, field, ...) F(id, field)
+    PLINK_FIELDS(F)
+    PANEL_VALUES(X)
 #undef X
+#undef F
     default:
       return 0;
   }
@@ -118,12 +164,15 @@ static void store(val_t v, int32_t x) {
     return;
   }
   switch (v) {
-#define X(id, key, field, ...) \
+#define F(id, field) \
   case V_##id: \
     field = x; \
     break;
-    VALUES(X)
+#define X(id, key, field, ...) F(id, field)
+    PLINK_FIELDS(F)
+    PANEL_VALUES(X)
 #undef X
+#undef F
     default:
       break;
   }
@@ -171,7 +220,7 @@ static void apply(val_t v, int32_t x, source_t from) {
 
 void val_set(val_t v, int32_t x) { apply(v, x, FROM_USER); }
 void val_set_remote(val_t v, int32_t x) { apply(v, x, FROM_ESP); }
-void val_set_bus(val_t v, int32_t x) { apply(v, x, FROM_BUS); }
+void val_update(val_t v, int32_t x) { apply(v, x, FROM_BUS); }
 void val_load(val_t v, int32_t x) { apply(v, x, FROM_FLASH); }
 
 static void act(int a, source_t source) {

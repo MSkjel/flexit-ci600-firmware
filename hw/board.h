@@ -11,8 +11,21 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { BK_UP, BK_DOWN, BK_OK, BK_BACK, BK_HELP, BK_COUNT };  // same order as IN_* in input.h
-#define FAULT_MAGIC 0xFA017EC0u                              // marks a valid fault record
+#define FAULT_MAGIC 0xFA017EC0u  // marks a valid fault record
+
+// Pins the code drives or reads, as port, pin for stm32f1.h's pin_*()
+#define PIN_LCD_RESET GPIOA, 1
+#define PIN_LCD_CS GPIOA, 4
+#define PIN_KEY_UP GPIOB, 7
+#define PIN_KEY_DOWN GPIOB, 5
+#define PIN_KEY_OK GPIOB, 6
+#define PIN_KEY_BACK GPIOB, 9
+#define PIN_KEY_HELP GPIOB, 8
+#define PIN_LED_ALARM GPIOC, 10
+#define PIN_LED_FILTER GPIOC, 11
+#define PIN_LED_OK GPIOC, 12
+#define PIN_RS485_RX_OFF GPIOA, 11  // receiver disable
+#define PIN_RS485_TX_ON GPIOA, 12   // driver enable
 
 extern uint32_t board_hz;  // core clock
 
@@ -26,7 +39,7 @@ uint16_t board_busy_pm(void);           // time awake since the last call, per m
 extern volatile uint32_t board_isr_us;  // long interrupts add their run time here so it isn't counted as sleep
 uint32_t board_irq_save(void);
 void board_irq_restore(uint32_t s);
-uint8_t board_keys(void);               // debounced, 1 << BK_x
+uint8_t board_keys(void);               // debounced, 1 << IN_x
 uint8_t board_key_events(uint8_t *up);  // keys pressed since the last call, *up = keys released
 void board_leds(bool alarm, bool filter, bool ok);
 void board_backlight(int pct);  // target brightness in %, fades to it. Negative = off

@@ -1,6 +1,5 @@
 // Main menu tiles, the row lists and the value editor / action confirm box.
 #include "ui.h"
-#include <stdio.h>
 #include <string.h>
 
 // Menu row types
@@ -27,6 +26,14 @@ enum {
 };
 
 typedef struct menu menu_t;
+
+// MI_ENUM options that come from functions
+typedef struct {
+  const char *(*text)(int o);       // each option's text, instead of opts
+  int (*used)(val_t val, int opt);  // option actually used for opt, a fallback when there's no ESP
+  int (*list)(uint16_t *opt);       // options when they aren't 0..max, up to MAX_OPTS. Returns the count
+} opt_fn_t;
+
 // One menu row. Which fields are used depends on the type.
 typedef struct {
   uint8_t type;             // MI_*
@@ -42,24 +49,23 @@ typedef struct {
   str_t title, help, unit;  // ESP item rows take the title and unit from the item, the help from the ESP
   str_t done;               // MI_ACTION: toast shown after it, S_DONE if unset
   const char *icon;
-  const str_t *opts;                // MI_ENUM: option names, see OPTS
-  const char *(*opt_text)(int o);   // MI_ENUM: or a function giving each option's text
-  const void *target;               // MI_SUB: menu_t, MI_SCREEN: screen_t
-  void (*fmt)(char *buf);           // MI_INFO text, or a main menu tile's status line
-  int (*used)(val_t val, int opt);  // MI_ENUM: option actually used for opt, a fallback when there's no ESP
-  int (*options)(uint16_t *opt);    // MI_ENUM: options when they aren't 0..max, up to MAX_OPTS. Returns the count
-  bool (*shown)(void);              // hidden while this is false, for rows that depend on another row
+  union {
+    const str_t *opts;   // MI_ENUM: option names, see OPTS
+    const void *target;  // MI_SUB: menu_t, MI_SCREEN: screen_t
+  };
+  const opt_fn_t *fn;      // MI_ENUM: functions for the options, NULL for none
+  void (*fmt)(char *buf);  // MI_INFO text, or a main menu tile's status line
+  bool (*shown)(void);     // hidden while this is false, for rows that depend on another row
 } mitem_t;
 _Static_assert(FEAT_COUNT <= 8, "the features fit need and without");
 
 // A menu has either fixed items or a row() function that makes them.
 struct menu {
   str_t title;
-  const char *title_text;            // overrides title, for titles built at run time
+  uint8_t n;                         // number of rows
   const mitem_t *items;              // fixed rows, NULL when row() generates them
   bool (*row)(int i, mitem_t *out);  // writes row i (0..n-1) to out, false if it's hidden right now
-  uint8_t n;                         // number of rows
-  void (*prepare)(void);             // called each time the menu opens, e.g. to build title_text
+  void (*prepare)(void);             // called each time the menu opens, e.g. to set a title made at run time
 };
 
 // Row initialisers take icon, title, what the row shows or does, help, then any other fields by name.
@@ -81,55 +87,55 @@ struct menu {
   static const menu_t name = {.title = t, .items = name##_items, .n = LEN(name##_items)}
 
 // ---------------------------------------------------------------- info row texts
-static void f_temp(char *b, int16_t t) { fmt_temp(b, t, true); }
-static void i_outdoor(char *b) { f_temp(b, M.t_outdoor); }
-static void i_supply(char *b) { f_temp(b, M.t_supply); }
-static void i_extract(char *b) { f_temp(b, M.t_extract); }
-static void i_water(char *b) { f_temp(b, M.t_water); }
-static void i_room(char *b) { f_temp(b, M.t_room); }
-static void i_filter_left(char *b) {
+static void info_temp(char *b, int16_t t) { fmt_temp(b, t, true); }
+static void info_outdoor(char *b) { info_temp(b, M.t_outdoor); }
+static void info_supply(char *b) { info_temp(b, M.t_supply); }
+static void info_extract(char *b) { info_temp(b, M.t_extract); }
+static void info_water(char *b) { info_temp(b, M.t_water); }
+static void info_room(char *b) { info_temp(b, M.t_room); }
+static void info_filter_left(char *b) {
   int days = filter_days_left();
   if (!days)
     strcpy(b, _(S_CHANGE_NOW));
   else
-    sprintf(b, _(S_DAYS_LEFT), days);
+    sprint(b, _(S_DAYS_LEFT), days);
 }
-static void i_filter_hours(char *b) { sprintf(b, _(S_FILTER_HOURS), M.filter_hours); }
-static void i_picture(char *b) {
+static void info_filter_hours(char *b) { sprint(b, _(S_FILTER_HOURS), M.filter_hours); }
+static void info_picture(char *b) {
   if (pic_state() == PIC_RECEIVING)
-    sprintf(b, _(S_RECEIVING_PCT), pic_percent());
+    sprint(b, _(S_RECEIVING_PCT), pic_percent());
   else if (pic_state() == PIC_READY)
-    sprintf(b, _(S_PICTURE_SIZE), pic_width(), pic_height());
+    sprint(b, _(S_PICTURE_SIZE), pic_width(), pic_height());
   else
     strcpy(b, _(S_NONE_YET));
 }
 static void hours(char *b, uint32_t h) {
   if (h >= 1000)
-    sprintf(b, _(S_HOURS_THOUSANDS), (unsigned long) h / 1000, (unsigned long) h % 1000);
+    sprint(b, _(S_HOURS_THOUSANDS), (unsigned long) h / 1000, (unsigned long) h % 1000);
   else
-    sprintf(b, _(S_HOURS), (unsigned long) h);
+    sprint(b, _(S_HOURS), (unsigned long) h);
 }
-static void i_h_total(char *b) { hours(b, M.h_total); }
-static void i_h_stop(char *b) { hours(b, M.h_stop); }
-static void i_h_min(char *b) { hours(b, M.h_min); }
-static void i_h_normal(char *b) { hours(b, M.h_normal); }
-static void i_h_max(char *b) { hours(b, M.h_max); }
-static void i_h_rotor(char *b) { hours(b, M.h_rotor); }
-static void i_h_heater(char *b) { hours(b, M.h_heater); }
-static void i_filter_resets(char *b) { sprintf(b, "%u", M.filter_resets); }
-static void dip(char *b, int ds, str_t on, str_t off) { strcpy(b, tr((M.dip >> ds) & 1 ? on : off)); }
-static void i_ds2(char *b) { dip(b, 1, S_ON, S_OFF); }
-static void i_ds3(char *b) { dip(b, 2, S_ON, S_OFF); }
+static void info_h_total(char *b) { hours(b, M.h_total); }
+static void info_h_stop(char *b) { hours(b, M.h_stop); }
+static void info_h_min(char *b) { hours(b, M.h_min); }
+static void info_h_normal(char *b) { hours(b, M.h_normal); }
+static void info_h_max(char *b) { hours(b, M.h_max); }
+static void info_h_rotor(char *b) { hours(b, M.h_rotor); }
+static void info_h_heater(char *b) { hours(b, M.h_heater); }
+static void info_filter_resets(char *b) { sprint(b, "%u", M.filter_resets); }
+static void dip(char *b, int ds) { strcpy(b, (M.dip >> ds) & 1 ? _(S_ON) : _(S_OFF)); }
+static void info_ds2(char *b) { dip(b, 1); }
+static void info_ds3(char *b) { dip(b, 2); }
 static void panel_version(char *b, int i) {
   uint16_t v = M.panel_version[i];
   if (v)
-    sprintf(b, "%d.%d", v >> 8, v & 0xFF);
+    sprint(b, "%d.%d", v >> 8, v & 0xFF);
   else
     strcpy(b, _(S_NO_PANEL));
 }
-static void i_panel1(char *b) { panel_version(b, 0); }
-static void i_panel2(char *b) { panel_version(b, 1); }
-static void i_panel3(char *b) { panel_version(b, 2); }
+static void info_panel1(char *b) { panel_version(b, 0); }
+static void info_panel2(char *b) { panel_version(b, 1); }
+static void info_panel3(char *b) { panel_version(b, 2); }
 
 // ---------------------------------------------------------------- menus
 static const str_t O_REG[REG_COUNT] = {[REG_EXTRACT] = S_EXTRACT_AIR, [REG_SUPPLY] = S_SUPPLY_AIR};
@@ -174,21 +180,21 @@ MENU(m_vent, S_VENTILATION, ENUM(IC_FAN, S_FAN_SPEED, V_MODE, S_FAN_SPEED_HELP, 
 MENU(m_temp, S_TEMPERATURE, TEMP(IC_THERMOSTAT, S_SETPOINT, V_SETPOINT, S_SETPOINT_HELP),
      TOG(IC_FIRE, S_HEATER, V_HEATER, S_HEATER_HELP, .without = FBIT(FEAT_WATER_HEATER)),  // the unit keeps it on
      TOG(IC_SNOW, S_COOLING, V_COOLING, S_COOLING_HELP, .need = FBIT(FEAT_COOLING)), HEAD(S_SENSORS),
-     INFO(IC_THERMO, S_OUTDOOR, i_outdoor, S_OUTDOOR_HELP), INFO(IC_ARROW_R, S_SUPPLY, i_supply, S_SUPPLY_HELP),
-     INFO(IC_HOME_THERMO, S_EXTRACT, i_extract, S_EXTRACT_HELP),
-     INFO(IC_WATER, S_RETURN_WATER, i_water, S_RETURN_WATER_HELP, .need = FBIT(FEAT_WATER_HEATER)),
-     INFO(IC_THERMO, S_PANEL_SENSOR, i_room, S_PANEL_SENSOR_HELP));
+     INFO(IC_THERMO, S_OUTDOOR, info_outdoor, S_OUTDOOR_HELP), INFO(IC_ARROW_R, S_SUPPLY, info_supply, S_SUPPLY_HELP),
+     INFO(IC_HOME_THERMO, S_EXTRACT, info_extract, S_EXTRACT_HELP),
+     INFO(IC_WATER, S_RETURN_WATER, info_water, S_RETURN_WATER_HELP, .need = FBIT(FEAT_WATER_HEATER)),
+     INFO(IC_THERMO, S_PANEL_SENSOR, info_room, S_PANEL_SENSOR_HELP));
 
 #define DAY(t, d, h) SCR(IC_CALENDAR, t, SCR_DAY, h, .arg = d)
-MENU(m_sched, S_SCHEDULE, TOG(IC_CAL_CLOCK, S_WEEK_PROGRAM, V_WEEK_PROGRAM, S_WEEK_PROGRAM_HELP),
+MENU(m_sched, S_WEEK_PROGRAM, TOG(IC_CAL_CLOCK, S_WEEK_PROGRAM, V_WEEK_PROGRAM, S_WEEK_PROGRAM_HELP),
      SCR(IC_CALENDAR, S_WEEK_OVERVIEW, SCR_SCHEDULE, S_WEEK_OVERVIEW_HELP), HEAD(S_DAYS),
      DAY(S_MONDAY, 0, S_MONDAY_HELP), DAY(S_TUESDAY, 1, S_TUESDAY_HELP), DAY(S_WEDNESDAY, 2, S_WEDNESDAY_HELP),
      DAY(S_THURSDAY, 3, S_THURSDAY_HELP), DAY(S_FRIDAY, 4, S_FRIDAY_HELP), DAY(S_SATURDAY, 5, S_SATURDAY_HELP),
      DAY(S_SUNDAY, 6, S_SUNDAY_HELP));
 
-MENU(m_filter, S_FILTER, INFO(IC_FILTER, S_STATUS, i_filter_left, S_STATUS_HELP),
-     INFO(IC_COUNTER, S_RUNNING_SINCE_CHANGE, i_filter_hours, S_RUNNING_SINCE_CHANGE_HELP),
-     INFO(IC_COUNTER, S_TIMES_CHANGED, i_filter_resets, S_TIMES_CHANGED_HELP),
+MENU(m_filter, S_FILTER, INFO(IC_FILTER, S_STATUS, info_filter_left, S_STATUS_HELP),
+     INFO(IC_COUNTER, S_RUNNING_SINCE_CHANGE, info_filter_hours, S_RUNNING_SINCE_CHANGE_HELP),
+     INFO(IC_COUNTER, S_TIMES_CHANGED, info_filter_resets, S_TIMES_CHANGED_HELP),
      NUM(IC_CALENDAR, S_CHANGE_EVERY, V_FILTER_INTERVAL, S_CHANGE_EVERY_HELP, .step = 30, .unit = S_UNIT_DAYS),
      ACT(IC_RESTORE, S_FILTERS_CHANGED, A_RESET_FILTER, S_FILTERS_CHANGED_HELP));
 
@@ -200,10 +206,11 @@ MENU(m_alarms, S_ALARMS, SCR(IC_BELL_RING, S_ACTIVE_ALARMS, SCR_ALARMS, S_ACTIVE
      ACT(IC_CHECK_C, S_RESET_ALARMS, A_RESET_ALARMS, S_RESET_ALARMS_HELP),
      ACT(IC_DELETE, S_CLEAR_HISTORY, A_CLEAR_HISTORY, S_CLEAR_HISTORY_HELP, .flags = MF_DANGER));
 
-MENU(m_stats, S_STATISTICS, INFO(IC_COUNTER, S_TOTAL, i_h_total, S_TOTAL_HOURS_HELP),
-     INFO(IC_FAN_OFF, S_STOPPED, i_h_stop, S_STOPPED_HOURS_HELP), INFO(IC_FAN, S_MIN, i_h_min, S_MIN_HOURS_HELP),
-     INFO(IC_FAN, S_NORMAL, i_h_normal, S_NORMAL_HOURS_HELP), INFO(IC_FAN, S_MAX, i_h_max, S_MAX_HOURS_HELP),
-     INFO(IC_ROTOR, S_ROTOR, i_h_rotor, S_ROTOR_HOURS_HELP), INFO(IC_FIRE, S_HEATER, i_h_heater, S_HEATER_HOURS_HELP));
+MENU(m_stats, S_STATISTICS, INFO(IC_COUNTER, S_TOTAL, info_h_total, S_TOTAL_HOURS_HELP),
+     INFO(IC_FAN_OFF, S_STOPPED, info_h_stop, S_STOPPED_HOURS_HELP), INFO(IC_FAN, S_MIN, info_h_min, S_MIN_HOURS_HELP),
+     INFO(IC_FAN, S_NORMAL, info_h_normal, S_NORMAL_HOURS_HELP), INFO(IC_FAN, S_MAX, info_h_max, S_MAX_HOURS_HELP),
+     INFO(IC_ROTOR, S_ROTOR, info_h_rotor, S_ROTOR_HOURS_HELP),
+     INFO(IC_FIRE, S_HEATER, info_h_heater, S_HEATER_HOURS_HELP));
 
 #define LIGHT(ic, t, v, h, fl) NUM(ic, t, v, h, .step = 5, .unit = S_UNIT_PCT, .flags = MF_BACKLIGHT | (fl))
 MENU(m_night, S_NIGHT_MODE, TOG(IC_NIGHT, S_NIGHT_MODE, V_NIGHT, S_NIGHT_MODE_HELP),
@@ -216,7 +223,7 @@ MENU(m_night, S_NIGHT_MODE, TOG(IC_NIGHT, S_NIGHT_MODE, V_NIGHT, S_NIGHT_MODE_HE
 // The four dashboard tiles show one of the unit's values, or any ESP item except buttons
 static const char *tile_opt(int o) {
   const char *name = tile_name(o);
-  return name ? name : "\xE2\x80\x93";  // en dash for an item that's gone
+  return name ? name : NO_VALUE;  // an item that's gone
 }
 
 static int tile_options(uint16_t *opt) {
@@ -228,8 +235,8 @@ static int tile_options(uint16_t *opt) {
       opt[n++] = (uint16_t) (TILE_ITEM + M.items[i].id);
   return n;
 }
-#define TILE_ROW(t, v) \
-  ENUM(IC_MONITOR, t, v, S_TILE_HELP, .opt_text = tile_opt, .used = tile_used, .options = tile_options)
+static const opt_fn_t TILE_OPTS = {.text = tile_opt, .used = tile_used, .list = tile_options};
+#define TILE_ROW(t, v) ENUM(IC_MONITOR, t, v, S_TILE_HELP, .fn = &TILE_OPTS)
 MENU(m_tiles, S_DASHBOARD_TILES, TILE_ROW(S_TILE_1, V_TILE1), TILE_ROW(S_TILE_2, V_TILE2), TILE_ROW(S_TILE_3, V_TILE3),
      TILE_ROW(S_TILE_4, V_TILE4));
 
@@ -239,8 +246,8 @@ MENU(m_views, S_VIEWS, TOG(IC_FAN, S_AIRFLOW, V_SHOW_FLOW, S_AIRFLOW_HELP),
      TOG(IC_LEAF, S_COMFORT, V_SHOW_COMFORT, S_COMFORT_HELP, .need = FBIT(FEAT_ESP)),
      TOG(IC_HASS, S_SMART_HOME, V_SHOW_SMART, S_SMART_HOME_HELP, .need = FBIT(FEAT_ESP)));
 
-MENU(m_home, S_HOME_SCREEN,
-     ENUM(IC_HOME, S_START_VIEW, V_HOME_VIEW, S_START_VIEW_HELP, OPTS(O_VIEW), .used = view_used),
+static const opt_fn_t VIEW_OPTS = {.used = view_used};
+MENU(m_home, S_HOME_SCREEN, ENUM(IC_HOME, S_START_VIEW, V_HOME_VIEW, S_START_VIEW_HELP, OPTS(O_VIEW), .fn = &VIEW_OPTS),
      SUB(IC_EYE, S_VIEWS, m_views, S_VIEWS_HELP),
      ENUM(IC_THERMO, S_BIG_TEMPERATURE, V_DASH_TEMP, S_BIG_TEMPERATURE_HELP, OPTS(O_BIG)),
      SUB(IC_MONITOR, S_DASHBOARD_TILES, m_tiles, S_DASHBOARD_TILES_HELP));
@@ -249,11 +256,12 @@ MENU(m_lights, S_LIGHTS, ENUM(IC_CHECK_C, S_OK_LIGHT, V_LED_OK, S_OK_LIGHT_HELP,
      TOG(IC_ALERT, S_ALARM_LIGHT, V_LED_ALARM, S_ALARM_LIGHT_HELP),
      TOG(IC_FILTER, S_FILTER_LIGHT, V_LED_FILTER, S_FILTER_LIGHT_HELP));
 
+static const opt_fn_t LANG_OPTS = {.text = lang_name};
 MENU(m_display, S_DISPLAY, ENUM(IC_PALETTE, S_THEME, V_THEME, S_THEME_HELP, OPTS(THEME_NAMES)),
      LIGHT(IC_BRIGHTNESS, S_BRIGHTNESS, V_BRIGHTNESS, S_BRIGHTNESS_HELP, 0),
      SUB(IC_NIGHT, S_NIGHT_MODE, m_night, S_NIGHT_MODE_HELP), SUB(IC_HOME, S_HOME_SCREEN, m_home, S_HOME_SCREEN_HELP),
      SUB(IC_BULB, S_LIGHTS, m_lights, S_LIGHTS_HELP),
-     ENUM(IC_LIST, S_LANGUAGE, V_LANGUAGE, S_LANGUAGE_HELP, .opt_text = lang_name),
+     ENUM(IC_LIST, S_LANGUAGE, V_LANGUAGE, S_LANGUAGE_HELP, .fn = &LANG_OPTS),
      TOG(IC_CLOCK, S_N_24_HOUR_CLOCK, V_CLOCK_24H, S_N_24_HOUR_CLOCK_HELP),
      ENUM(IC_THERMO, S_TEMPERATURES, V_TEMP_DEC, S_TEMPERATURES_HELP, OPTS(O_DECIMALS)),
      TOG(IC_HELP, S_KEY_HINTS, V_KEY_HINTS, S_KEY_HINTS_HELP),
@@ -262,14 +270,15 @@ MENU(m_display, S_DISPLAY, ENUM(IC_PALETTE, S_THEME, V_THEME, S_THEME_HELP, OPTS
 // The text rows only matter when there's text on a picture
 static bool text_on_picture(void) { return M.screensaver == SAVER_PIC_CLOCK || M.screensaver == SAVER_PIC_ALL; }
 
+static const opt_fn_t SAVER_OPTS = {.used = saver_used};
 MENU(m_saver, S_SCREENSAVER, ENUM(IC_SLEEP, S_IDLE_AFTER, V_IDLE_AFTER, S_IDLE_AFTER_HELP, OPTS(O_IDLE_AFTER)),
      LIGHT(IC_NIGHT, S_IDLE_BRIGHTNESS, V_IDLE_BRIGHTNESS, S_IDLE_BRIGHTNESS_HELP, MF_ZERO_OFF),
-     ENUM(IC_MONITOR, S_SHOW, V_SCREENSAVER, S_SCREENSAVER_HELP, OPTS(O_SAVER), .used = saver_used),
+     ENUM(IC_MONITOR, S_SHOW, V_SCREENSAVER, S_SCREENSAVER_HELP, OPTS(O_SAVER), .fn = &SAVER_OPTS),
      ENUM(IC_LIST, S_TEXT_ON_PICTURE, V_SAVER_TEXT, S_TEXT_ON_PICTURE_HELP, OPTS(O_SAVER_TEXT), .need = FBIT(FEAT_ESP),
           .shown = text_on_picture),
      ENUM(IC_UP, S_TEXT_POSITION, V_SAVER_TOP, S_TEXT_POSITION_HELP, OPTS(O_SAVER_POS), .need = FBIT(FEAT_ESP),
           .shown = text_on_picture),
-     INFO(IC_PALETTE, S_PICTURE, i_picture, S_PICTURE_HELP, .need = FBIT(FEAT_ESP)),
+     INFO(IC_PALETTE, S_PICTURE, info_picture, S_PICTURE_HELP, .need = FBIT(FEAT_ESP)),
      TOG(IC_HOME_CLOCK, S_BACK_TO_START_VIEW, V_GO_HOME, S_BACK_TO_START_VIEW_HELP));
 
 MENU(m_time, S_DATE_AND_TIME, NUM(IC_CLOCK, S_HOUR, V_HOUR, S_HOUR_HELP),
@@ -374,10 +383,10 @@ MENU(m_adv_test, S_TEST, ENUM(IC_FAN, S_FANS, V_TEST_SPEED, S_TEST_FANS_HELP, OP
      TOG(IC_FIRE, S_HEATER, V_TEST_HEATER, S_TEST_HEATER_HELP), TOG(IC_ROTOR, S_ROTOR, V_TEST_ROTOR, S_TEST_ROTOR_HELP),
      NUM(IC_SNOW, S_COOLING, V_TEST_COOLING, S_TEST_COOLING_HELP, PCT_OR_OFF, COOL));
 
-MENU(m_adv_unit, S_UNIT, INFO(IC_ROTOR, S_DS2_ROTOR_GUARD, i_ds2, S_DS2_HELP),
-     INFO(IC_ROTOR, S_DS3_ROTOR_MOTOR, i_ds3, S_DS3_HELP), HEAD(S_PANELS),
-     INFO(IC_MONITOR, S_PANEL_1, i_panel1, S_PANELS_HELP), INFO(IC_MONITOR, S_PANEL_2, i_panel2, S_PANELS_HELP),
-     INFO(IC_MONITOR, S_PANEL_3, i_panel3, S_PANELS_HELP));
+MENU(m_adv_unit, S_UNIT, INFO(IC_ROTOR, S_DS2_ROTOR_GUARD, info_ds2, S_DS2_HELP),
+     INFO(IC_ROTOR, S_DS3_ROTOR_MOTOR, info_ds3, S_DS3_HELP), HEAD(S_PANELS),
+     INFO(IC_MONITOR, S_PANEL_1, info_panel1, S_PANELS_HELP), INFO(IC_MONITOR, S_PANEL_2, info_panel2, S_PANELS_HELP),
+     INFO(IC_MONITOR, S_PANEL_3, info_panel3, S_PANELS_HELP));
 
 MENU(m_advanced, S_ADVANCED, SUB(IC_FAN, S_FANS, m_adv_fans, S_ADV_FANS_HELP),
      SUB(IC_TUNE, S_REGULATION, m_adv_reg, S_REGULATION_HELP),
@@ -410,7 +419,7 @@ static const menu_t m_smart = {.title = S_SMART_HOME, .row = smart_row, .n = N_I
 
 // ---------------------------------------------------------------- main menu
 // Comfort and Smart home tile status. The first two sensor values, else the item count.
-static void s_page(char *b, bool comfort) {
+static void tile_page(char *b, bool comfort) {
   int n = 0, shown = 0;
   b[0] = 0;
   for (int i = 0; i < N_ITEMS; i++) {
@@ -429,64 +438,64 @@ static void s_page(char *b, bool comfort) {
   else if (!n)
     strcpy(b, _(S_NOTHING_YET));
   else if (!shown)
-    sprintf(b, n == 1 ? _(S_N_ITEM) : _(S_N_ITEMS), n);
+    sprint(b, n == 1 ? _(S_N_ITEM) : _(S_N_ITEMS), n);
 }
-static void s_comfort(char *b) { s_page(b, true); }
-static void s_smart(char *b) { s_page(b, false); }
+static void tile_comfort(char *b) { tile_page(b, true); }
+static void tile_smart(char *b) { tile_page(b, false); }
 
-static void s_vent(char *b) {
+static void tile_vent(char *b) {
   if (M.boost_left)
-    sprintf(b, _(S_BOOST_MIN), M.boost_left);
+    sprint(b, _(S_BOOST_MIN), M.boost_left);
   else
-    sprintf(b, "%s, %d%%", tr(MODE_NAMES[M.mode_now]), M.fan_sup);
+    sprint(b, "%s, %d%%", tr(MODE_NAMES[M.mode_now]), M.fan_sup);
 }
-static void s_temp(char *b) {
+static void tile_temp(char *b) {
   char a[16];
-  sprintf(b, _(S_TARGET), fmt_target(a, M.setpoint));
+  sprint(b, _(S_TARGET), fmt_target(a, M.setpoint));
 }
-static void s_sched(char *b) { strcpy(b, M.week_program ? _(S_PROGRAM_ON) : _(S_OFF)); }
-static void s_alarms(char *b) {
+static void tile_sched(char *b) { strcpy(b, M.week_program ? _(S_PROGRAM_ON) : _(S_OFF)); }
+static void tile_alarms(char *b) {
   if (M.n_alarms)
-    sprintf(b, _(S_N_ACTIVE), M.n_alarms);
+    sprint(b, _(S_N_ACTIVE), M.n_alarms);
   else
     strcpy(b, _(S_ALL_CLEAR));
 }
-static void s_stats(char *b) {
+static void tile_stats(char *b) {
   char h[16];
   hours(h, M.h_total);
-  sprintf(b, _(S_HOURS_TOTAL), h);
+  sprint(b, _(S_HOURS_TOTAL), h);
 }
-static void s_display(char *b) { sprintf(b, "%s, %d%%", tr(THEME_NAMES[M.theme % N_THEMES]), M.brightness); }
-static void s_saver(char *b) { strcpy(b, tr(O_SAVER[saver_used(V_SCREENSAVER, M.screensaver)])); }
-static void s_time(char *b) {
+static void tile_display(char *b) { sprint(b, "%s, %d%%", tr(THEME_NAMES[M.theme % N_THEMES]), M.brightness); }
+static void tile_saver(char *b) { strcpy(b, tr(O_SAVER[saver_used(V_SCREENSAVER, M.screensaver)])); }
+static void tile_time(char *b) {
   char t[12];
-  sprintf(b, "%02d.%02d.%04d %s", M.dd, M.mo, M.yy, fmt_hm(t, M.hh * 60 + M.mi));
+  sprint(b, "%02d.%02d.%04d %s", M.dd, M.mo, M.yy, fmt_hm(t, M.hh * 60 + M.mi));
 }
-static void s_advanced(char *b) { strcpy(b, _(S_INSTALLER_SETTINGS)); }
+static void tile_advanced(char *b) { strcpy(b, _(S_INSTALLER_SETTINGS)); }
 static bool advanced_on(void) { return M.advanced; }
-static void s_system(char *b) {
+static void tile_system(char *b) {
   if (M.bus_offline)
     strcpy(b, _(S_NO_CONTACT));
   else if (M.cx60_version)
-    sprintf(b, _(S_ADDRESS_CX60), M.bus_addr, M.cx60_version >> 8, M.cx60_version & 0xFF);
+    sprint(b, _(S_ADDRESS_CX60), M.bus_addr, M.cx60_version >> 8, M.cx60_version & 0xFF);
   else
-    sprintf(b, _(S_ADDRESS), M.bus_addr);
+    sprint(b, _(S_ADDRESS), M.bus_addr);
 }
 
 // Main menu tiles. Each opens a submenu, .fmt writes the status line under the title.
-MENU(m_main, S_MENU, SUB(IC_FAN, S_VENTILATION, m_vent, S_VENTILATION_HELP, .fmt = s_vent),
-     SUB(IC_THERMOSTAT, S_TEMPERATURE, m_temp, S_TEMPERATURE_HELP, .fmt = s_temp),
-     SUB(IC_LEAF, S_COMFORT, m_comfort, S_COMFORT_MENU_HELP, .fmt = s_comfort, .need = FBIT(FEAT_ESP)),
-     SUB(IC_HASS, S_SMART_HOME, m_smart, S_SMART_HOME_HELP, .fmt = s_smart, .need = FBIT(FEAT_ESP)),
-     SUB(IC_CAL_CLOCK, S_SCHEDULE, m_sched, S_SCHEDULE_HELP, .fmt = s_sched),
-     SUB(IC_FILTER, S_FILTER, m_filter, S_FILTER_HELP, .fmt = i_filter_left),
-     SUB(IC_BELL, S_ALARMS, m_alarms, S_ALARMS_HELP, .fmt = s_alarms),
-     SUB(IC_CHART, S_STATISTICS, m_stats, S_STATISTICS_HELP, .fmt = s_stats),
-     SUB(IC_PALETTE, S_DISPLAY, m_display, S_DISPLAY_HELP, .fmt = s_display),
-     SUB(IC_MONITOR, S_SCREENSAVER, m_saver, S_SCREENSAVER_MENU_HELP, .fmt = s_saver),
-     SUB(IC_CLOCK, S_DATE_AND_TIME, m_time, S_DATE_AND_TIME_HELP, .fmt = s_time),
-     SUB(IC_CHIP, S_SYSTEM, m_system, S_SYSTEM_HELP, .fmt = s_system),
-     SUB(IC_COG, S_ADVANCED, m_advanced, S_ADVANCED_HELP, .fmt = s_advanced, .shown = advanced_on));
+MENU(m_main, S_MENU, SUB(IC_FAN, S_VENTILATION, m_vent, S_VENTILATION_HELP, .fmt = tile_vent),
+     SUB(IC_THERMOSTAT, S_TEMPERATURE, m_temp, S_TEMPERATURE_HELP, .fmt = tile_temp),
+     SUB(IC_LEAF, S_COMFORT, m_comfort, S_COMFORT_MENU_HELP, .fmt = tile_comfort, .need = FBIT(FEAT_ESP)),
+     SUB(IC_HASS, S_SMART_HOME, m_smart, S_SMART_HOME_HELP, .fmt = tile_smart, .need = FBIT(FEAT_ESP)),
+     SUB(IC_CAL_CLOCK, S_WEEK_PROGRAM, m_sched, S_SCHEDULE_HELP, .fmt = tile_sched),
+     SUB(IC_FILTER, S_FILTER, m_filter, S_FILTER_HELP, .fmt = info_filter_left),
+     SUB(IC_BELL, S_ALARMS, m_alarms, S_ALARMS_HELP, .fmt = tile_alarms),
+     SUB(IC_CHART, S_STATISTICS, m_stats, S_STATISTICS_HELP, .fmt = tile_stats),
+     SUB(IC_PALETTE, S_DISPLAY, m_display, S_DISPLAY_HELP, .fmt = tile_display),
+     SUB(IC_MONITOR, S_SCREENSAVER, m_saver, S_SCREENSAVER_MENU_HELP, .fmt = tile_saver),
+     SUB(IC_CLOCK, S_DATE_AND_TIME, m_time, S_DATE_AND_TIME_HELP, .fmt = tile_time),
+     SUB(IC_CHIP, S_SYSTEM, m_system, S_SYSTEM_HELP, .fmt = tile_system),
+     SUB(IC_COG, S_ADVANCED, m_advanced, S_ADVANCED_HELP, .fmt = tile_advanced, .shown = advanced_on));
 
 #define TILE_W 149
 #define TILE_H 44
@@ -507,19 +516,14 @@ SCREEN_STATE(grid_t, grid);
 
 static void menu_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  memset(grid, 0, sizeof *grid);
   ui_hints(S_MOVE, S_OPEN, S_BACK, S_HELP);
   for (unsigned i = 0; i < m_main.n; i++) {
     const mitem_t *it = &m_main.items[i];
     if (ui_has(it->need) && (!it->shown || it->shown()))
       grid->tile[grid->n++] = it;
   }
-  frame_t *f = ui_frame();  // tiles may have gone since
-  int rows = (grid->n + 1) / 2, last_top = rows > TILE_ROWS ? rows - TILE_ROWS : 0;
-  if (f->sel >= grid->n)
-    f->sel = grid->n - 1;
-  if (f->top > last_top)
-    f->top = (int16_t) last_top;
+  int rows = (grid->n + 1) / 2;
+  clamp_sel(grid->n, rows > TILE_ROWS ? rows - TILE_ROWS : 0);
   for (int k = 0; k < TILE_SLOTS && k < grid->n; k++) {
     lv_obj_t *t =
         mk_box(b, 8 + (k % 2) * (TILE_W + TILE_GAP), 4 + (k / 2) * (TILE_H + TILE_GAP), TILE_W, TILE_H, T.surface, 10);
@@ -560,23 +564,16 @@ static void menu_update(void) {
     lv_obj_set_style_text_color(grid->icon[k], sel ? T.on_accent : T.text, 0);
     it->fmt(buf);
     lv_label_set_text(grid->status[k], buf);
-    lv_obj_set_style_text_color(grid->status[k], it->fmt == s_alarms && M.n_alarms ? T.err : T.dim, 0);
+    lv_obj_set_style_text_color(grid->status[k], it->fmt == tile_alarms && M.n_alarms ? T.err : T.dim, 0);
   }
   ui_help(grid->tile[f->sel]->help);
 }
 
 static bool menu_key(int k) {
-  frame_t *f = ui_frame();
-  if (k == KEY_UP || k == KEY_DOWN) {
-    f->sel = step_sel(f->sel, k, grid->n);
-    menu_update();
-    return true;
-  }
-  if (k == KEY_OK) {
-    ui_push(&SCR_LIST, (intptr_t) grid->tile[f->sel]->target);
-    return true;
-  }
-  return false;
+  if (k != KEY_OK)
+    return sel_key(k, grid->n);
+  ui_push(&SCR_LIST, (intptr_t) grid->tile[ui_frame()->sel]->target);
+  return true;
 }
 
 static const char *menu_selected(void) { return tr(grid->tile[ui_frame()->sel]->title); }
@@ -592,10 +589,11 @@ static void period_name(void) {
   int n = 0;
   for (int i = 0; i < M.n_periods[M.period.day]; i++) {
     n++;
-    if (M.week[M.period.day][i].idx == M.period.idx)
+    if (M.week[M.period.day][i].idx == M.period.p.idx)
       break;
   }
-  snprintf(period_title, sizeof period_title, _(S_DAY_PERIOD), tr(DAY_NAMES[M.period.day % 7]), n);
+  lv_snprintf(period_title, sizeof period_title, _(S_DAY_PERIOD), tr(DAY_NAMES[M.period.day % 7]), n);
+  ui_set_title(period_title);
 }
 
 static const mitem_t period_items[] = {
@@ -606,8 +604,7 @@ static const mitem_t period_items[] = {
     ACT(IC_DELETE, S_REMOVE_PERIOD, A_REMOVE_PERIOD, S_REMOVE_PERIOD_HELP, .flags = MF_POP_PARENT,
         .done = S_PERIOD_REMOVED),
 };
-static const menu_t m_period = {
-    .title_text = period_title, .items = period_items, .n = LEN(period_items), .prepare = period_name};
+static const menu_t m_period = {.items = period_items, .n = LEN(period_items), .prepare = period_name};
 
 const menu_t *period_menu(void) { return &m_period; }
 
@@ -615,6 +612,10 @@ const menu_t *period_menu(void) { return &m_period; }
 #define ROW_H 34
 #define ROWS 5  // rows on screen, their widgets are reused as the list scrolls
 #define MAX_ROWS 24
+#define SWITCH_W 36  // toggle switch, its knob and the gap around the knob
+#define KNOB 14
+#define KNOB_GAP 2
+#define SWITCH_H (KNOB + 2 * KNOB_GAP)
 
 static const char *item_title(const mitem_t *it) {
   const item_t *s = item_of(it->val);
@@ -626,7 +627,9 @@ static const char *item_unit(const mitem_t *it) {  // "" for none
   return s ? s->unit : tr(it->unit);
 }
 
-static const char *opt_text(const mitem_t *it, int o) { return it->opt_text ? it->opt_text(o) : tr(it->opts[o]); }
+static const char *opt_text(const mitem_t *it, int o) {
+  return it->fn && it->fn->text ? it->fn->text(o) : tr(it->opts[o]);
+}
 
 // SCR_LIST state. Only ROWS row widgets exist, slot k shows list row shown[k].
 typedef struct {
@@ -666,7 +669,7 @@ static const char *number_only(const mitem_t *it, int32_t v, char *buf) {
 // The number with its unit, or Off
 static void number_text(const mitem_t *it, int32_t v, char *buf) {
   if (v == ITEM_UNKNOWN && item_of(it->val)) {
-    strcpy(buf, "\xE2\x80\x93");  // en dash, an item with no value
+    strcpy(buf, NO_VALUE);  // an item with no value
     return;
   }
   number_only(it, v, buf);
@@ -675,7 +678,7 @@ static void number_text(const mitem_t *it, int32_t v, char *buf) {
 }
 
 // Option actually used for o. A fallback when o needs the ESP and there isn't one
-static int opt_used(const mitem_t *it, int o) { return it->used ? it->used((val_t) it->val, o) : o; }
+static int opt_used(const mitem_t *it, int o) { return it->fn && it->fn->used ? it->fn->used((val_t) it->val, o) : o; }
 
 static void value_text(const mitem_t *it, char *buf) {
   int32_t v = val_get(it->val);
@@ -709,7 +712,7 @@ static bool is_on(const mitem_t *it) {
 static void toggle_draw(lv_obj_t *sw, bool on) {
   lv_obj_set_style_bg_color(sw, on ? T.accent : T.surface2, 0);
   lv_obj_t *knob = lv_obj_get_child(sw, 0);
-  lv_obj_set_x(knob, on ? 18 : 2);
+  lv_obj_set_x(knob, on ? SWITCH_W - KNOB - KNOB_GAP : KNOB_GAP);
   lv_obj_set_style_bg_color(knob, on ? T.on_accent : T.dim, 0);
 }
 
@@ -764,8 +767,8 @@ static void list_row(int k, int r) {
   }
   lv_obj_set_pos(mk_label(s, &font_f16, T.text, item_title(it)), x, 6);
   if (it->type == MI_TOGGLE) {
-    lv_obj_t *sw = list->val[k] = mk_box(s, SCR_W - 54, 8, 36, 18, T.surface2, 9);
-    mk_box(sw, 2, 2, 14, 14, T.dim, 7);
+    lv_obj_t *sw = list->val[k] = mk_box(s, SCR_W - 54, 8, SWITCH_W, SWITCH_H, T.surface2, SWITCH_H / 2);
+    mk_box(sw, KNOB_GAP, KNOB_GAP, KNOB, KNOB, T.dim, KNOB / 2);
   } else if (it->type == MI_SUB || it->type == MI_SCREEN || it->type == MI_ACTION || it->type == MI_PRESS) {
     const char *ic = it->type == MI_PRESS ? IC_PLAY : it->type == MI_ACTION ? IC_DOTS : IC_RIGHT;
     lv_obj_set_pos(mk_icon(s, &icons_16, T.faint, ic), SCR_W - 34, 8);
@@ -800,11 +803,10 @@ static void place_rows(int top) {
 }
 
 static void list_build(lv_obj_t *b, intptr_t arg) {
-  memset(list, 0, sizeof *list);
   list->m = (const menu_t *) arg;
+  ui_set_title(tr(list->m->title));  // prepare() may set another
   if (list->m->prepare)
     list->m->prepare();
-  ui_set_title(list->m->title_text ? list->m->title_text : tr(list->m->title));
   if (list->m->row && !M.esp_online) {  // an ESP menu, stale while the ESP is away
     mk_empty(b, T.faint, IC_WIFI_OFF, _(S_ESP_NOT_CONNECTED),
              list->m == &m_comfort ? _(S_COMFORT_NEEDS_ESP) : _(S_SMART_NEEDS_ESP));
@@ -817,22 +819,15 @@ static void list_build(lv_obj_t *b, intptr_t arg) {
     ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
     return;
   }
-  frame_t *f = ui_frame();  // the list may have got shorter since
-  int last_top = list->n > ROWS ? list->n - ROWS : 0;
-  if (f->sel >= list->n)
-    f->sel = (int16_t) (list->n - 1);
-  if (f->top > last_top)
-    f->top = (int16_t) last_top;
+  clamp_sel(list->n, list->n > ROWS ? list->n - ROWS : 0);
+  frame_t *f = ui_frame();
   while (f->sel < list->n - 1 && !selectable(f->sel))
     f->sel++;
 
   list->sel_bg = mk_box(b, 6, 0, SCR_W - 12, ROW_H - 2, T.surface, 8);  // created first so it's behind the rows
   mk_box(list->sel_bg, 0, 7, 3, ROW_H - 16, T.accent, 2);
   for (int k = 0; k < slots(); k++) {
-    lv_obj_t *s = list->slot[k] = lv_obj_create(b);
-    lv_obj_remove_style_all(s);
-    lv_obj_set_size(s, SCR_W, ROW_H);
-    lv_obj_clear_flag(s, LV_OBJ_FLAG_SCROLLABLE);
+    list->slot[k] = mk_group(b, SCR_W, ROW_H);
     list->shown[k] = -1;
   }
   if (list->n > ROWS) {
@@ -846,10 +841,8 @@ static void list_build(lv_obj_t *b, intptr_t arg) {
   lv_obj_set_pos(list->help, 12, ROWS * ROW_H + 6);
 }
 
-static void list_update(void) {
-  frame_t *f = ui_frame();
-  if (!list->n)
-    return;
+// Scrolls so the selected row and the header above it are in view, and moves the highlight and scroll bar
+static void list_scroll(frame_t *f) {
   keep_in_view(&f->top, f->sel, ROWS);
   if (f->top > 0 && f->sel - 1 < f->top && row_type(f->sel - 1) == MI_HEAD)
     f->top--;  // keep its header in view
@@ -859,6 +852,10 @@ static void list_update(void) {
     int track = ROWS * ROW_H - 8, len = lv_obj_get_height(list->scroll);
     lv_obj_set_y(list->scroll, (track - len) * f->top / (list->n - ROWS));
   }
+}
+
+// The switches and values of the rows shown
+static void list_values(void) {
   char buf[48];
   mitem_t b;
   for (int k = 0; k < slots(); k++) {
@@ -872,35 +869,32 @@ static void list_update(void) {
       lv_label_set_text(list->val[k], buf);
     }
   }
-  const mitem_t *it = row(f->sel, &b);
-  if (it->help == S_ITEM_HELP) {  // ESP item help, requested when the row is selected
-    const char *h = link_item_help(it->val - V_ITEM_FIRST);
-    lv_label_set_text(list->help, h ? h : "");
+}
+
+// The help ? shows for a row. An ESP item's comes from the ESP, asked for when the row is selected.
+static void row_help(const mitem_t *it) {
+  if (it->help == S_ITEM_HELP)
     ui_help_item(it->val - V_ITEM_FIRST);
-  } else {
-    lv_label_set_text(list->help, tr(it->help));
+  else
     ui_help(it->help);
-  }
-  switch (it->type) {
-    case MI_NUM:
-    case MI_ENUM:
-      ui_hints(S_MOVE, S_CHANGE, S_BACK, S_HELP);
-      break;
-    case MI_TOGGLE:
-      ui_hints(S_MOVE, read_only(it) ? S_NONE : S_SWITCH, S_BACK, S_HELP);
-      break;
-    case MI_INFO:
-      ui_hints(S_MOVE, S_NONE, S_BACK, S_HELP);
-      break;
-    case MI_ACTION:
-      ui_hints(S_MOVE, S_RUN, S_BACK, S_HELP);
-      break;
-    case MI_PRESS:
-      ui_hints(S_MOVE, read_only(it) ? S_NONE : S_PRESS, S_BACK, S_HELP);
-      break;
-    default:
-      ui_hints(S_MOVE, S_OPEN, S_BACK, S_HELP);
-  }
+}
+
+// What OK does on each kind of row
+static const str_t OK_HINT[] = {[MI_SUB] = S_OPEN,   [MI_NUM] = S_CHANGE, [MI_ENUM] = S_CHANGE, [MI_TOGGLE] = S_SWITCH,
+                                [MI_ACTION] = S_RUN, [MI_INFO] = S_NONE,  [MI_SCREEN] = S_OPEN, [MI_PRESS] = S_PRESS};
+
+static void list_update(void) {
+  frame_t *f = ui_frame();
+  if (!list->n)
+    return;
+  list_scroll(f);
+  list_values();
+  mitem_t b;
+  const mitem_t *it = row(f->sel, &b);
+  const char *h = it->help == S_ITEM_HELP ? link_item_help(it->val - V_ITEM_FIRST) : tr(it->help);
+  lv_label_set_text(list->help, h ? h : "");
+  row_help(it);
+  ui_hints(S_MOVE, read_only(it) ? S_NONE : OK_HINT[it->type], S_BACK, S_HELP);
 }
 
 static mitem_t edit_row;  // copy of a generated row being edited
@@ -979,14 +973,18 @@ static struct {
 
 #define EDIT_W 272  // width of the editor card, and of the text inside it
 #define EDIT_TEXT_W 244
+#define EDIT_TOP 40  // where the card's content starts, under its title
+#define OPT_H 24     // option row height
+
+static int opt_rows(void) { return ed.n < OPT_ROWS ? ed.n : OPT_ROWS; }  // options shown
 
 // Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle.
 static void offer_options(const mitem_t *it, bool rebuild) {
   int now = opt_used(it, ed.v);
   uint16_t opts[MAX_OPTS];
   int n = 0;
-  if (it->options)
-    n = it->options(opts);
+  if (it->fn && it->fn->list)
+    n = it->fn->list(opts);
   else
     for (int o = ed.min; o <= ed.max && n < MAX_OPTS; o++)
       opts[n++] = (uint16_t) o;
@@ -998,7 +996,7 @@ static void offer_options(const mitem_t *it, bool rebuild) {
       ed.offer[ed.n++] = opts[i];
     }
   ed.v = ed.offer[ed.pos];
-  int rows = ed.n < OPT_ROWS ? ed.n : OPT_ROWS, first = rebuild ? ed.first : ed.pos - rows / 2;
+  int rows = opt_rows(), first = rebuild ? ed.first : ed.pos - rows / 2;
   ed.first = (int16_t) (first < 0 ? 0 : first > ed.n - rows ? ed.n - rows : first);
 }
 
@@ -1012,26 +1010,33 @@ static void edit_number(lv_obj_t *card, const mitem_t *it) {
   ui_hints(S_ADJUST, S_SAVE, S_CANCEL, S_HELP);
 }
 
-static void edit_options(lv_obj_t *card, int rows) {
-  ed.opt_bg = mk_box(card, 8, 0, EDIT_W - 16, 22, T.accent_soft, 6);
-  for (int i = 0; i < rows; i++) {
+static void edit_options(lv_obj_t *card) {
+  ed.opt_bg = mk_box(card, 8, 0, EDIT_W - 16, OPT_H - 2, T.accent_soft, 6);
+  for (int i = 0; i < opt_rows(); i++) {
     ed.opts[i] = mk_label(card, &font_f14, T.text, "");
-    lv_obj_set_pos(ed.opts[i], 38, 40 + i * 24);
+    lv_obj_set_pos(ed.opts[i], 38, EDIT_TOP + i * OPT_H);
   }
   ed.check = mk_icon(card, &icons_16, T.accent, IC_CHECK);  // marks the current setting
   ui_hints(S_CHOOSE, S_SAVE, S_CANCEL, S_HELP);
 }
 
+static const char *confirm_warning(const mitem_t *it) {
+  return tr(it->flags & MF_DANGER ? S_HOLD_OK_WARNING : S_PRESS_OK);
+}
+
+// Height of the action confirm box, the question with the warning below it at *warning_y
+static int confirm_height(const mitem_t *it, int *warning_y) {
+  lv_point_t qs, ws;
+  lv_txt_get_size(&qs, tr(it->help), &font_f14, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  lv_txt_get_size(&ws, confirm_warning(it), &font_f12, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  *warning_y = EDIT_TOP + qs.y + 10;
+  return *warning_y + ws.y + 14;
+}
+
 // Action confirm box. The help text says what it does, then how to confirm.
-static void edit_confirm(lv_obj_t *card, const mitem_t *it, const char *warning, int warning_y) {
-  lv_obj_t *q = mk_label(card, &font_f14, T.text, tr(it->help));
-  lv_obj_set_width(q, EDIT_TEXT_W);
-  lv_label_set_long_mode(q, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(q, 14, 40);
-  lv_obj_t *w = mk_label(card, &font_f12, T.warn, warning);
-  lv_obj_set_width(w, EDIT_TEXT_W);
-  lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(w, 14, warning_y);
+static void edit_confirm(lv_obj_t *card, const mitem_t *it, int warning_y) {
+  mk_wrap(card, &font_f14, T.text, tr(it->help), 14, EDIT_TOP, EDIT_TEXT_W);
+  mk_wrap(card, &font_f12, T.warn, confirm_warning(it), 14, warning_y, EDIT_TEXT_W);
   ui_hints(S_NONE, it->flags & MF_DANGER ? S_HOLD_TO_CONFIRM : S_CONFIRM, S_CANCEL, S_NONE);
 }
 
@@ -1053,30 +1058,23 @@ static void edit_build(lv_obj_t *b, intptr_t arg) {
     ed.v = ed.min;  // a number with no value yet starts from the bottom
   if (it->type == MI_ENUM)
     offer_options(it, rebuild);
-  int rows = ed.n < OPT_ROWS ? ed.n : OPT_ROWS, h = it->type == MI_ENUM ? 46 + rows * 24 : 150, warning_y = 0;
-  const char *warning = tr(it->flags & MF_DANGER ? S_HOLD_OK_WARNING : S_PRESS_OK);
-  if (it->type == MI_ACTION) {  // fit the question with the warning below it
-    lv_point_t qs, ws;
-    lv_txt_get_size(&qs, tr(it->help), &font_f14, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
-    lv_txt_get_size(&ws, warning, &font_f12, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
-    warning_y = 40 + qs.y + 10;
-    h = warning_y + ws.y + 14;
-  }
+  int warning_y = 0, h = 150;
+  if (it->type == MI_ENUM)
+    h = EDIT_TOP + 6 + opt_rows() * OPT_H;
+  else if (it->type == MI_ACTION)
+    h = confirm_height(it, &warning_y);
   if (h > BODY_H - 8)
     h = BODY_H - 8;
   lv_obj_t *card = mk_card(b, (SCR_W - EDIT_W) / 2, (BODY_H - h) / 2, EDIT_W, h, T.line, 1);
   lv_obj_set_pos(mk_icon(card, &icons_16, T.accent, it->icon ? it->icon : IC_TUNE), 14, 12);
   lv_obj_set_pos(mk_label(card, &font_f16, T.text, item_title(it)), 38, 9);
-  if (it->help == S_ITEM_HELP)
-    ui_help_item(it->val - V_ITEM_FIRST);
-  else
-    ui_help(it->help);
+  row_help(it);
   if (it->type == MI_NUM)
     edit_number(card, it);
   else if (it->type == MI_ENUM)
-    edit_options(card, rows);
+    edit_options(card);
   else
-    edit_confirm(card, it, warning, warning_y);
+    edit_confirm(card, it, warning_y);
 }
 
 static void edit_update(void) {
@@ -1094,7 +1092,7 @@ static void edit_update(void) {
     lv_obj_align_to(ed.unit, ed.val, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -3 - font_n40.base_line);  // near its baseline
     lv_bar_set_value(ed.bar, ed.v - ed.min, LV_ANIM_OFF);
   } else if (it->type == MI_ENUM) {
-    int rows = ed.n < OPT_ROWS ? ed.n : OPT_ROWS, used = opt_used(it, val_get(it->val)), now = -1;
+    int rows = opt_rows(), used = opt_used(it, val_get(it->val)), now = -1;
     for (int i = 0; i < ed.n; i++)
       if (ed.offer[i] == used)
         now = i;
@@ -1104,10 +1102,10 @@ static void edit_update(void) {
       lv_label_set_text(ed.opts[i], opt_text(it, o));
       lv_obj_set_style_text_color(ed.opts[i], o == ed.v ? T.accent : T.text, 0);
     }
-    lv_obj_set_y(ed.opt_bg, 39 + (ed.pos - ed.first) * 24);
+    lv_obj_set_y(ed.opt_bg, EDIT_TOP - 1 + (ed.pos - ed.first) * OPT_H);
     if (now >= ed.first && now < ed.first + rows) {
       lv_obj_clear_flag(ed.check, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_set_pos(ed.check, 14, 42 + (now - ed.first) * 24);
+      lv_obj_set_pos(ed.check, 14, EDIT_TOP + 2 + (now - ed.first) * OPT_H);
     } else {
       lv_obj_add_flag(ed.check, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1151,10 +1149,6 @@ static bool edit_key(int k) {
     }
     return true;
   }
-  if (k == KEY_BACK) {
-    ui_pop();
-    return true;
-  }
   return false;
 }
 
@@ -1177,16 +1171,16 @@ static int check(const menu_t *m, char *why, size_t n) {
     const mitem_t *it = &m->items[i];
     if (it->type == MI_SUB && it->target != m)
       bad += check(it->target, why, n);
-    if (it->type != MI_ENUM || it->opt_text)
+    if (it->type != MI_ENUM || (it->fn && it->fn->text))
       continue;
     val_def_t d = val_def(it->val);
     int unnamed = (int) d.min;  // options below the minimum are never offered
     while (unnamed < it->n_opts && it->opts[unnamed] != S_NONE)
       unnamed++;
     if (it->n_opts != d.max + 1 && !bad++)
-      snprintf(why, n, "%s: %d options for %ld values", tr(it->title), it->n_opts, (long) d.max + 1);
+      lv_snprintf(why, n, "%s: %d options for %ld values", tr(it->title), it->n_opts, (long) d.max + 1);
     else if (unnamed < it->n_opts && !bad++)
-      snprintf(why, n, "%s: option %d has no name", tr(it->title), unnamed);
+      lv_snprintf(why, n, "%s: option %d has no name", tr(it->title), unnamed);
   }
   return bad;
 }

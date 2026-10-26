@@ -1,7 +1,5 @@
 // Key test: UP and OK keep the fan in the air between the ducts.
 #include "ui.h"
-#include <stdio.h>
-#include <string.h>
 
 #define STEP_MS 40
 #define SUB 16  // positions and speeds are in 1/16 px
@@ -94,8 +92,8 @@ static void kt_over(void) {
     best = kt->points;
   lv_obj_set_style_text_color(kt->fan, T.err, 0);
   char points[24], record[24];
-  snprintf(points, sizeof points, _(S_KEYTEST_SCORE), kt->points);
-  snprintf(record, sizeof record, _(S_KEYTEST_BEST), best);
+  lv_snprintf(points, sizeof points, _(S_KEYTEST_SCORE), kt->points);
+  lv_snprintf(record, sizeof record, _(S_KEYTEST_BEST), best);
   lv_label_set_text(kt->score, "");
   set_text(kt->msg, "%s\n%s\n%s", points, record, _(S_KEYTEST_AGAIN));
   lv_obj_clear_flag(kt->msg, LV_OBJ_FLAG_HIDDEN);
@@ -147,7 +145,6 @@ static lv_obj_t *mk_duct(lv_obj_t *b) {
 
 static void kt_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  memset(kt, 0, sizeof *kt);
   for (int i = 0; i < DUCTS; i++) {
     kt->top[i] = mk_duct(b);
     kt->bottom[i] = mk_duct(b);

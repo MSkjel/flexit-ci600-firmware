@@ -1,10 +1,11 @@
-# Included by hw/ and sim/, which set ROOT and BUILD first
+# Included by hw/ and sim/, which set ROOT, BUILD, OBJ_DIR and COMPILE first
 LVGL     := $(ROOT)/lib/lvgl
 INCLUDES := -I$(ROOT)/app -I$(ROOT)/ui -I$(ROOT)/proto -I$(LVGL) -I$(ROOT)/lib
 DEFS     := -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DCI600_LV_MEM_KB=16  # LVGL heap size on the panel
 WARN     := -Wall -Wextra -Werror
 # The newest vX.Y.Z tag, the next patch level on a later commit so the ESP can tell them apart, 0.0.0 without one.
-# Same as tools/mkupdate.py. $(BUILD)/version holds it and the objects depend on it, so a new tag rebuilds them.
+# $(BUILD)/version holds it and the objects depend on it, so a new tag rebuilds them. tools/mkupdate.py names the
+# stream from hw/build/version.
 VERSION  := $(shell git -C $(ROOT) describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' 2>/dev/null \
               | awk -F'[v.-]' '{print $$2 "." $$3 "." $$4 + (NF > 4)}')
 VERSION  := $(if $(VERSION),$(VERSION),0.0.0)
@@ -39,3 +40,13 @@ $(LVGL_PATCHED): $(LV_PATCH) $(addprefix $(LVGL)/,$(LV_CHANGED))  # the original
 	@patch -s -p1 -d $(LV_COPY) < $(LV_PATCH)
 	@touch $@
 $(LV_COPY_SRC): $(LVGL_PATCHED)
+
+# The objects, the same rules for both. COMPILE is the compiler with its flags, OBJ_DIR where the objects go.
+APP_OBJ := $(patsubst $(ROOT)/%.c,$(OBJ_DIR)/%.o,$(APP_SRC) $(LV_SRC)) $(LV_COPY_SRC:.c=.o)
+$(OBJ_DIR)/%.o: $(ROOT)/%.c $(ROOT)/config.mk $(FW_STAMP) | $(LVGL_PATCHED)
+	@mkdir -p $(dir $@)
+	$(COMPILE) -c -o $@ $<
+$(OBJ_DIR)/ui/ui_info.o: $(AUTHORS_H)
+# the patched copies find their relative includes next to the originals
+$(LV_COPY)/%.o: $(LV_COPY)/%.c $(ROOT)/config.mk $(FW_STAMP)
+	$(COMPILE) -I$(LVGL)/$(dir $*) -c -o $@ $<

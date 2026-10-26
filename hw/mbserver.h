@@ -33,11 +33,11 @@ extern mb_t MB;
 void mb_init(uint8_t addr, uint16_t version, uint8_t patch);
 int mb_frame(const uint8_t *req, int n, uint8_t *resp);  // returns the reply length, 0 = no reply
 int mb_chunk(const uint8_t *buf, int n, uint8_t *resp);  // one receive, which may hold several frames
-uint16_t mb_crc(const uint8_t *p, int n);
 
 // Main loop side, call with interrupts off on the panel.
 void mb_write(uint16_t reg, int16_t value);  // store our change and set its coil
 bool mb_take_changed(uint16_t *reg);         // next register the CX60 changed or set for the first time
 bool mb_written(uint16_t reg);               // reg has a value yet
 bool mb_relayed(uint16_t reg);               // its value is the relay of a panel's write, see relayed[]
+bool mb_pending(uint16_t reg);               // our change the CX60 hasn't picked up yet, its coil is set
 void mb_load(uint16_t reg, int16_t value);   // a value from the panel's flash, handled as if the CX60 sent it

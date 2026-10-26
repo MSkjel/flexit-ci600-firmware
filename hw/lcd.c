@@ -8,21 +8,26 @@
 #define START_WRITE 0x72
 #define START_READ 0x73
 
-static void spi_speed(uint32_t br) {  // SPI_CR1_BR_DIV16 = 4.5 MHz, SPI_CR1_BR_DIV8 = 9 MHz
+// Until the last byte is out
+static void spi_drain(void) {
+  while (!(SPI1->SR & SPI_SR_TXE)) {
+  }
+  while (SPI1->SR & SPI_SR_BSY) {
+  }
+}
+
+// Frame size and speed: SPI_CR1_DFF for 16 bits, SPI_CR1_BR_DIV16 = 4.5 MHz, SPI_CR1_BR_DIV8 = 9 MHz
+static void spi_mode(uint32_t bits) {
   SPI1->CR1 &= ~SPI_CR1_SPE;
-  SPI1->CR1 = (SPI1->CR1 & ~SPI_CR1_BR) | br;
+  SPI1->CR1 = (SPI1->CR1 & ~(SPI_CR1_DFF | SPI_CR1_BR)) | bits;
   SPI1->CR1 |= SPI_CR1_SPE;
 }
 
 // Deselecting waits until the last byte is out.
 static void cs(int on) {
-  if (!on) {
-    while (!(SPI1->SR & SPI_SR_TXE)) {
-    }
-    while (SPI1->SR & SPI_SR_BSY) {
-    }
-  }
-  pin_set(GPIOA, 4, !on);
+  if (!on)
+    spi_drain();
+  pin_set(PIN_LCD_CS, !on);
 }
 
 static inline void tx(uint8_t b) {
@@ -113,25 +118,30 @@ static void run(const rv_t *s, int n) {
 bool lcd_init(void) {
   RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
   SPI1->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_MSTR | SPI_CR1_CPOL | SPI_CR1_CPHA;  // soft NSS, master, mode 3
-  spi_speed(SPI_CR1_BR_DIV16);                                                         // slower during setup
-  board_delay_ms(400);   // as stock, lets the display's supply settle after power-up
-  pin_set(GPIOA, 4, 0);  // CS low during the reset, as stock
-  pin_set(GPIOA, 1, 0);  // reset
+  spi_mode(SPI_CR1_BR_DIV16);                                                          // slower during setup
+  board_delay_ms(400);     // as stock, lets the display's supply settle after power-up
+  pin_set(PIN_LCD_CS, 0);  // CS low during the reset, as stock
+  pin_set(PIN_LCD_RESET, 0);
   board_delay_ms(1);
-  pin_set(GPIOA, 1, 1);
+  pin_set(PIN_LCD_RESET, 1);
   board_delay_ms(120);
-  uint16_t lcd_id = read_id();
-  if ((lcd_id & 0xFEFE) == 0x9220)
-    run(INIT_9220, sizeof INIT_9220 / sizeof *INIT_9220);
-  else if ((lcd_id & 0xFEFE) == 0x9224)
-    run(INIT_9224, sizeof INIT_9224 / sizeof *INIT_9224);
-  else
-    run(INIT_9220, sizeof INIT_9220 / sizeof *INIT_9220);  // unknown id, try the first one
-  wreg(0x03, 0x5038);          // entry mode, BGR as stock but along a screen row first, see lcd_draw
-  spi_speed(SPI_CR1_BR_DIV8);  // same pixel speed as stock
+  bool known = true;
+  switch (read_id() & 0xFEFE) {
+    case 0x9224:
+      run(INIT_9224, sizeof INIT_9224 / sizeof *INIT_9224);
+      break;
+    default:
+      known = false;  // unknown id, try the first one
+      // fall through
+    case 0x9220:
+      run(INIT_9220, sizeof INIT_9220 / sizeof *INIT_9220);
+      break;
+  }
+  wreg(0x03, 0x5038);         // entry mode, BGR as stock but along a screen row first, see lcd_draw
+  spi_mode(SPI_CR1_BR_DIV8);  // same pixel speed as stock
   RCC->AHBENR |= RCC_AHBENR_DMA1EN;
   irq_enable(IRQ_DMA1_CH3);
-  return (lcd_id & 0xFEFE) == 0x9220 || (lcd_id & 0xFEFE) == 0x9224;
+  return known;
 }
 
 // Screen (x, y) is GRAM (y, x). Register 0x20 = y, 0x21 = x, window 0x50-0x51 is y and 0x52-0x53 is x.
@@ -144,8 +154,7 @@ static void (*send_done)(void);
 static uint32_t send_start;
 
 void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(void)) {
-  while (sending)
-    board_sleep();  // woken by the DMA interrupt
+  lcd_wait();
   wreg(0x50, (uint16_t) y1);
   wreg(0x51, (uint16_t) y2);
   wreg(0x52, (uint16_t) x1);
@@ -155,13 +164,8 @@ void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(v
   index_reg(0x22);  // GRAM
   cs(1);
   tx(START_WRITE);
-  while (!(SPI1->SR & SPI_SR_TXE)) {
-  }
-  while (SPI1->SR & SPI_SR_BSY) {
-  }
-  SPI1->CR1 &= ~SPI_CR1_SPE;  // 16-bit frames, one pixel each, high byte first
-  SPI1->CR1 = (SPI1->CR1 & ~SPI_CR1_BR) | SPI_CR1_DFF | pixel_br;
-  SPI1->CR1 |= SPI_CR1_SPE;
+  spi_drain();
+  spi_mode(SPI_CR1_DFF | pixel_br);  // 16-bit frames, one pixel each, high byte first
   sending = true;
   send_done = done;
   send_start = board_us();
@@ -177,14 +181,9 @@ void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(v
 void DMA1_Channel3_IRQHandler(void) {
   DMA1_IFCR = DMA_IFCR_CH3;
   DMA1_CH(3)->CCR = 0;
-  while (!(SPI1->SR & SPI_SR_TXE)) {
-  }  // wait for the last pixel to leave the shift register
-  while (SPI1->SR & SPI_SR_BSY) {
-  }
+  spi_drain();  // the last pixel out of the shift register
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
-  SPI1->CR1 &= ~SPI_CR1_SPE;
-  SPI1->CR1 = (SPI1->CR1 & ~(SPI_CR1_DFF | SPI_CR1_BR)) | SPI_CR1_BR_DIV8;
-  SPI1->CR1 |= SPI_CR1_SPE;
+  spi_mode(SPI_CR1_BR_DIV8);
   cs(0);
   lcd_send_us += board_us() - send_start;
   sending = false;

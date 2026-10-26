@@ -1,5 +1,6 @@
 // Fake data for the simulator, and a stand-in for what the CX60 does when a value changes.
 #include "ui.h"
+#include "plink.h"
 #include "sim.h"
 #include <stdlib.h>
 #include <string.h>
@@ -59,14 +60,6 @@ const sim_item_t SIM_ITEMS[] = {
 };
 const int SIM_N_ITEMS = LEN(SIM_ITEMS), SIM_N_COMFORT = 10;
 
-// The ESP's item id. FNV-1a of the name, 14 bits, never 0.
-int sim_item_id(const char *name) {
-  uint32_t h = 2166136261u;
-  for (; *name; name++)
-    h = (h ^ (uint8_t) *name) * 16777619u;
-  return h & 0x3FFF ? (int) (h & 0x3FFF) : 1;
-}
-
 // The part of "English|Norsk" in the panel's language, or all of it if there's no '|'.
 void sim_text(char *out, int size, const char *both) {
   const char *bar = strchr(both, '|'), *from = M.language && bar ? bar + 1 : both;
@@ -77,7 +70,7 @@ void sim_text(char *out, int size, const char *both) {
 }
 
 const char *sim_item_label(const char *name) {
-  static char b[ITEM_LABEL];
+  static char b[ITEM_LABEL_LEN];
   for (int i = 0; i < SIM_N_ITEMS; i++)
     if (!strcmp(SIM_ITEMS[i].name, name))
       sim_text(b, sizeof b, SIM_ITEMS[i].label);
@@ -91,7 +84,7 @@ void sim_item(int i, item_t *it) {
                   .icon = d->icon,
                   .dec = d->dec,
                   .step = d->step,
-                  .id = (uint16_t) sim_item_id(d->name),
+                  .id = plink_item_id(d->name),
                   .value = d->value,
                   .min = d->min,
                   .max = d->max};
@@ -150,9 +143,10 @@ void sim_model_init(void) {
   M.panel_version[2] = 0x0001;  // this one
   M.dip = 0x1;                  // DS1 electric heater, EC fans
   M.week_program = true;
-  static const period_t wk[] = {
-      {6, 30, 8, 0, MODE_NORMAL, 0, 210}, {8, 0, 15, 30, MODE_MIN, 1, 190}, {15, 30, 22, 30, MODE_NORMAL, 2, 210}};
-  static const period_t we[] = {{8, 0, 23, 0, MODE_NORMAL, 0, 210}, {17, 0, 19, 0, MODE_MAX, 1, 210}};
+  static const period_t wk[] = {{6 * 60 + 30, 8 * 60, MODE_NORMAL, 0, 210},
+                                {8 * 60, 15 * 60 + 30, MODE_MIN, 1, 190},
+                                {15 * 60 + 30, 22 * 60 + 30, MODE_NORMAL, 2, 210}};
+  static const period_t we[] = {{8 * 60, 23 * 60, MODE_NORMAL, 0, 210}, {17 * 60, 19 * 60, MODE_MAX, 1, 210}};
   for (int d = 0; d < 7; d++) {
     if (d < 5) {
       memcpy(M.week[d], wk, sizeof wk);
@@ -162,7 +156,7 @@ void sim_model_init(void) {
       M.n_periods[d] = 2;
     }
   }
-  M.week[4][2].end_h = 23;
+  M.week[4][2].end = 23 * 60 + 30;
   M.cpu_busy = 6;
   if (getenv("SIM_LANG"))
     M.language = (uint8_t) atoi(getenv("SIM_LANG"));
@@ -238,10 +232,12 @@ void plat_time_set(void) {}
 void plat_cx60_reg(uint16_t reg, int16_t value) {  // hw/unit.c takes it like the CX60 sent it
   val_t v = val_by_cx60(reg);
   if (v != V_NONE)
-    val_set_bus(v, value / (int) val_def(v).scale);
+    val_update(v, value);
 }
 void plat_save(bool by_user) { (void) by_user; }
 void plat_save_now(void) {}
+bool sim_fresh;
+bool plat_fresh(void) { return sim_fresh; }
 
 void plat_period_set(void) {}  // schedule.c keeps M.week itself
 

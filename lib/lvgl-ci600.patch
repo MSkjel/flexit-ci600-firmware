@@ -45,6 +45,23 @@ index ecffca9..274fc48 100644
      lv_style_set_prop(style, prop, value);
      lv_obj_refresh_style(obj, selector, prop);
  }
+diff --git a/src/draw/sw/lv_draw_sw_letter.c b/src/draw/sw/lv_draw_sw_letter.c
+index ee27bc6..621e690 100644
+--- a/src/draw/sw/lv_draw_sw_letter.c
++++ b/src/draw/sw/lv_draw_sw_letter.c
+@@ -218,10 +218,10 @@ static void LV_ATTRIBUTE_FAST_MEM draw_letter_normal(lv_draw_ctx_t * draw_ctx, c
+             return; /*Invalid bpp. Can't render the letter*/
+     }
+ 
+-    static lv_opa_t opa_table[256];
++    static lv_opa_t opa_table[16];      /*CI600: our fonts are 4 bpp, an 8 bpp letter would ignore opa*/
+     static lv_opa_t prev_opa = LV_OPA_TRANSP;
+     static uint32_t prev_bpp = 0;
+-    if(opa < LV_OPA_MAX) {
++    if(opa < LV_OPA_MAX && shades <= 16) {
+         if(prev_opa != opa || prev_bpp != bpp) {
+             uint32_t i;
+             for(i = 0; i < shades; i++) {
 diff --git a/src/font/lv_font_fmt_txt.c b/src/font/lv_font_fmt_txt.c
 index 78beaff..33ea77e 100644
 --- a/src/font/lv_font_fmt_txt.c

@@ -3,6 +3,16 @@
 #include "panel.h"
 #include "ui.h"
 
+// Key timing, ms, see input.h
+#define REPEAT_FIRST_MS 450  // UP/DOWN held this long start repeating
+#define REPEAT_MS 120        // every this often
+#define FAST_AFTER_MS 3000   // and once held this long
+#define REPEAT_FAST_MS 60    // every this often
+#define HOLD_MAX_MS 60000    // where input_hold_ms stops
+#define OK_LONG_MS 2000      // OK held, KEY_OK_LONG
+#define HOME_MS 800          // BACK held, KEY_HOME
+#define LOCK_MS 3000         // HELP held, locks or unlocks the keys
+
 uint16_t input_hold_ms;
 static uint32_t now, last;  // now, and the last key press or news
 static bool idle;
@@ -32,8 +42,8 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
   static uint32_t down_at[IN_COUNT], next_rep[IN_COUNT];
   // ignore = keys that woke the panel or hit the lock, until released. long_done = long press already fired
   static uint8_t ignore, long_done;
-  static const int TO_UI[IN_COUNT] = {
-      [IN_UP] = KEY_UP, [IN_DOWN] = KEY_DOWN, [IN_OK] = KEY_OK, [IN_BACK] = KEY_BACK, [IN_HELP] = KEY_HELP};
+  // the keys that act when pressed, BACK and HELP act on release
+  static const uint8_t TO_UI[] = {[IN_UP] = KEY_UP, [IN_DOWN] = KEY_DOWN, [IN_OK] = KEY_OK};
   now = ms;
   if (down && idle) {  // the first press only wakes it up
     ignore |= down;
@@ -48,7 +58,7 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
     }
     if (down & bit) {  // pressed, maybe released in the same call too
       down_at[k] = ms;
-      next_rep[k] = ms + 450;
+      next_rep[k] = ms + REPEAT_FIRST_MS;
       long_done &= (uint8_t) ~bit;
       last = ms;
       input_hold_ms = 0;
@@ -61,16 +71,16 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
         ui_key(TO_UI[k]);
     } else if ((held & bit) && !(up & bit) && !(long_done & bit)) {  // held
       uint32_t t = ms - down_at[k];
-      if ((k == IN_OK && t > 2000) || (k == IN_BACK && t > 800)) {
+      if ((k == IN_OK && t > OK_LONG_MS) || (k == IN_BACK && t > HOME_MS)) {
         long_done |= bit;
         ui_key(k == IN_OK ? KEY_OK_LONG : KEY_HOME);
-      } else if (k == IN_HELP && t > 3000) {
+      } else if (k == IN_HELP && t > LOCK_MS) {
         long_done |= bit;
         val_set(V_KEY_LOCK, !M.key_lock);
         ui_toast(M.key_lock ? IC_LOCK : IC_UNLOCK, M.key_lock ? S_KEYS_LOCKED : S_KEYS_UNLOCKED);
       } else if ((k == IN_UP || k == IN_DOWN) && (int32_t) (ms - next_rep[k]) >= 0) {
-        next_rep[k] = ms + (t > 3000 ? 60 : 120);
-        input_hold_ms = (uint16_t) (t > 60000 ? 60000 : t);
+        next_rep[k] = ms + (t > FAST_AFTER_MS ? REPEAT_FAST_MS : REPEAT_MS);
+        input_hold_ms = (uint16_t) (t > HOLD_MAX_MS ? HOLD_MAX_MS : t);
         ui_key(TO_UI[k]);
         last = ms;
       }

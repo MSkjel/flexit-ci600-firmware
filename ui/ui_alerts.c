@@ -1,7 +1,5 @@
 // Alarm pop-up and lists, ESP messages and the help overlay.
 #include "ui.h"
-#include <stdio.h>
-#include <string.h>
 
 // Names by CX60 alarm code, from status registers 0xCD..0xEA
 static const str_t ALARM_TXT[] = {
@@ -49,7 +47,7 @@ static lv_color_t alarm_color(uint8_t code) { return code == ALARM_FILTER ? T.wa
 static lv_obj_t *alert_card(lv_obj_t *b, int x, int y, int w, int h, lv_color_t c, int badge, const lv_font_t *f,
                             const char *icon, const char *kind) {
   lv_obj_t *card = mk_card(b, x, y, w, h, c, 2);
-  mk_badge(card, 14, 14, badge, c, f, icon);
+  mk_badge(card, 14, 14, badge, f, c, icon);
   lv_obj_set_pos(mk_label(card, &font_f12, c, kind), 14 + badge + 14, 14);
   return card;
 }
@@ -61,18 +59,12 @@ static void popup_build(lv_obj_t *b, intptr_t arg) {
   lv_color_t c = alarm_color(a->code);
   lv_obj_t *card = alert_card(b, 12, 10, 296, 176, c, 52, &icons_32, filter ? IC_FILTER : IC_ALERT,
                               filter ? _(S_SERVICE_CAPS) : _(S_ALARM_CAPS));
-  lv_obj_t *t = mk_label(card, &font_f20, T.text, alarm_text(a->code));
-  lv_obj_set_width(t, 200);
-  lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(t, 80, 31);
+  mk_wrap(card, &font_f20, T.text, alarm_text(a->code), 80, 31, 200);
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
   set_text(w, _(S_ALARM_SINCE), a->dd, a->mo, fmt_hm(hm, a->hh * 60 + a->mi));
   lv_obj_set_pos(w, 80, 60);
-  lv_obj_t *d = mk_label(card, &font_f14, T.text, tr(ALARM_ADVICE[alarm_code(a->code)]));
-  lv_obj_set_width(d, 268);
-  lv_label_set_long_mode(d, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(d, 14, 84);
+  mk_wrap(card, &font_f14, T.text, tr(ALARM_ADVICE[alarm_code(a->code)]), 14, 84, 268);
   if (M.n_alarms > 1) {
     lv_obj_t *more = mk_label(card, &font_f12, c, "");
     set_text(more, _(S_N_MORE), M.n_alarms - 1);
@@ -121,7 +113,6 @@ static void alarm_row(int i, const alarm_t *a, bool hist) {
 }
 
 static void alarms_build(lv_obj_t *b, intptr_t arg) {
-  memset(alarms, 0, sizeof *alarms);
   bool hist = arg == ALARMS_HISTORY;
   ui_set_title(hist ? _(S_ALARM_HISTORY) : _(S_ACTIVE_ALARMS));
   ui_help(hist ? S_ALARM_HISTORY_HELP : S_ALARM_LIST_HELP);
@@ -132,18 +123,8 @@ static void alarms_build(lv_obj_t *b, intptr_t arg) {
     ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
     return;
   }
-  frame_t *f = ui_frame();  // the list may have got shorter since
-  int last_top = alarms->n > ALARM_ROWS ? alarms->n - ALARM_ROWS : 0;
-  if (f->sel >= alarms->n)
-    f->sel = (int16_t) (alarms->n - 1);
-  if (f->top > last_top)
-    f->top = (int16_t) last_top;
-  lv_obj_t *clip = lv_obj_create(b);
-  lv_obj_remove_style_all(clip);
-  lv_obj_set_size(clip, SCR_W, BODY_H);
-  alarms->list = lv_obj_create(clip);
-  lv_obj_remove_style_all(alarms->list);
-  lv_obj_set_size(alarms->list, SCR_W, alarms->n * ALARM_ROW + 8);
+  clamp_sel(alarms->n, alarms->n > ALARM_ROWS ? alarms->n - ALARM_ROWS : 0);
+  alarms->list = mk_group(mk_group(b, SCR_W, BODY_H), SCR_W, alarms->n * ALARM_ROW + 8);  // clipped by the outer one
   alarms->sel = mk_box(alarms->list, 6, 0, SCR_W - 12, ALARM_ROW - 4, T.surface, 8);
   for (int i = 0; i < alarms->n; i++)
     alarm_row(i, &src[i], hist);
@@ -159,41 +140,31 @@ static void alarms_update(void) {
   lv_obj_set_y(alarms->sel, 2 + f->sel * ALARM_ROW);
 }
 
-static bool alarms_key(int k) {
-  if (!alarms->list || (k != KEY_UP && k != KEY_DOWN))
-    return false;
-  frame_t *f = ui_frame();
-  f->sel = step_sel(f->sel, k, alarms->n);
-  alarms_update();
-  return true;
-}
+static bool alarms_key(int k) { return alarms->list && sel_key(k, alarms->n); }
 
-const screen_t SCR_ALARMS = {.title = S_ALARMS, .build = alarms_build, .update = alarms_update, .key = alarms_key};
+const screen_t SCR_ALARMS = {.build = alarms_build, .update = alarms_update, .key = alarms_key};
 
 // ---------------------------------------------------------------- message from the ESP
 static void note_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  lv_color_t c = M.note_level == 2 ? T.err : M.note_level == 1 ? T.warn : T.accent;
-  str_t kind = M.note_level == 2 ? S_ALARM_CAPS : M.note_level == 1 ? S_WARNING_CAPS : S_MESSAGE_CAPS;
+  bool alarm = M.note_level == NOTE_ALARM, warning = M.note_level == NOTE_WARNING;
+  lv_color_t c = alarm ? T.err : warning ? T.warn : T.accent;
+  str_t kind = alarm ? S_ALARM_CAPS : warning ? S_WARNING_CAPS : S_MESSAGE_CAPS;
   lv_obj_t *card = alert_card(b, 16, 22, 288, 152, c, 44, &icons_22, icon_glyph(M.note_icon), tr(kind));
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
   set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, M.hh * 60 + M.mi));
   lv_obj_set_pos(w, 72, 30);
-  lv_obj_t *t = mk_label(card, &font_f16, T.text, M.note);
-  lv_obj_set_width(t, 258);
-  lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(t, 14, 70);
+  mk_wrap(card, &font_f16, T.text, M.note, 14, 70, 258);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);
   ui_help(S_NOTE_HELP);
 }
 
 static bool note_key(int k) {
-  if (k == KEY_OK || k == KEY_BACK) {
-    ui_pop();
-    return true;
-  }
-  return false;
+  if (k != KEY_OK)
+    return false;
+  ui_pop();
+  return true;
 }
 
 const screen_t SCR_NOTE = {.flags = SF_OVERLAY, .build = note_build, .key = note_key};
@@ -220,17 +191,11 @@ static void help_build(lv_obj_t *b, intptr_t arg) {
   str_t text = (str_t) arg;
   lv_obj_t *card = mk_card(b, 16, 4, 288, BODY_H - 8, T.line, 1);
   // the card's first child, for help_update(). Up to HELP_LINES lines
-  lv_obj_t *d = mk_label(card, &font_f14, T.text, tr(text ? text : S_NO_HELP));
+  mk_wrap(card, &font_f14, T.text, tr(text ? text : S_NO_HELP), 14, 38, HELP_W);
   help_update();
-  lv_obj_set_width(d, HELP_W);
-  lv_label_set_long_mode(d, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(d, 14, 38);
   lv_obj_set_pos(mk_icon(card, &icons_22, T.accent, IC_HELP), 14, 9);
   lv_obj_set_pos(mk_label(card, &font_f16, T.text, _(S_HELP)), 44, 10);
-  lv_obj_t *k = mk_label(card, &font_f12, T.dim, _(S_HELP_FOOTER));
-  lv_obj_set_width(k, HELP_W);
-  lv_label_set_long_mode(k, LV_LABEL_LONG_WRAP);
-  lv_obj_align(k, LV_ALIGN_BOTTOM_LEFT, 14, -10);
+  lv_obj_align(mk_wrap(card, &font_f12, T.dim, _(S_HELP_FOOTER), 0, 0, HELP_W), LV_ALIGN_BOTTOM_LEFT, 14, -10);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);
 }
 

@@ -1,6 +1,5 @@
 // Screen stack, status bar, key hints and themes.
 #include "ui.h"
-#include <stdio.h>
 #include <string.h>
 
 theme_t T;
@@ -75,6 +74,7 @@ static void apply_theme(void) {
 
 // ---------------------------------------------------------------- stack
 #define STACK_MAX 10
+#define TOAST_MS 1800
 static frame_t stack[STACK_MAX];
 static int depth;
 static int building = -1;  // frame being built or updated, -1 if none
@@ -83,7 +83,7 @@ static bool ready;            // ui_init has run
 static bool rebuild_due;      // the layout changed, rebuild_check() rebuilds before the next draw
 static bool refresh_due;      // a value changed, rebuild_check() refreshes before the next draw
 static str_t shown_hints[4];  // hints currently drawn
-static lv_obj_t *toast;       // shown over the title for a while, NULL if none
+static lv_obj_t *toast;       // shown over the title for TOAST_MS, NULL if none
 static uint32_t toast_end;    // lv_tick_get() time the toast goes
 static void draw_hints(const str_t *h);
 
@@ -131,17 +131,13 @@ static void build(int i) {
   f->help = S_NONE;
   building = i;
   if (f->s->flags & SF_OVERLAY) {
-    f->root = lv_obj_create(lv_layer_top());
-    lv_obj_remove_style_all(f->root);
-    lv_obj_set_pos(f->root, 0, BODY_Y);
-    lv_obj_set_size(f->root, SCR_W, BODY_H);
-    lv_obj_set_style_bg_color(f->root, lv_color_black(), 0);
+    f->root = mk_box(lv_layer_top(), 0, BODY_Y, SCR_W, BODY_H, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(f->root, LV_OPA_70, 0);
-    lv_obj_clear_flag(f->root, LV_OBJ_FLAG_SCROLLABLE);
     f->s->build(f->root, f->arg);
   } else {
     f->root = NULL;
     lv_obj_clean(body);
+    memset(ui_screen_mem, 0, sizeof ui_screen_mem);
     bool full = f->s->flags & SF_NOBARS;
     lv_obj_set_pos(body, 0, full ? 0 : BODY_Y);
     lv_obj_set_size(body, SCR_W, full ? SCR_H : BODY_H);
@@ -153,12 +149,23 @@ static void build(int i) {
   building = -1;
 }
 
+static void drop_root(frame_t *f) {  // deletes an overlay's widgets
+  if (f->root) {
+    lv_obj_del(f->root);
+    f->root = NULL;
+  }
+}
+
 static void drop_overlays(void) {
   for (int i = 0; i < depth; i++)
-    if (stack[i].root) {
-      lv_obj_del(stack[i].root);
-      stack[i].root = NULL;
-    }
+    drop_root(&stack[i]);
+}
+
+// After the stack changed. ui_refresh() would put up the bars too, but putting them up before it fills in the
+// values leaves LVGL's heap in fewer pieces.
+static void stack_changed(void) {
+  apply_bars();
+  ui_refresh();
 }
 
 // Rebuilds the top full screen and the overlays above it
@@ -166,8 +173,7 @@ static void rebuild_visible(void) {
   drop_overlays();
   for (int i = base_of(depth - 1); i < depth; i++)
     build(i);
-  apply_bars();
-  ui_refresh();
+  stack_changed();
 }
 
 void ui_push(const screen_t *s, intptr_t arg) {
@@ -176,8 +182,7 @@ void ui_push(const screen_t *s, intptr_t arg) {
   stack[depth++] = (frame_t) {.s = s, .arg = arg};
   if (s->flags & SF_OVERLAY) {
     build(depth - 1);
-    apply_bars();
-    ui_refresh();
+    stack_changed();
   } else {
     rebuild_visible();
   }
@@ -188,25 +193,20 @@ void ui_pop(void) {
     return;
   frame_t *f = &stack[--depth];
   if (f->root) {
-    lv_obj_del(f->root);
-    f->root = NULL;
-    apply_bars();
-    ui_refresh();
+    drop_root(f);
+    stack_changed();
   } else {
     rebuild_visible();
   }
 }
 
 void ui_replace(const screen_t *s, intptr_t arg) {
-  if (stack[depth - 1].root) {
-    lv_obj_del(stack[depth - 1].root);
-    stack[depth - 1].root = NULL;
-  }
+  drop_root(&stack[depth - 1]);
   stack[depth - 1] = (frame_t) {.s = s, .arg = arg};
   rebuild_visible();
 }
 
-static frame_t *find(const screen_t *s) {  // the frame of s, NULL if it isn't open
+static frame_t *frame_of(const screen_t *s) {  // NULL if s isn't open
   for (int i = 0; i < depth; i++)
     if (stack[i].s == s)
       return &stack[i];
@@ -221,14 +221,13 @@ static void remove_overlay(const screen_t *s) {
     gone = stack[i].s == s || (gone && stack[i].s == &SCR_HELP);
     if (!gone)
       stack[n++] = stack[i];
-    else if (stack[i].root)
-      lv_obj_del(stack[i].root);
+    else
+      drop_root(&stack[i]);
   }
   if (n == depth)
     return;
   depth = n;
-  apply_bars();
-  ui_refresh();
+  stack_changed();
 }
 
 void ui_go_home(void) {
@@ -350,7 +349,7 @@ void ui_view_dots(int n, int cur) {
 
 // Appends a coloured icon to the status line if it fits, returns the new length
 static size_t add_status(char *buf, size_t size, size_t n, lv_color_t c, const char *ic) {
-  int w = snprintf(buf + n, size - n, "#%06x %s#", (unsigned) (lv_color_to32(c) & 0xFFFFFF), ic);
+  int w = lv_snprintf(buf + n, size - n, "#%06x %s#", (unsigned) ui_hex(c), ic);
   if (w < 0 || (size_t) w >= size - n) {
     buf[n] = 0;
     return n;
@@ -360,11 +359,7 @@ static size_t add_status(char *buf, size_t size, size_t n, lv_color_t c, const c
 
 static void update_status(void) {
   char buf[128];
-  if (M.clock_24h)
-    snprintf(buf, sizeof buf, "%02d:%02d", M.hh, M.mi);
-  else
-    snprintf(buf, sizeof buf, "%d:%02d %s", (M.hh + 11) % 12 + 1, M.mi, M.hh < 12 ? _(S_AM) : _(S_PM));
-  lv_label_set_text(clock_lbl, buf);
+  lv_label_set_text(clock_lbl, fmt_hm(buf, M.hh * 60 + M.mi));
 
   // status icons. The label is right-aligned so the row grows to the left.
   size_t n = 0;
@@ -392,22 +387,17 @@ static void update_status(void) {
 void ui_toast(const char *icon, str_t msg) {
   if (toast)
     lv_obj_del(toast);
-  lv_obj_t *t = toast = lv_obj_create(lv_layer_top());
-  lv_obj_remove_style_all(t);
-  lv_obj_set_style_bg_color(t, T.text, 0);
-  lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(t, 14, 0);
+  lv_obj_t *t = toast = mk_box(lv_layer_top(), 0, 0, LV_SIZE_CONTENT, LV_SIZE_CONTENT, T.text, 14);
   lv_obj_set_style_pad_hor(t, 12, 0);
   lv_obj_set_style_pad_ver(t, 5, 0);
   lv_obj_set_style_pad_column(t, 6, 0);
-  lv_obj_set_size(t, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(t, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(t, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   if (icon)
     mk_icon(t, &icons_16, T.bg, icon);
   mk_label(t, &font_f14, T.bg, tr(msg));
   lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 0);  // covers the title briefly rather than the content
-  toast_end = lv_tick_get() + 1800;
+  toast_end = lv_tick_get() + TOAST_MS;
 }
 
 // ---------------------------------------------------------------- input and ticks
@@ -466,7 +456,7 @@ void ui_second(void) {
     ui_rebuild();  // night mode started or ended and has its own theme
   int code = alarm_new_pops();
   if (code) {
-    frame_t *f = find(&SCR_ALARM_POPUP);
+    frame_t *f = frame_of(&SCR_ALARM_POPUP);
     const alarm_t *shown = f ? alarm_find(f->arg) : NULL;
     if (shown && shown < alarm_find(code))
       code = shown->code;              // the one shown is more serious and stays
@@ -501,7 +491,7 @@ void ui_layout_changed(void) {
 // Rebuilds the alarm list and pop-up in rebuild_check() if they're open, also under a help or a message.
 // A pop-up whose alarm is gone switches to the next alarm that pops up, or closes
 void ui_alarms_changed(void) {
-  frame_t *f = find(&SCR_ALARM_POPUP);
+  frame_t *f = frame_of(&SCR_ALARM_POPUP);
   if (f && !alarm_find(f->arg)) {
     f->arg = 0;
     for (int i = 0; i < M.n_alarms && !f->arg; i++)
@@ -516,10 +506,8 @@ void ui_alarms_changed(void) {
 }
 
 void ui_show_view(int view) {
-  drop_overlays();
-  depth = 1;
   stack[0] = (frame_t) {.s = &SCR_HOME, .arg = view};
-  rebuild_visible();
+  ui_go_home();
 }
 
 // IC_* glyph for each ESP link icon id
@@ -529,9 +517,7 @@ static const char *const ICON_GLYPHS[] = {
 #undef X
 };
 
-const char *icon_glyph(uint8_t id) {
-  return id < sizeof ICON_GLYPHS / sizeof *ICON_GLYPHS ? ICON_GLYPHS[id] : IC_CIRCLE;
-}
+const char *icon_glyph(uint8_t id) { return id < LEN(ICON_GLYPHS) ? ICON_GLYPHS[id] : IC_CIRCLE; }
 
 void ui_init(void) {
   anim_init();
@@ -540,19 +526,10 @@ void ui_init(void) {
   lv_obj_remove_style_all(scr);
   lv_obj_set_style_bg_color(scr, T.bg, 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-  lv_obj_set_style_text_font(scr, &font_f14, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  body = lv_obj_create(scr);
-  lv_obj_remove_style_all(body);
-  lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-
-  bar = lv_obj_create(scr);
-  lv_obj_remove_style_all(bar);
-  lv_obj_set_size(bar, SCR_W, BAR_H);
-  lv_obj_set_style_bg_color(bar, T.bg, 0);
-  lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+  body = mk_group(scr, SCR_W, BODY_H);
+  bar = mk_box(scr, 0, 0, SCR_W, BAR_H, T.bg, 0);
   clock_lbl = mk_label(bar, &font_f16, T.text, "");
   lv_obj_align(clock_lbl, LV_ALIGN_LEFT_MID, 10, 0);
   title_lbl = mk_label(bar, &font_f14, T.dim, "");
@@ -561,20 +538,13 @@ void ui_init(void) {
   lv_label_set_recolor(status_lbl, true);
   lv_obj_set_style_text_letter_space(status_lbl, 6, 0);
   lv_obj_align(status_lbl, LV_ALIGN_RIGHT_MID, -6, 0);
-  dots = lv_obj_create(bar);
-  lv_obj_remove_style_all(dots);
-  lv_obj_set_size(dots, LV_SIZE_CONTENT, 8);
+  dots = mk_group(bar, LV_SIZE_CONTENT, 8);
   lv_obj_set_flex_flow(dots, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(dots, 4, 0);
   lv_obj_align(dots, LV_ALIGN_CENTER, 0, 0);
 
-  hintbar = lv_obj_create(scr);
-  lv_obj_remove_style_all(hintbar);
-  lv_obj_set_pos(hintbar, 0, SCR_H - HINT_H);
-  lv_obj_set_size(hintbar, SCR_W, HINT_H);
-  lv_obj_set_style_bg_color(hintbar, T.bg, 0);
-  lv_obj_set_style_bg_opa(hintbar, LV_OPA_COVER, 0);
+  hintbar = mk_box(scr, 0, SCR_H - HINT_H, SCR_W, HINT_H, T.bg, 0);
   lv_obj_set_style_border_side(hintbar, LV_BORDER_SIDE_TOP, 0);
   lv_obj_set_style_border_width(hintbar, 1, 0);
   lv_obj_set_style_border_color(hintbar, T.line, 0);
@@ -582,14 +552,11 @@ void ui_init(void) {
   lv_obj_set_style_pad_column(hintbar, 4, 0);
   lv_obj_set_flex_flow(hintbar, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(hintbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_clear_flag(hintbar, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_timer_create(close_check, 100, NULL);
   lv_timer_create(rebuild_check, 0, NULL);
-  depth = 1;
   ready = true;
-  stack[0] = (frame_t) {.s = &SCR_HOME, .arg = M.home_view};
-  rebuild_visible();
+  ui_show_view(M.home_view);
 }
 
 bool ui_has(uint32_t need) { return (M.features & need) == need; }

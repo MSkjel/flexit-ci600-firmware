@@ -2,8 +2,6 @@
 #include "plat.h"
 #include "ui.h"
 #include "authors.h"  // AUTHORS(X), from git by config.mk
-#include <stdio.h>
-#include <string.h>
 
 #define INFO_ROWS 8  // all that fit above the key hints
 #define INFO_ROW 23
@@ -19,8 +17,8 @@ typedef struct {
 static const char *kb(char *buf, uint32_t bytes) { return fmt_dec(buf, (int32_t) (bytes * 10 / 1024), 1); }
 
 static const char *fw_text(char buf[12]) {
-  snprintf(buf, 12, "%u.%u.%u", (unsigned) (M.fw_version >> 16 & 0xFF), (unsigned) (M.fw_version >> 8 & 0xFF),
-           (unsigned) (M.fw_version & 0xFF));
+  lv_snprintf(buf, 12, "%u.%u.%u", (unsigned) (M.fw_version >> 16 & 0xFF), (unsigned) (M.fw_version >> 8 & 0xFF),
+              (unsigned) (M.fw_version & 0xFF));
   return buf;
 }
 
@@ -33,7 +31,7 @@ static int info_rows(int page, kv_t *r) {
     if (n == INFO_ROWS) \
       break; \
     r[n].k = key; \
-    snprintf(r[n].v, sizeof r[n].v, fmt, ##__VA_ARGS__); \
+    lv_snprintf(r[n].v, sizeof r[n].v, fmt, ##__VA_ARGS__); \
     n++; \
   } while (0)
   if (page == INFO_ABOUT) {
@@ -121,7 +119,6 @@ typedef struct {
 SCREEN_STATE(info_t, info);
 
 static void info_build(lv_obj_t *b, intptr_t arg) {
-  memset(info, 0, sizeof *info);
   ui_set_title(arg == INFO_BUS ? _(S_BUS) : arg == INFO_DIAG ? _(S_DIAGNOSTICS) : _(S_ABOUT));
   kv_t r[INFO_ROWS];
   info->page = (int) arg;
@@ -169,7 +166,7 @@ static bool info_key(int k) {
   return true;
 }
 
-const screen_t SCR_INFO = {.title = S_ABOUT, .build = info_build, .update = info_update, .key = info_key};
+const screen_t SCR_INFO = {.build = info_build, .update = info_update, .key = info_key};
 
 // ---------------------------------------------------------------- notices
 #define NOTICE_MS 50           // per px up
@@ -324,7 +321,6 @@ static bool notices_led(uint32_t ms) {
 
 static void notices_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  memset(notices, 0, sizeof *notices);
   notices->next_y = 70;  // the title starts a bit down rather than below the screen
   notices_fill(b);
   mk_timer(notices->l[0], notices_step, NOTICE_MS);

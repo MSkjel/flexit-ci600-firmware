@@ -116,14 +116,14 @@ void panel_leds(bool out[3], uint32_t ms) {
   bool ok = !other && !filter && (M.led_ok == LED_OK_ALWAYS || (M.led_ok == LED_OK_NOT_NIGHT && !night_active()));
   bool want[3] = {other && M.led_alarm, filter && M.led_filter, ok};
   for (int i = 0; i < 3; i++) {
-    switch ((M.leds >> (2 * i)) & 3) {  // ESP override, LED_*. 1 = off, 2 = on, 3 = blink
-      case 1:
+    switch ((M.leds >> (2 * i)) & 3) {  // the ESP's LED_*
+      case LED_OFF:
         want[i] = false;
         break;
-      case 2:
+      case LED_ON:
         want[i] = true;
         break;
-      case 3:
+      case LED_BLINK:
         want[i] = ms / 500 % 2;
         break;
     }

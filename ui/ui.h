@@ -107,8 +107,11 @@ const char *icon_glyph(uint8_t id);  // glyph for an ESP icon id, ICN_* in proto
 #define CHART_X 40  // trend chart position and height
 #define CHART_Y 26
 #define CHART_H 140
+#define NO_VALUE "\xE2\x80\x93"  // en dash, for a value that's unknown or gone
 lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int radius);
+lv_obj_t *mk_group(lv_obj_t *p, int w, int h);  // a bare container
 lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt);
+lv_obj_t *mk_wrap(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int x, int y, int w);  // wraps at w
 lv_obj_t *mk_icon(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *ic);
 void label_dots(lv_obj_t *l);                   // truncate with "...", copying static text first
 void label_text(lv_obj_t *l, const char *txt);  // doesn't copy text in flash, so not for label_dots() labels
@@ -118,24 +121,29 @@ lv_obj_t *mk_arc(lv_obj_t *p, int size, int width, int val, int max, lv_color_t 
 lv_obj_t *mk_card(lv_obj_t *p, int x, int y, int w, int h, lv_color_t border, int border_w);
 lv_obj_t *mk_disc(lv_obj_t *p, int x, int y, int size, lv_color_t bg, const lv_font_t *f, lv_color_t c,
                   const char *icon);  // icon in a filled circle
-lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, lv_color_t c, const lv_font_t *f, const char *icon);
+lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, const lv_font_t *f, lv_color_t c, const char *icon);
 void mk_empty(lv_obj_t *p, lv_color_t c, const char *icon, const char *title, const char *sub);  // empty state
-lv_obj_t *mk_chart(lv_obj_t *p, int w, int lines);                    // 24 h chart with this many grid lines
-lv_obj_t *day_bar(lv_obj_t *p, int x, int y, int w, int h, int day);  // a day's periods as blocks on a track
-lv_color_t level_color(int mode);                                     // colour of a fan speed (MODE_*)
+lv_obj_t *mk_chart(lv_obj_t *p, int w, int lines);                       // 24 h chart with this many grid lines
+lv_obj_t *mk_day_bar(lv_obj_t *p, int x, int y, int w, int h, int day);  // a day's periods as blocks on a track
+lv_color_t level_color(int mode);                                        // colour of a fan speed (MODE_*)
+uint32_t ui_hex(lv_color_t c);                                           // as 0xRRGGBB, for recoloured text
 lv_color_t item_color(const item_t *it);                  // ok, warn or err by the item's levels, else accent
 int item_pct(const item_t *it);                           // value as 0..100 between min and max, 0 if unknown
 bool item_on(const item_t *it);                           // a toggle that's on, not off or unknown
 char *item_text(char *buf, const item_t *it, bool unit);  // current value as text: the number, a dash, on/off or Press
 void keep_in_view(int16_t *top, int row, int rows);       // scroll *top so row is among the rows shown
+void clamp_sel(int n, int max_top);                       // keeps the frame's selection and scroll in a list of n
 int16_t step_sel(int sel, int key, int n);                // move the selection for UP or DOWN, wrapping around
+bool sel_key(int key, int n);  // UP or DOWN moves the frame's selection in a list of n and updates it, else false
 int32_t step_value(int32_t v, int n, int step, int32_t min, int32_t max);  // n steps, onto multiples of step, clamped
 void set_text(lv_obj_t *l, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+// sprintf through LVGL's printf, so newlib's and its RAM aren't linked in
+int sprint(char *buf, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 const char *fmt_temp(char *buf, int16_t t, bool unit);
 const char *fmt_target(char *buf, int16_t t);  // setpoint, always with one decimal whatever Temperatures says
 const char *fmt_dec(char *buf, int32_t v, uint8_t dec);
 const char *fmt_hm(char *buf, int minutes);   // minutes since midnight up to 24:00, 12 or 24 h as the clock is set
-char *add_unit(char *buf, const char *unit);  // no space before % or °
+char *add_unit(char *buf, const char *unit);  // no space before % or a degree sign
 void label_fit(lv_obj_t *l, const char *txt, int w);  // txt in font_f20 if it fits in w, else font_f14
 int ui_backlight_preview(void);                       // brightness an open editor is previewing, -1 if none
 
@@ -159,12 +167,12 @@ extern const screen_t SCR_HOME, SCR_MENU, SCR_LIST, SCR_EDIT, SCR_ALARMS, SCR_AL
     SCR_NOTICES, SCR_KEYTEST, SCR_HELP, SCR_SAVER, SCR_FAN_HUD, SCR_DAY, SCR_NOTE;
 // A home screen view. BACK cycles through them in VIEW_* order.
 typedef struct {
-  void (*build)(lv_obj_t *body);
+  void (*build)(lv_obj_t *body, int first);  // first: the first item on the page shown
   void (*update)(void);
   str_t help;
-  uint32_t need;            // required features, FBIT(FEAT_x) mask
-  bool (*avail)(void);      // NULL = always shown, false hides the view when there's nothing to show
-  bool (*next_page)(void);  // optional, BACK shows the next page first. Last page returns false and resets to page 1
+  uint8_t per_page;    // items on a page, BACK shows the next page before the next view. 0 = one page
+  uint32_t need;       // required features, FBIT(FEAT_x) mask
+  int (*count)(void);  // items to show, the view is hidden while there are none. NULL = always shown
 } view_t;
 extern const view_t DASH_VIEW, FLOW_VIEW, TREND_VIEW, SENSORS_VIEW, COMFORT_VIEW, SMART_VIEW;
 struct menu;

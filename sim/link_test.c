@@ -3,6 +3,7 @@
 //   make build/link_test && build/link_test
 #include "pbulk.h"
 #include "plink.h"
+#include "cx60.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -57,8 +58,9 @@ static void reset(uint16_t esess, uint16_t psess) {
 }
 
 static void esp_send(uint16_t key, uint32_t v) {
-  uint8_t b[4] = {(uint8_t) v, (uint8_t) (v >> 8), (uint8_t) (v >> 16), (uint8_t) (v >> 24)};
-  CHECK(pbulk_esp_send(&E, key, b, 4, plink_kind(key) == PLINK_VALUE));
+  uint8_t b[4];
+  plink_put32(b, v);
+  CHECK(pbulk_esp_send(&E, key, b, 4, plink_bulk_flags(key)));
 }
 
 // The panel's main loop. Takes what came in and puts its own messages in the next answer.
@@ -164,8 +166,8 @@ static void test_esp_restart(void) {
   CHECK(got_esp == 4 && !wrong && !E.resyncs && !P.resyncs);  // and without needing a resync
 }
 
-// ---------------------------------------------------------------- S3: a restart that picks the session the
-// other end knew. The ESP asks for a message the new panel never sent, so the panel picks a new session.
+// ---------------------------------------------------------------- a restart that picks the session the other
+// end knew. The ESP asks for a message the new panel never sent, so the panel picks a new session.
 static void test_panel_same_session(void) {
   reset(0x11, 0x77);
   for (int i = 0; i < 20; i++) {
@@ -181,7 +183,7 @@ static void test_panel_same_session(void) {
     esp_send(K_ACTION, (uint32_t) i);
   }
   cycles(20);
-  CHECK(got_esp == 25 && got_panel == 25 && !wrong && P.sessions == 1);
+  CHECK(got_esp == 25 && got_panel == 25 && !wrong && P.psess != 0x77);  // a new session
 }
 
 // The same for the ESP: the panel asks for messages the new ESP never sent.
@@ -287,7 +289,7 @@ static void test_hello_first(void) {
   esp_send(K_HELLO, 1);
   esp_send(K_HELLO, 2);
   esp_send(PBULK_DATA_KEY, 3);  // appended to the DATA at the end
-  CHECK(E.qn == 4 * 7 + 4 && (E.q[7] | E.q[8] << 8) == K_HELLO && E.q[10] == 2 && pbulk_esp_queued(&E, K_HELLO));
+  CHECK(E.qn == 4 * 7 + 4 && plink_get16(E.q + 7) == K_HELLO && E.q[10] == 2 && pbulk_esp_queued(&E, K_HELLO));
   E.sent = false;  // that frame never arrived
   cycles(5);
   CHECK(got_panel == 4 && !wrong && others == 1 && last_key == K_HELLO && last[0] == 2);
@@ -339,13 +341,6 @@ static void test_split_resend(void) {
 // ---------------------------------------------------------------- the CX60 comes back too soon, then doesn't
 static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8], POLL1[8], REPLY[13];
 
-static void frame(uint8_t *f, int n, const uint8_t *head, int k) {
-  memcpy(f, head, k);
-  uint16_t c = pbus_crc16(f, n - 2);
-  f[n - 2] = c & 0xFF;
-  f[n - 1] = c >> 8;
-}
-
 // One CX60 cycle from t_us as the panel sees it. Status broadcast, a poll of panel 3 quiet_us later, a reply
 // with nothing flagged, then the CX60's next frame next_us after the poll.
 static void bus_cycle(pbus_panel_t *w, uint32_t t_us, uint32_t quiet_us, uint32_t next_us) {
@@ -359,7 +354,7 @@ static void bus_cycle(pbus_panel_t *w, uint32_t t_us, uint32_t quiet_us, uint32_
 
 // Cycles until the panel lets the link or the gaps back in, -1 if never.
 static int cycles_to(pbus_panel_t *w, uint32_t *t, uint32_t quiet_us, uint32_t next_us, bool (*back)(pbus_panel_t *)) {
-  for (int c = 0; c < 200000; c++, *t += 110000) {
+  for (int c = 0; c < 200000; c++, *t += PBUS_CYCLE_US) {
     if (back(w))
       return c;
     bus_cycle(w, *t, quiet_us, next_us);
@@ -371,35 +366,35 @@ static bool link_in(pbus_panel_t *w) { return !w->refused; }
 static bool gaps_on(pbus_panel_t *w) { return !w->gaps.off; }
 
 static void test_rearm(void) {
-  frame(STATUS, PBUS_STATUS_LEN, (const uint8_t[]) {0x00, 0x10, 0x00, 0xBE, 0x00, 0x55, 0xAA}, 7);
-  frame(POLL, 8, (const uint8_t[]) {3, 0x01, 0x00, 0x00, 0x00, 0x40}, 6);  // the settings poll of panel 3
-  frame(POLL1, 8, (const uint8_t[]) {1, 0x01, 0x00, 0x00, 0x00, 0x40}, 6);
-  frame(REPLY, 13, (const uint8_t[]) {3, 0x01, 8}, 3);
+  cx60_status(STATUS);
+  cx60_poll(POLL, 3);
+  cx60_poll(POLL1, 1);
+  cx60_reply(REPLY);
   pbus_panel_t w;
   pbus_panel_init(&w);
   uint32_t t = 0;
   uint8_t say;
   // the CX60 polls 14.4 ms after its status broadcast ends, 30 ms after it started, on its 10 ms grid
-  for (int i = 0; i < 3; i++, t += 110000)
+  for (int i = 0; i < 3; i++, t += PBUS_CYCLE_US)
     bus_cycle(&w, t, 14400, 20000);
   CHECK(!w.refused && w.quiet_min_us == 14400 && w.gaps.gaps && !w.gaps.off);
   bus_cycle(&w, t, 12000, 20000);  // once at 12 ms
-  t += 110000;
+  t += PBUS_CYCLE_US;
   pbus_panel_window(&w, t, t / 1000, &say);
   CHECK(w.refused && say == PBUS_REFUSED && w.quiet_min_us == 12000);
   CHECK(cycles_to(&w, &t, 14400, 20000, link_in) == PBUS_REARM);  // after PBUS_REARM clean cycles
   CHECK(w.quiet_min_us == 14400);                                 // reset when the link was let back in
   bus_cycle(&w, t, 12000, 20000);                                 // again, and now it takes twice as long
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(cycles_to(&w, &t, 14400, 20000, link_in) == 2 * PBUS_REARM);
   // Gaps after polls. The CX60 comes back 5 ms after a poll instead of 20, so the gaps go off. They come back
   // after a run of gaps the CX60 kept to, and the run is twice as long the next time.
   bus_cycle(&w, t, 14400, 5000);
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(w.gaps.off && !w.refused);
   CHECK(cycles_to(&w, &t, 14400, 20000, gaps_on) == PBUS_GAP_REARM);
   bus_cycle(&w, t, 14400, 5000);
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(cycles_to(&w, &t, 14400, 20000, gaps_on) == 2 * PBUS_GAP_REARM);
 }
 
@@ -409,20 +404,20 @@ static void test_status_end(void) {
   pbus_panel_t w;
   pbus_panel_init(&w);
   uint32_t t = 0;
-  for (int i = 0; i < PBUS_END_SURE - 1; i++, t += 110000)
+  for (int i = 0; i < PBUS_END_SURE - 1; i++, t += PBUS_CYCLE_US)
     bus_cycle(&w, t, 14400, 20000);
   CHECK(w.end_us == PBUS_END_US);  // not measured long enough
   bus_cycle(&w, t, 14400, 20000);
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(w.end_us == PBUS_END_MAX_US);
   bus_cycle(&w, t, 13650, 20000);  // once a bit sooner
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(w.end_us == 12600);
   bus_cycle(&w, t, 12500, 20000);  // too soon
-  t += 110000;
+  t += PBUS_CYCLE_US;
   CHECK(w.refused && w.end_us == PBUS_END_US);
   CHECK(cycles_to(&w, &t, 14400, 20000, link_in) > 0 && w.end_us == PBUS_END_US);  // measured again from scratch
-  for (int i = 0; i < PBUS_END_SURE; i++, t += 110000)
+  for (int i = 0; i < PBUS_END_SURE; i++, t += PBUS_CYCLE_US)
     bus_cycle(&w, t, 14400, 20000);
   CHECK(w.end_us == PBUS_END_MAX_US);
 
@@ -446,9 +441,9 @@ static void test_bus_order(void) {
   pbus_gaps_t g;
   memset(&g, 0, sizeof g);
   pbus_gaps_frame(&g, STATUS, PBUS_STATUS_LEN, 1000, 1000);
-  uint32_t end = 1000 + PBUS_STATUS_LEN * 86806u / 1000u;
+  uint32_t end = 1000 + PBUS_STATUS_LEN * PBUS_BYTE_NS / 1000;
   pbus_gaps_frame(&g, POLL, 8, 0, end + 15000);  // could have started any time since 0
-  CHECK(g.step_lo_us == end && g.end_lo_us == end + 8 * 86806u / 1000u);
+  CHECK(g.step_lo_us == end && g.end_lo_us == end + 8 * PBUS_BYTE_NS / 1000);
 }
 
 // ---------------------------------------------------------------- the panel's queue (plink)
@@ -462,9 +457,9 @@ static void test_plink(void) {
   plink_send(&l, K_ITEM_HELP, 3);
   plink_send(&l, K_ITEM_HELP, 4);  // only the latest help request counts
   plink_send(&l, K_ITEM_VALUE + 2, 5);
-  CHECK(l.qn == 5 && l.q[0].value == 2 && l.q[3].value == 4);
+  CHECK(l.qn == 5 && l.value[0] == 2 && l.value[3] == 4);
   plink_forget(&l);
-  CHECK(l.qn == 1 && l.q[0].key == K_THEME);
+  CHECK(l.qn == 1 && l.key[0] == K_THEME);
   uint8_t b[PBULK_ANSWER_MAX];
   int n = plink_pack(&l, b, sizeof b);
   CHECK(n == 4 && b[0] == (K_THEME & 0xFF) && b[1] == K_THEME >> 8 && b[2] == 1 && b[3] == 2 && !l.qn);
@@ -478,12 +473,12 @@ static void test_plink(void) {
   }
   for (int i = 0; i < PLINK_QUEUE - 1; i++)
     plink_send(&l, K_ACTION, (uint32_t) i);
-  CHECK(!plink_room(&l) && !plink_send(&l, K_ACTION, 99) && l.dropped == 1);
+  CHECK(!plink_room(&l) && !plink_send(&l, K_ACTION, 99) && l.qn == PLINK_QUEUE - 1);
   // a HELLO always fits, goes first and replaces a waiting one
-  CHECK(plink_send(&l, K_HELLO, 7) && l.qn == PLINK_QUEUE && l.q[0].key == K_HELLO && !l.q[1].value);
-  CHECK(plink_send(&l, K_HELLO, 8) && l.qn == PLINK_QUEUE && l.q[0].value == 8 && !l.q[1].value);
+  CHECK(plink_send(&l, K_HELLO, 7) && l.qn == PLINK_QUEUE && l.key[0] == K_HELLO && !l.value[1]);
+  CHECK(plink_send(&l, K_HELLO, 8) && l.qn == PLINK_QUEUE && l.value[0] == 8 && !l.value[1]);
   CHECK(plink_waiting(&l) == 4 + 3 + 4 * 30);  // HELLO 8, actions 0 and 1..30
-  CHECK(plink_pack(&l, b, 20) == 4 + 3 + 3 * 4 && l.qn == PLINK_QUEUE - 5 && l.q[0].value == 4);
+  CHECK(plink_pack(&l, b, 20) == 4 + 3 + 3 * 4 && l.qn == PLINK_QUEUE - 5 && l.value[0] == 4);
   CHECK(plink_kind(K_ITEM_DEF + 3) == PLINK_BYTES && plink_kind(K_ITEM_LABEL + N_ITEMS - 1) == PLINK_BYTES &&
         plink_kind(K_ITEM_UNIT + 7) == PLINK_BYTES && plink_kind(K_ITEM_HELP) == PLINK_BYTES &&
         plink_kind(K_ITEM_ON) == PLINK_BYTES && plink_kind(K_ITEM_OFF + N_ITEMS - 1) == PLINK_BYTES &&

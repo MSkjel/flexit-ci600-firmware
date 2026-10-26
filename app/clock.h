@@ -3,8 +3,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SECS_1970_TO_2000 946684800u
-
 void clock_from_unix(uint32_t t);  // sets M.yy .. M.ss and M.wday
 uint32_t clock_to_unix(void);      // from M.yy .. M.ss
 bool clock_summer(uint32_t t);     // t is local standard time. true in Central European summer time

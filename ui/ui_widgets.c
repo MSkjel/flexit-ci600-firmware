@@ -5,27 +5,41 @@
 #include <stdlib.h>
 #include <string.h>
 
-lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int radius) {
+// Styles left at their defaults (a 0 position or radius, the default font) aren't set, each one takes LVGL heap
+lv_obj_t *mk_group(lv_obj_t *p, int w, int h) {
   lv_obj_t *o = lv_obj_create(p);
   lv_obj_remove_style_all(o);
-  lv_obj_set_pos(o, x, y);
   lv_obj_set_size(o, w, h);
+  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  return o;
+}
+
+lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int radius) {
+  lv_obj_t *o = mk_group(p, w, h);
+  if (x || y)
+    lv_obj_set_pos(o, x, y);
   lv_obj_set_style_bg_color(o, bg, 0);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(o, radius, 0);
-  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  if (radius)
+    lv_obj_set_style_radius(o, radius, 0);
   return o;
 }
 
 // Text in flash is used without copying. LONG_DOT writes its dots into the text, so label_dots() copies it first.
 lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt) {
   lv_obj_t *l = lv_label_create(p);
-  lv_obj_set_style_text_font(l, f, 0);
+  if (f != LV_FONT_DEFAULT)
+    lv_obj_set_style_text_font(l, f, 0);
   lv_obj_set_style_text_color(l, c, 0);
-  if (txt && plat_const(txt))
-    lv_label_set_text_static(l, txt);
-  else
-    lv_label_set_text(l, txt ? txt : "");
+  label_text(l, txt ? txt : "");
+  return l;
+}
+
+lv_obj_t *mk_wrap(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int x, int y, int w) {
+  lv_obj_t *l = mk_label(p, f, c, txt);
+  lv_obj_set_width(l, w);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+  lv_obj_set_pos(l, x, y);
   return l;
 }
 
@@ -84,31 +98,37 @@ void set_text(lv_obj_t *l, const char *fmt, ...) {
   char buf[96];
   va_list ap;
   va_start(ap, fmt);
-  vsnprintf(buf, sizeof buf, fmt, ap);
+  lv_vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
   lv_label_set_text(l, buf);
+}
+
+int sprint(char *buf, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int n = lv_vsnprintf(buf, SIZE_MAX, fmt, ap);
+  va_end(ap);
+  return n;
 }
 
 const char *fmt_dec(char *buf, int32_t v, uint8_t dec) {
   static const uint32_t DIV[4] = {1, 10, 100, 1000};
   if (!dec) {
-    sprintf(buf, "%ld", (long) v);
+    sprint(buf, "%ld", (long) v);
     return buf;
   }
   uint32_t a = v < 0 ? 0u - (uint32_t) v : (uint32_t) v, div = DIV[dec > 3 ? 3 : dec];
-  sprintf(buf, "%s%lu.%0*lu", v < 0 ? "-" : "", (unsigned long) (a / div), dec, (unsigned long) (a % div));
+  sprint(buf, "%s%lu.%0*lu", v < 0 ? "-" : "", (unsigned long) (a / div), dec, (unsigned long) (a % div));
   return buf;
 }
 
 const char *fmt_temp(char *buf, int16_t t, bool unit) {
-  if (t == T_NONE) {
-    strcpy(buf, "\xE2\x80\x93");
-    return buf;
-  }
+  if (t == T_NONE)
+    return strcpy(buf, NO_VALUE);
   if (M.temp_dec)
     fmt_dec(buf, t, 1);
   else
-    sprintf(buf, "%d", (t + (t < 0 ? -5 : 5)) / 10);  // rounded to whole degrees
+    sprint(buf, "%d", (t + (t < 0 ? -5 : 5)) / 10);  // rounded to whole degrees
   strcat(buf, unit ? "\xC2\xB0"
                      "C"
                    : "\xC2\xB0");
@@ -125,9 +145,9 @@ const char *fmt_target(char *buf, int16_t t) {
 const char *fmt_hm(char *buf, int minutes) {
   int h = minutes / 60, m = minutes % 60;  // an end at midnight is 24:00
   if (M.clock_24h)
-    sprintf(buf, "%02d:%02d", h, m);
+    sprint(buf, "%02d:%02d", h, m);
   else
-    sprintf(buf, "%d:%02d %s", (h + 11) % 12 + 1, m, h % 24 < 12 ? _(S_AM) : _(S_PM));
+    sprint(buf, "%d:%02d %s", (h + 11) % 12 + 1, m, h % 24 < 12 ? _(S_AM) : _(S_PM));
   return buf;
 }
 
@@ -152,7 +172,7 @@ lv_obj_t *mk_disc(lv_obj_t *p, int x, int y, int size, lv_color_t bg, const lv_f
   return l;
 }
 
-lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, lv_color_t c, const lv_font_t *f, const char *icon) {
+lv_obj_t *mk_badge(lv_obj_t *p, int x, int y, int size, const lv_font_t *f, lv_color_t c, const char *icon) {
   return mk_disc(p, x, y, size, lv_color_mix(c, T.surface, 60), f, c, icon);
 }
 
@@ -197,11 +217,13 @@ lv_color_t level_color(int mode) {
   return mode == MODE_MAX ? T.warn : mode == MODE_NORMAL ? T.accent : mode == MODE_MIN ? T.cold : T.faint;
 }
 
-lv_obj_t *day_bar(lv_obj_t *p, int x, int y, int w, int h, int day) {
+uint32_t ui_hex(lv_color_t c) { return lv_color_to32(c) & 0xFFFFFF; }
+
+lv_obj_t *mk_day_bar(lv_obj_t *p, int x, int y, int w, int h, int day) {
   lv_obj_t *track = mk_box(p, x, y, w, h, T.surface, 4);
   for (int i = 0; i < M.n_periods[day]; i++) {
     const period_t *s = &M.week[day][i];
-    int a = (s->start_h * 60 + s->start_m) * w / 1440, e = (s->end_h * 60 + s->end_m) * w / 1440;
+    int a = s->start * w / 1440, e = s->end * w / 1440;
     mk_box(track, a, 0, e - a, h, level_color(s->level), 4);
   }
   return track;
@@ -214,6 +236,14 @@ void keep_in_view(int16_t *top, int row, int rows) {
     *top = (int16_t) (row - rows + 1);
 }
 
+void clamp_sel(int n, int max_top) {  // the list may have got shorter since
+  frame_t *f = ui_frame();
+  if (f->sel >= n)
+    f->sel = (int16_t) (n - 1);
+  if (f->top > max_top)
+    f->top = (int16_t) max_top;
+}
+
 int32_t step_value(int32_t v, int n, int step, int32_t min, int32_t max) {
   v += n * step;
   if (v <= min || v >= max)
@@ -223,6 +253,15 @@ int32_t step_value(int32_t v, int n, int step, int32_t min, int32_t max) {
 }
 
 int16_t step_sel(int sel, int key, int n) { return (int16_t) ((sel + (key == KEY_DOWN ? 1 : n - 1)) % n); }
+
+bool sel_key(int key, int n) {
+  if (key != KEY_UP && key != KEY_DOWN)
+    return false;
+  frame_t *f = ui_frame();
+  f->sel = step_sel(f->sel, key, n);
+  f->s->update();
+  return true;
+}
 
 lv_color_t item_color(const item_t *it) {
   if (!(it->flags & ITEMF_LEVELS) || it->value == ITEM_UNKNOWN)
@@ -242,9 +281,9 @@ char *item_text(char *buf, const item_t *it, bool unit) {
   if (it->type == ITEM_BUTTON)
     return strcpy(buf, _(S_PRESS));
   if (it->type == ITEM_TEXT)
-    return strcpy(buf, it->text[0] ? it->text : "\xE2\x80\x93");
+    return strcpy(buf, it->text[0] ? it->text : NO_VALUE);
   if (it->value == ITEM_UNKNOWN)
-    return strcpy(buf, "\xE2\x80\x93");  // en dash, like an unknown temperature
+    return strcpy(buf, NO_VALUE);  // like an unknown temperature
   if (it->type == ITEM_TOGGLE)
     return strcpy(buf, item_on(it) ? (it->on[0] ? it->on : _(S_ON)) : (it->off[0] ? it->off : _(S_OFF)));
   fmt_dec(buf, it->value, it->dec);
@@ -262,7 +301,7 @@ void label_fit(lv_obj_t *l, const char *txt, int w) {
 
 char *add_unit(char *buf, const char *unit) {
   if (unit && unit[0]) {
-    strcat(buf, unit[0] == '%' || !strncmp(unit, "\xC2\xB0", 2) ? "" : " ");  // no space before % or °
+    strcat(buf, unit[0] == '%' || !strncmp(unit, "\xC2\xB0", 2) ? "" : " ");  // no space before % or a degree sign
     strcat(buf, unit);
   }
   return buf;

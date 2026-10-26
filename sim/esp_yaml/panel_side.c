@@ -2,6 +2,7 @@
 // C++ harness.
 #include "ui.h"
 #include "link.h"
+#include "panel_side.h"
 #include "picture.h"
 #include "plink.h"
 #include "sim.h"
@@ -25,6 +26,13 @@ void pn_restart(void) {  // a restart loses the link state and the picture, whic
   link_init();
 }
 
+void pn_reboot(int wiped) {  // a restart, with wiped the flash erased its settings
+  if (wiped)
+    panel_defaults();
+  sim_fresh = wiped;
+  pn_restart();
+}
+
 void pn_poll(void) { link_poll(); }
 // A burst that isn't the link's, starting at start_us. Handed over the way the RX interrupt in hw/rs485.c does.
 void pn_bus(const uint8_t *b, int n, uint32_t start_us) {
@@ -42,7 +50,6 @@ void pn_second(void) {
 }
 int pn_online(void) { return M.esp_online; }
 int pn_get(uint16_t key) { return (int) val_get(val_by_key(key)); }
-int pn_known(uint16_t key) { return val_known(val_by_key(key)); }
 int pn_reg(uint16_t reg) { return (int) val_get(val_by_cx60(reg)); }  // the panel's value for a CX60 register
 void pn_set_reg(uint16_t reg, int v) { val_set(val_by_cx60(reg), v); }
 void pn_set(uint16_t key, int v) { val_set(val_by_key(key), v); }
@@ -97,61 +104,53 @@ int pn_pic(int *w, int *h) {
 }
 int pn_pic_format(void) { return pic_format(); }
 
-// anim_show() puts an image per place at the end of the screen, in place order. Takes them away again.
-static void unshow(uint32_t n0) {
-  while (lv_obj_get_child_cnt(lv_scr_act()) > n0)
-    lv_obj_del(lv_obj_get_child(lv_scr_act(), -1));
-}
-
-// Line y of place p's frame from its decoder, 3 bytes per pixel, RGB565 then alpha. Returns the width, or 0 if
-// there's no such place.
-int pn_anim_line(int p, int y, uint8_t *out) {
-  uint32_t n0 = lv_obj_get_child_cnt(lv_scr_act());
-  int16_t ax, ay, k = 0;
-  for (int i = 0; i < p; i++)
-    k += anim_pos(i, &ax, &ay);
-  int w = 0;
-  if (anim_show(lv_scr_act()) && anim_pos(p, &ax, &ay)) {
-    lv_img_decoder_dsc_t dsc;
-    lv_obj_t *o = lv_obj_get_child(lv_scr_act(), (int32_t) n0 + k);
-    if (lv_img_decoder_open(&dsc, lv_img_get_src(o), lv_color_black(), 0) == LV_RES_OK) {
-      w = dsc.header.w;
-      if (lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) y, (lv_coord_t) w, out) != LV_RES_OK)
-        w = 0;
-      lv_img_decoder_close(&dsc);
-    }
+// Line y of the frame place p shows, w x h animation pixels drawn at scale, 3 bytes per pixel: RGB565, then 0 where
+// it's colour transp. 0 if there's no such place.
+int pn_anim_line(int p, int y, int w, int scale, int transp, uint8_t *out) {
+  anim_look_t l;
+  if (!anim_look(p, &l))
+    return 0;
+  for (int x = 0; x < w * scale; x++) {
+    int sx = x / scale, c = l.frame[y / scale * (w / 2) + sx / 2];
+    c = sx & 1 ? c & 15 : c >> 4;
+    memcpy(out + 3 * x, &l.pal[c], 2);
+    out[3 * x + 2] = c == transp ? LV_OPA_TRANSP : LV_OPA_COVER;
   }
-  unshow(n0);
-  return w;
+  return w * scale;
 }
 
 // Let the animations play for ms.
 void pn_anim_step(int ms) {
-  uint32_t n0 = lv_obj_get_child_cnt(lv_scr_act());
-  anim_show(lv_scr_act());
+  lv_obj_t *o = anim_show(lv_scr_act());
   lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
-  unshow(n0);
+  lv_obj_del(o);
 }
 
-int pn_anim_ready(void) { return anim_ready(); }
-int pn_anim_pos(int place, int *x, int *y) {
-  int16_t ax, ay;
-  if (!anim_pos(place, &ax, &ay))
+// 0 if there's no such place
+int pn_anim(int place, pn_look_t *out) {
+  anim_look_t l;
+  if (!anim_look(place, &l))
     return 0;
-  *x = ax;
-  *y = ay;
+  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa};
   return 1;
 }
 unsigned pn_anim_used(void) { return anim_used(); }
-int pn_anim_angle(int place, int *deg, int *flip) { return anim_angle(place, deg, flip); }
-int pn_anim_look(int place, int *size, int *opa) { return anim_look(place, size, opa); }
 
-// Screenshot of the picture screensaver as DIR/NAME.ppm.
+// The picture screensaver up, so its animations play, or down again
+void pn_saver(int on) {
+  if (on) {
+    M.screensaver = 3;
+    ui_value_changed(V_SCREENSAVER);
+    ui_push(&SCR_SAVER, 0);
+  } else {
+    ui_pop();
+  }
+}
+
+// Screenshot of the picture screensaver as DIR/NAME.ppm
 void pn_shot(const char *dir, const char *name) {
-  M.screensaver = 3;
-  ui_value_changed(V_SCREENSAVER);
-  ui_push(&SCR_SAVER, 0);
+  pn_saver(1);
   sim_shot(dir, name);
-  ui_pop();
+  pn_saver(0);
 }

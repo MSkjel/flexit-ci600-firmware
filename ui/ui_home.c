@@ -1,6 +1,5 @@
 // Home screen, its dashboard view and the fan speed overlay.
 #include "ui.h"
-#include <stdio.h>
 #include <string.h>
 
 // ---------------------------------------------------------------- dashboard
@@ -26,7 +25,6 @@ static const str_t BIG_CAPS[DT_COUNT] = {[DT_INDOOR] = S_INDOOR_CAPS,
 static const str_t TILE_NAMES[TILE_UNIT] = {
     [TILE_OUTDOOR] = S_OUTDOOR, [TILE_SUPPLY] = S_SUPPLY, [TILE_EXTRACT] = S_EXTRACT, [TILE_ROOM] = S_ROOM,
     [TILE_ROTOR] = S_ROTOR,     [TILE_FILTER] = S_FILTER, [TILE_HEATER] = S_HEATER,   [TILE_RECOVERY] = S_RECOVERY};
-#define NO_VALUE "\xE2\x80\x93"
 
 // Next week program change today: "until 22:30" inside a period, "Min at 15:30" before one
 static bool next_change(char *b) {
@@ -36,14 +34,14 @@ static bool next_change(char *b) {
   char t[12];
   for (int i = 0; i < M.n_periods[d]; i++) {
     const period_t *s = &M.week[d][i];
-    int a = s->start_h * 60 + s->start_m, e = s->end_h * 60 + s->end_m;
+    int a = s->start, e = s->end;
     if (now >= a && now < e) {
-      sprintf(b, _(S_UNTIL), fmt_hm(t, e));
+      sprint(b, _(S_UNTIL), fmt_hm(t, e));
       return true;
     }
     if (a > now && a < best) {
       best = a;
-      sprintf(b, _(S_MODE_AT), tr(MODE_NAMES[s->level % MODE_COUNT]), fmt_hm(t, a));
+      sprint(b, _(S_MODE_AT), tr(MODE_NAMES[s->level % MODE_COUNT]), fmt_hm(t, a));
     }
   }
   return best < 24 * 60;
@@ -119,7 +117,7 @@ static void tile_build(lv_obj_t *p, int i) {
 static const char *pct_text(char *b, int pct) {
   if (pct < 0)
     return NO_VALUE;
-  sprintf(b, "%d%%", pct);
+  sprint(b, "%d%%", pct);
   return b;
 }
 
@@ -143,7 +141,7 @@ static const char *tile_value(int src, char *b, int *bar, lv_color_t *c) {
       *c = *bar < 10 ? T.err : *bar < 25 ? T.warn : T.ok;
       if (!days)
         return _(S_DUE);  // "Change" doesn't fit the tile
-      sprintf(b, _(S_DAYS_SHORT), days);
+      sprint(b, _(S_DAYS_SHORT), days);
       return b;
     }
     case TILE_HEATER:
@@ -202,8 +200,8 @@ static int16_t big_temp(void) {
   }
 }
 
-static void dash_build(lv_obj_t *b) {
-  memset(dash, 0, sizeof *dash);
+static void dash_build(lv_obj_t *b, int first) {
+  (void) first;
   lv_obj_set_pos(mk_label(b, &font_f12, T.dim, tr(BIG_CAPS[M.dash_temp % DT_COUNT])), 14, 2);
   dash->big = mk_label(b, &font_n64, T.text, "");
   lv_obj_set_pos(dash->big, 8, 17);
@@ -214,7 +212,7 @@ static void dash_build(lv_obj_t *b) {
   lv_obj_set_pos(dash->state, 14, 101);
   lv_label_set_recolor(dash->state, true);
 
-  dash->ring = mk_arc(b, RING_SIZE, 9, 0, 3, T.accent);
+  dash->ring = mk_arc(b, RING_SIZE, 9, 0, MODE_MAX, T.accent);  // a boost fills it
   lv_obj_set_pos(dash->ring, 196, 4);
   dash->ring_icon = mk_icon(b, &icons_32, T.accent, IC_FAN);
   lv_obj_align_to(dash->ring_icon, dash->ring, LV_ALIGN_CENTER, 0, -20);
@@ -227,8 +225,8 @@ static void dash_build(lv_obj_t *b) {
 }
 
 // Status line under the setpoint saying what the unit is doing, in colour c
-static void state(lv_color_t c, const char *text) {
-  set_text(dash->state, "#%06x %s#", (unsigned) (lv_color_to32(c) & 0xFFFFFF), text);
+static void show_state(lv_color_t c, const char *text) {
+  set_text(dash->state, "#%06x %s#", (unsigned) ui_hex(c), text);
 }
 
 static void dash_update(void) {
@@ -236,18 +234,18 @@ static void dash_update(void) {
   set_text(dash->big, "%s", fmt_temp(a, big_temp(), false));
   set_text(dash->target, _(S_TARGET), fmt_target(a, M.setpoint_now ? M.setpoint_now : M.setpoint));
   if (M.bus_offline)
-    state(T.err, _(S_NO_CONTACT_WITH_UNIT));
+    show_state(T.err, _(S_NO_CONTACT_WITH_UNIT));
   else if (M.heat_pct)
-    state(T.warm, (snprintf(s, sizeof s, _(S_HEATING_PCT), M.heat_pct), s));
+    show_state(T.warm, (lv_snprintf(s, sizeof s, _(S_HEATING_PCT), M.heat_pct), s));
   else if (M.cool_pct)
-    state(T.cold, (snprintf(s, sizeof s, _(S_COOLING_PCT), M.cool_pct), s));
+    show_state(T.cold, (lv_snprintf(s, sizeof s, _(S_COOLING_PCT), M.cool_pct), s));
   else if (!M.heater_enabled)
-    state(T.faint, _(S_HEATER_OFF));
+    show_state(T.faint, _(S_HEATER_OFF));
   else
     lv_label_set_text(dash->state, "");
 
   lv_color_t mc = mode_color();
-  lv_arc_set_value(dash->ring, M.boost_left ? 3 : M.mode_now);
+  lv_arc_set_value(dash->ring, M.boost_left ? MODE_MAX : M.mode_now);
   lv_obj_set_style_arc_color(dash->ring, mc, LV_PART_INDICATOR);
   lv_obj_set_style_text_color(dash->ring_icon, mc, 0);
   lv_label_set_text(dash->ring_icon, M.mode_now == MODE_STOP && !M.boost_left ? IC_FAN_OFF : IC_FAN);
@@ -276,7 +274,7 @@ const view_t DASH_VIEW = {.build = dash_build, .update = dash_update, .help = S_
 static const view_t *const VIEWS[VIEW_COUNT] = {[VIEW_DASH] = &DASH_VIEW,       [VIEW_FLOW] = &FLOW_VIEW,
                                                 [VIEW_TREND] = &TREND_VIEW,     [VIEW_SENSORS] = &SENSORS_VIEW,
                                                 [VIEW_COMFORT] = &COMFORT_VIEW, [VIEW_SMART] = &SMART_VIEW};
-static int view;  // current view, VIEW_*
+static int view, page;  // current view, VIEW_*, and its page
 
 // Installed and switched on in Display > Home screen > Views. The dashboard is always on.
 static bool view_on(int v) { return ui_has(VIEWS[v]->need) && (v == VIEW_DASH || M.view_on[v]); }
@@ -288,7 +286,10 @@ int view_used(val_t v, int view) {
 }
 
 // View is on and has something to show
-static bool view_ok(int v) { return view_on(v) && (!VIEWS[v]->avail || VIEWS[v]->avail()); }
+static bool view_ok(int v) { return view_on(v) && (!VIEWS[v]->count || VIEWS[v]->count() > 0); }
+
+// BACK shows a view's pages in turn
+static int pages(const view_t *v) { return v->per_page ? (v->count() + v->per_page - 1) / v->per_page : 1; }
 
 // First view from v onwards that is on and has something to show, v included
 static int next_view(int v) {
@@ -299,27 +300,29 @@ static int next_view(int v) {
 }
 
 static void home_build(lv_obj_t *b, intptr_t arg) {
-  view = next_view((int) arg % VIEW_COUNT);
+  int v = next_view((int) arg % VIEW_COUNT);
+  if (v != view || page >= pages(VIEWS[v]))
+    page = 0;  // another view, or some items have gone
+  view = v;
   int n = 0, pos = 0;
-  for (int v = 0; v < VIEW_COUNT; v++)
-    if (view_ok(v)) {
-      if (v == view)
+  for (int i = 0; i < VIEW_COUNT; i++)
+    if (view_ok(i)) {
+      if (i == view)
         pos = n;
       n++;
     }
   ui_view_dots(n, pos);
   ui_hints(S_FAN, S_MENU, S_VIEW, S_HELP);
   ui_help(VIEWS[view]->help);
-  VIEWS[view]->build(b);
+  VIEWS[view]->build(b, page * VIEWS[view]->per_page);
 }
 
 static void home_update(void) { VIEWS[view]->update(); }
 
 static bool home_key(int k) {
   switch (k) {
-    case KEY_BACK:
-      ui_replace(&SCR_HOME,
-                 VIEWS[view]->next_page && VIEWS[view]->next_page() ? view : next_view((view + 1) % VIEW_COUNT));
+    case KEY_BACK:  // the next page, else the next view
+      ui_replace(&SCR_HOME, ++page < pages(VIEWS[view]) ? view : next_view((view + 1) % VIEW_COUNT));
       return true;
     case KEY_OK:
       ui_push(&SCR_MENU, 0);
@@ -340,7 +343,7 @@ const screen_t SCR_HOME = {.build = home_build, .update = home_update, .key = ho
 #define HUD_BOOST MODE_COUNT  // one level above MAX
 
 static struct {
-  lv_obj_t *bars[HUD_BOOST + 1], *names[HUD_BOOST + 1], *title, *sub;
+  lv_obj_t *bars[HUD_BOOST + 1], *names[HUD_BOOST + 1], *sub;
   uint8_t start;  // speed when the overlay opened
 } hud;
 
@@ -365,8 +368,7 @@ static void hud_step(int k) {
 static void hud_build(lv_obj_t *b, intptr_t arg) {
   hud.start = (uint8_t) arg;
   lv_obj_t *card = mk_card(b, 30, 28, 260, 140, T.line, 1);
-  hud.title = mk_label(card, &font_f16, T.text, _(S_FAN_SPEED));
-  lv_obj_set_pos(hud.title, 16, 8);
+  lv_obj_set_pos(mk_label(card, &font_f16, T.text, _(S_FAN_SPEED)), 16, 8);
   hud.sub = mk_label(card, &font_f12, T.dim, "");
   lv_obj_set_pos(hud.sub, 16, 28);
   for (int i = 0; i <= HUD_BOOST; i++) {
@@ -407,7 +409,7 @@ static bool hud_key(int k) {
     ui_refresh();
     return true;
   }
-  if (k == KEY_OK || k == KEY_BACK) {
+  if (k == KEY_OK) {
     ui_pop();
     return true;
   }

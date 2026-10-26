@@ -28,9 +28,10 @@ bool rs485_busy(void) { return USART1->CR1 & (USART_CR1_TXEIE | USART_CR1_TCIE);
 #define STATUS_EARLY 24  // bytes, 2 ms
 bool rs485_wait_quiet(uint32_t ms) {
   const pbus_panel_t *w = link_bus_state();
+  int head = (int) sizeof PBUS_STATUS_HEAD;
   for (uint32_t t = board_ms();;) {
     uint32_t s = board_irq_save();
-    bool status = rx_len >= 7 && rx_len <= STATUS_EARLY && pbus_status_part(rx, 7) == 7;
+    bool status = rx_len >= head && rx_len <= STATUS_EARLY && pbus_status_part(rx, head) == head;
     bool cx60 = board_ms() - w->status_ms < 1000;
     board_irq_restore(s);
     if (!rs485_busy() && (status || !cx60))
@@ -42,8 +43,8 @@ bool rs485_wait_quiet(uint32_t ms) {
 
 // Sends the first byte, the interrupt sends the rest.
 static void send(int n) {
-  pin_set(GPIOA, 11, 1);  // receiver off, so we don't hear ourselves
-  pin_set(GPIOA, 12, 1);  // driver on
+  pin_set(PIN_RS485_RX_OFF, 1);  // so we don't hear ourselves
+  pin_set(PIN_RS485_TX_ON, 1);
   tx_len = n;
   tx_pos = 1;
   USART1->DR = tx[0];  // SR was read just before, so this write also clears a stale TC
@@ -62,8 +63,8 @@ void USART1_IRQHandler(void) {
   if ((cr1 & USART_CR1_TCIE) && (sr & USART_SR_TC)) {  // the last stop bit is out, release the bus
     USART1->CR1 &= ~USART_CR1_TCIE;
     USART1->SR = ~USART_SR_TC;
-    pin_set(GPIOA, 12, 0);
-    pin_set(GPIOA, 11, 0);
+    pin_set(PIN_RS485_TX_ON, 0);
+    pin_set(PIN_RS485_RX_OFF, 0);
   }
   if (sr & USART_SR_RXNE) {
     uint8_t b = (uint8_t) USART1->DR;

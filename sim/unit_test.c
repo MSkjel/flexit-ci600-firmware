@@ -1,4 +1,5 @@
 // Unit tests. The firmware's hw/ code runs on board_stub.c.
+#include "board.h"
 #include "clock.h"
 #include "layout.h"
 #include "link.h"
@@ -18,7 +19,7 @@
 model_t M;
 extern uint32_t stub_ms, stub_rtc;
 extern uint8_t stub_flash[];
-extern int stub_flash_writes_left, stub_flash_erases;
+extern int stub_flash_writes_left, stub_flash_erases, stub_resets;
 extern uint32_t stub_flash_bad;
 extern bool stub_bus_quiet;
 static int fails;
@@ -30,6 +31,15 @@ static int fails;
     } \
   } while (0)
 
+// main.c's, which has the firmware's main()
+void plat_value_changed(val_t v) { unit_value_changed(v); }
+void plat_action(int a) {
+  if (a == A_RESTART)
+    board_reset();
+  else
+    unit_action(a);
+}
+
 // ---------------------------------------------------------------- picture
 #define W 10  // pixels, so 5 bytes per row
 #define H 6
@@ -38,81 +48,43 @@ static uint8_t px[H][W / 2];  // the expected picture, 2 pixels per byte
 static uint32_t tint;  // XORed into every palette colour, see rgb()
 static uint32_t rgb(int i) { return ((uint32_t) (i * 0x0F0F0F) ^ 0x204060) ^ tint; }
 
-// PackBits for one row, a run where 2+ bytes repeat, otherwise single-byte literals
-static unsigned pack_row(const uint8_t *row, uint8_t *out) {
-  unsigned n = 0;
-  for (unsigned i = 0; i < W / 2;) {
-    unsigned k = 1;
-    while (i + k < W / 2 && row[i + k] == row[i])
-      k++;
-    if (k >= 2) {
-      out[n++] = (uint8_t) (k + 126);
-      out[n++] = row[i];
-      i += k;
-    } else {
-      out[n++] = 0;
-      out[n++] = row[i++];
-    }
-  }
-  return n;
-}
-
 static unsigned pack(int y, int count, uint8_t *out) {
   unsigned n = 0;
   for (int r = y; r < y + count; r++)
-    n += pack_row(px[r], out + n);
+    n += plink_pack_row(px[r], W / 2, out + n);
   return n;
 }
 
 static uint8_t status(int32_t ack) { return ack < 0 ? 0xFF : (uint8_t) (ack >> 24); }
 
-static uint8_t id;  // id of the last transfer
+static uint8_t id;                                                          // id of the last transfer
+static int32_t (*to_pic)(uint16_t key, const uint8_t *b, int n) = pic_msg;  // or through the link, see test_link
 
-static void put16(uint8_t *b, unsigned v) {
-  b[0] = (uint8_t) v;
-  b[1] = (uint8_t) (v >> 8);
+static const uint32_t *palette(void) {  // rgb()'s 16 as they are now
+  static uint32_t pal[16];
+  for (int i = 0; i < 16; i++)
+    pal[i] = rgb(i);
+  return pal;
 }
 
-static void put32(uint8_t *b, uint32_t v) {
-  put16(b, v & 0xFFFF);
-  put16(b + 2, v >> 16);
-}
-
-static void palette(uint8_t *b) {
-  for (int i = 0; i < 16; i++, b += 3) {
-    b[0] = (uint8_t) (rgb(i) >> 16);
-    b[1] = (uint8_t) (rgb(i) >> 8);
-    b[2] = (uint8_t) rgb(i);
-  }
-}
-
-// BEGIN: id, format, w, h, len, palette
 static int32_t begin(int w, int h, uint32_t len) {
-  uint8_t b[58] = {++id, PIC_PALETTE};
-  put16(b + 2, (unsigned) w);
-  put16(b + 4, (unsigned) h);
-  put32(b + 6, len);
-  palette(b + 10);
-  return pic_msg(K_PIC_BEGIN, b, sizeof b);
+  uint8_t b[PIC_BEGIN_HEAD + PIC_PAL_LEN];
+  return to_pic(K_PIC_BEGIN, b, sim_pic_begin(b, ++id, PIC_PALETTE, w, h, len, palette()));
 }
 
-// PATCH: id, y, count, len, then the palette if pal
+// PATCH, with the palette if pal
 static int32_t patch(int y, int count, uint32_t len, bool pal) {
-  uint8_t b[57] = {++id};
-  put16(b + 1, (unsigned) y);
-  put16(b + 3, (unsigned) count);
-  put32(b + 5, len);
-  palette(b + 9);
-  return pic_msg(K_PIC_PATCH, b, pal ? 57 : 9);
+  uint8_t b[PIC_PATCH_HEAD + PIC_PAL_LEN];
+  return to_pic(K_PIC_PATCH, b, sim_pic_patch(b, ++id, y, count, len, pal ? palette() : NULL));
 }
 
 static int32_t end(uint32_t crc) {
   uint8_t b[4];
-  put32(b, crc);
-  return pic_msg(K_PIC_END, b, 4);
+  plink_put32(b, crc);
+  return to_pic(K_PIC_END, b, 4);
 }
 
-static int32_t data(const uint8_t *b, unsigned n) { return pic_msg(K_PIC_DATA, b, (int) n); }
+static int32_t data(const uint8_t *b, unsigned n) { return to_pic(K_PIC_DATA, b, (int) n); }
 
 // The rest of a transfer after the header got answer a. DATA in pieces, then END. Returns the last answer.
 static int32_t rest(int32_t a, const uint8_t *b, unsigned len, unsigned piece, uint32_t crc) {
@@ -172,7 +144,7 @@ static bool shows(void) {
 static void fill(int y, int count, uint8_t seed) {
   for (int r = y; r < y + count; r++)
     for (int i = 0; i < W / 2; i++)
-      px[r][i] = (uint8_t) (i < 2 ? seed + r : (seed + r) * 17 + i);  // a repeat, then literals
+      px[r][i] = (uint8_t) (i < 3 ? seed + r : (seed + r) * 17 + i);  // a run, then literals
 }
 
 static void test_picture(void) {
@@ -267,6 +239,79 @@ static void test_picture(void) {
   CHECK(!shows());
 }
 
+// A picture taller than the row checkpoints, every 8th row, with an odd width: any part drawn is the same as that
+// part of the whole, also after patches across the checkpoints
+#define BW 37
+#define BH 27
+static uint8_t big[BH][(BW + 1) / 2];
+
+static void fill_big(int y, int count, int seed) {
+  for (int r = y; r < y + count; r++)
+    for (int i = 0; i < (BW + 1) / 2; i++)
+      big[r][i] = (uint8_t) ((i + r) % 7 < 3 ? seed * 16 + r : (seed + r) * 17 + i * 5);  // runs and literals
+}
+
+static unsigned pack_big(int y, int count, uint8_t *out) {
+  unsigned n = 0;
+  for (int r = y; r < y + count; r++)
+    n += plink_pack_row(big[r], (BW + 1) / 2, out + n);
+  return n;
+}
+
+static bool big_part(int x1, int y1, int x2, int y2) {
+  static lv_color_t got[BH][BW];
+  memset(got, 0, sizeof got);
+  lv_area_t a = {(lv_coord_t) x1, (lv_coord_t) y1, (lv_coord_t) x2, (lv_coord_t) y2};
+  if (!pic_read(&a, &got[y1][x1], BW))
+    return false;
+  bool same = true;
+  for (int y = 0; y < BH; y++)
+    for (int x = 0; x < BW; x++) {
+      uint8_t b = big[y][x / 2];
+      bool in = x >= x1 && x <= x2 && y >= y1 && y <= y2;
+      same &= got[y][x].full == (in ? lv_color_hex(rgb(x & 1 ? b & 15 : b >> 4)).full : 0);  // nothing outside
+    }
+  return same;
+}
+
+static bool big_shows(void) {
+  static const int PARTS[][4] = {{0, 0, BW - 1, BH - 1}, {0, 0, 0, 0},   {BW - 1, BH - 1, BW - 1, BH - 1},
+                                 {3, 5, 20, 13},         {4, 8, 4, 16},  {1, 7, 34, 9},
+                                 {10, 15, 36, 26},       {9, 17, 11, 23}};
+  bool ok = true;
+  for (size_t i = 0; i < sizeof PARTS / sizeof PARTS[0]; i++)
+    ok &= big_part(PARTS[i][0], PARTS[i][1], PARTS[i][2], PARTS[i][3]);
+  return ok;
+}
+
+static void test_picture_parts(void) {
+  uint8_t b[1024];
+  fill_big(0, BH, 1);
+  unsigned n = pack_big(0, BH, b);
+  CHECK(status(rest_zip(begin(BW, BH, n), b, n, NULL, 0, 50)) == PIC_DONE && big_shows());
+  int patches[][2] = {{5, 13}, {8, 8}, {16, 1}, {0, 27}, {20, 7}, {3, 2}};  // y, count
+  for (size_t i = 0; i < sizeof patches / sizeof patches[0]; i++) {
+    int y = patches[i][0], count = patches[i][1];
+    fill_big(y, count, (int) i + 2);
+    n = pack_big(y, count, b);
+    CHECK(status(rest_zip(patch(y, count, n, false), b, n, NULL, 0, 50)) == PIC_DONE && big_shows());
+  }
+  // A patch redraws only its rows, the picture object keeps showing
+  lv_obj_t *o = pic_show(lv_scr_act());
+  lv_refr_now(NULL);
+  lv_disp_t *d = lv_disp_get_default();
+  fill_big(9, 3, 9);
+  n = pack_big(9, 3, b);
+  CHECK(status(rest_zip(patch(9, 3, n, false), b, n, NULL, 0, 50)) == PIC_DONE && big_shows());
+  lv_area_t *a = &d->inv_areas[0];  // LVGL adds 5 px all round
+  CHECK(d->inv_p == 1 && a->y1 == o->coords.y1 + 9 - 5 && a->y2 == o->coords.y1 + 11 + 5);
+  lv_refr_now(NULL);
+  CHECK(status(rest_zip(patch(0, 0, 0, true), b, 0, NULL, 0, 50)) == PIC_DONE && big_shows());  // all its colours
+  CHECK(d->inv_p == 1 && a->y1 == o->coords.y1 - 5 && a->y2 == o->coords.y2 + 5);
+  lv_obj_del(o);
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+}
+
 // ---------------------------------------------------------------- JPEG pictures
 #define JW 48
 #define JH 24
@@ -276,12 +321,9 @@ static uint32_t photo(void *ctx, int x, int y) {  // soft gradients with grain
   return (uint32_t) (40 + x * 4 + (x * y) % 7) << 16 | (uint32_t) (60 + y * 7) << 8 | (uint32_t) (200 - x - y);
 }
 
-static int32_t jpeg_begin(int w, int h, uint32_t len) {  // BEGIN: id, format, w, h, len
-  uint8_t b[10] = {++id, PIC_JPEG};
-  put16(b + 2, (unsigned) w);
-  put16(b + 4, (unsigned) h);
-  put32(b + 6, len);
-  return pic_msg(K_PIC_BEGIN, b, sizeof b);
+static int32_t jpeg_begin(int w, int h, uint32_t len) {
+  uint8_t b[PIC_BEGIN_HEAD];
+  return pic_msg(K_PIC_BEGIN, b, sim_pic_begin(b, ++id, PIC_JPEG, w, h, len, NULL));
 }
 
 static int32_t send_jpeg(const uint8_t *j, uint32_t n, int w, int h) {
@@ -291,11 +333,17 @@ static int32_t send_jpeg(const uint8_t *j, uint32_t n, int w, int h) {
 static void test_jpeg(void) {
   static uint8_t j[8192];
   pjpeg_t e;
+  pjpeg_begin(&e, JW, JH, 97, j, 100);  // doesn't fit, but its size is counted to the end
+  while (pjpeg_mcu(&e, photo, NULL)) {
+  }
+  uint32_t n97 = pjpeg_end(&e);
   pjpeg_begin(&e, JW, JH, 90, j, sizeof j);
+  pjpeg_also(&e, 97);  // and counted along
   while (pjpeg_mcu(&e, photo, NULL)) {
   }
   uint32_t n = pjpeg_end(&e);
-  CHECK(n > 600 && pjpeg_mse(&e) > 0 && pjpeg_mse(&e) < 20);
+  CHECK(n > 600 && n <= sizeof j && pjpeg_mse(&e) > 0 && pjpeg_mse(&e) < 20);
+  CHECK(n97 > n && e.n == 2 && e.o[1].quality == 97 && e.o[1].len == n97);
   CHECK(status(send_jpeg(j, n, JW, JH)) == PIC_DONE);
   CHECK(pic_state() == PIC_READY && pic_format() == PIC_JPEG && pic_width() == JW && pic_height() == JH);
 
@@ -323,6 +371,42 @@ static void test_jpeg(void) {
     for (int x = 3; x <= JW - 5; x++)
       same &= part[y * JW + x].full == whole[y * JW + x].full;
   CHECK(same);
+  // Only the MCUs a part meets are decoded, the ones before it read past and the ones after left. Same pixels, and
+  // nothing outside it.
+  static const lv_area_t PARTS[] = {{0, 0, 5, 7}, {17, 3, 30, 20}, {40, 9, 47, 23}, {16, 8, 31, 15}, {31, 0, 32, 23}};
+  for (size_t i = 0; i < sizeof PARTS / sizeof PARTS[0]; i++) {
+    const lv_area_t *s = &PARTS[i];
+    memset(part, 0, sizeof part);
+    same = pic_read(s, part + s->y1 * JW + s->x1, JW);
+    for (int y = 0; y < JH; y++)
+      for (int x = 0; x < JW; x++)
+        same &= part[y * JW + x].full ==
+                (x >= s->x1 && x <= s->x2 && y >= s->y1 && y <= s->y2 ? whole[y * JW + x].full : 0);
+    CHECK(same);
+  }
+  // Shown with its top on a multiple of 8 lines. LVGL's areas over it are rounded out to its MCU rows, the rest
+  // stay as they are, and so do strips when LVGL asks how high they may be.
+  lv_obj_t *o = pic_show(lv_scr_act());
+  lv_obj_update_layout(o);
+  CHECK(o->coords.y1 % 8 == 0 && o->coords.y1 > 0 && o->coords.x1 == (320 - JW) / 2);
+  lv_area_t over = {(lv_coord_t) (o->coords.x1 + 3), (lv_coord_t) (o->coords.y1 + 3), (lv_coord_t) (o->coords.x1 + 9),
+                    (lv_coord_t) (o->coords.y1 + 12)};
+  lv_area_t beside = {0, (lv_coord_t) (o->coords.y1 + 3), 9, (lv_coord_t) (o->coords.y1 + 12)}, b0 = beside;
+  lv_area_t probe = {0, 0, 0, 36}, low = {0, 0, 0, 4};
+  pic_round(NULL, &over);
+  pic_round(NULL, &beside);
+  pic_round(NULL, &probe);
+  pic_round(NULL, &low);
+  CHECK(over.y1 == o->coords.y1 && over.y2 == o->coords.y1 + 15 && over.x1 == o->coords.x1 + 3);
+  CHECK(!memcmp(&beside, &b0, sizeof b0) && probe.y1 == 0 && probe.y2 == 39 && low.y2 == 4);
+  lv_refr_now(NULL);
+  _lv_inv_area(NULL, &(lv_area_t) {0, 236, 3, 239});  // a strip of a few lines beside it still gets drawn
+  lv_refr_now(NULL);
+  CHECK(lv_disp_get_default()->inv_p == 0);
+  lv_obj_del(o);
+  lv_area_t still = {1, 3, 2, 5};  // nothing to round to without it
+  pic_round(NULL, &still);
+  CHECK(still.y1 == 3 && still.y2 == 5);
   lv_area_t outside = {0, 0, JW, 0};
   CHECK(!pic_read(&outside, part, JW));
   CHECK(status(patch(0, 1, 4, false)) == PIC_NO_PICTURE);  // only a 16-colour picture takes patches
@@ -354,54 +438,87 @@ static void test_jpeg(void) {
 #define AH 4
 static uint8_t an[4][AH][AW / 2];  // the frames, colour 15 is transparent
 
-// ANIM_BEGIN: id, slot, w, h, scale, transparent colour, len, palette. Then the data.
+// ANIM_BEGIN at scale 2, colour 15 transparent, then the data
 static int32_t anim_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc) {
-  uint8_t h[60] = {++id, (uint8_t) slot};
-  put16(h + 2, (unsigned) w);
-  put16(h + 4, AH);
-  h[6] = 2;
-  h[7] = 15;
-  put32(h + 8, len);
-  palette(h + 12);
-  return rest(pic_msg(K_ANIM_BEGIN, h, sizeof h), data, len, 5, crc);
+  uint8_t h[ANIM_BEGIN_HEAD + PIC_PAL_LEN];
+  int n = sim_anim_begin(h, ++id, slot, w, AH, 2, 15, len, palette());
+  return rest(pic_msg(K_ANIM_BEGIN, h, n), data, len, 5, crc);
 }
 
-// ANIM_PLACE: place, slot, x, y, own, start, fade
 static void place_in(int p, int slot, int x, int y, int own, int start, int fade) {
-  uint8_t m[10] = {(uint8_t) p, (uint8_t) slot};
-  put16(m + 2, (unsigned) x);
-  put16(m + 4, (unsigned) y);
-  m[6] = (uint8_t) own;
-  m[7] = (uint8_t) start;
-  put16(m + 8, (unsigned) fade);
-  pic_msg(K_ANIM_PLACE, m, sizeof m);
+  uint8_t m[10];
+  anim_msg(K_ANIM_PLACE, m, sim_anim_place(m, p, slot, x, y, own, start, fade));
 }
 
 static void place(int p, int slot, int x, int y, int own, int start) { place_in(p, slot, x, y, own, start, 0); }
 
 static void anim_clear_msg(unsigned v) {
   uint8_t m[4];
-  put32(m, v);
+  plink_put32(m, v);
   pic_msg(K_ANIM_CLEAR, m, 4);
 }
 
-// Whether an image's decoder gives frame f of the AW x AH frames, drawn at 2x.
-static bool anim_shows(lv_obj_t *img, int f) {
-  lv_img_decoder_dsc_t dsc;
-  if (lv_img_decoder_open(&dsc, lv_img_get_src(img), lv_color_black(), 0) != LV_RES_OK)
+static lv_obj_t *layer;  // anim_show()'s, at the top left of the screen
+
+static lv_obj_t *show_anims(void) { return layer = anim_show(lv_scr_act()); }
+
+static bool anim_pos(int k, int16_t *x, int16_t *y) {
+  anim_look_t l;
+  if (!anim_look(k, &l))
     return false;
-  bool same = dsc.header.w == AW * 2 && dsc.header.h == AH * 2 && dsc.header.cf == LV_IMG_CF_TRUE_COLOR_ALPHA;
-  for (int y = 0; y < AH * 2 && same; y++) {
-    uint8_t line[AW * 2 * LV_IMG_PX_SIZE_ALPHA_BYTE];
-    lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) y, AW * 2, line);
-    for (int x = 0; x < AW * 2; x++) {
-      uint8_t b = an[f][y / 2][x / 4], c = x / 2 & 1 ? b & 15 : b >> 4, *p = &line[x * LV_IMG_PX_SIZE_ALPHA_BYTE];
-      lv_color_t want = lv_color_hex(rgb(c));
-      same &= c == 15 ? p[2] == LV_OPA_TRANSP : p[2] == LV_OPA_COVER && !memcmp(p, &want, sizeof want);
-    }
+  *x = l.x;
+  *y = l.y;
+  return true;
+}
+
+static bool anim_angle(int k, int *deg, int *flip) {
+  anim_look_t l;
+  if (!anim_look(k, &l))
+    return false;
+  *deg = l.deg;
+  *flip = l.flip;
+  return true;
+}
+
+static bool placed(void) {
+  anim_look_t l;
+  for (int k = 0; k < ANIM_PLACES; k++)
+    if (anim_look(k, &l))
+      return true;
+  return false;
+}
+
+#define BEHIND 0xFF00FF  // what the animations are drawn over, in no test palette
+
+// Place k's box as the layer draws it: each pixel's palette index, -1 where it's see-through, -2 for something
+// between. False if it isn't drawn.
+static bool drawn(int k, anim_look_t *l, int *px) {
+  static lv_color_t buf[PIC_MAX_W * PIC_MAX_H];
+  if (!layer || !lv_obj_is_valid(layer) || !anim_look(k, l) || !(l->tiles & 1))
+    return false;
+  sim_draw(layer, &l->box, lv_color_hex(BEHIND), buf);
+  for (uint32_t i = 0; i < lv_area_get_size(&l->box); i++) {
+    px[i] = buf[i].full == lv_color_hex(BEHIND).full ? -1 : -2;
+    for (int c = 0; c < 16; c++)
+      if (buf[i].full == lv_color_hex(rgb(c)).full)
+        px[i] = c;
   }
-  lv_img_decoder_close(&dsc);
-  return same;
+  return true;
+}
+
+// Whether place k shows frame f of the AW x AH frames, drawn at 2x
+static bool anim_shows(int k, int f) {
+  static int px[PIC_MAX_W * PIC_MAX_H];
+  anim_look_t l;
+  if (!drawn(k, &l, px) || lv_area_get_width(&l.box) != AW * 2 || lv_area_get_height(&l.box) != AH * 2)
+    return false;
+  for (int y = 0; y < AH * 2; y++)
+    for (int x = 0; x < AW * 2; x++) {
+      uint8_t b = an[f][y / 2][x / 4], c = x / 2 & 1 ? b & 15 : b >> 4;
+      if (px[y * AW * 2 + x] != (c == 15 ? -1 : c))
+        return false;
+    }
+  return true;
 }
 
 // the records of the 4 test frames: frame 0 whole, the last record back to frame 0. Frame f shows for delay + f
@@ -420,36 +537,30 @@ static void test_anim(void) {
   an[3][0][0] = 0x56;
   uint8_t d[512];
   uint32_t n = anim_records(d, 5);
-  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && !anim_ready());  // not placed yet
-  CHECK(anim_used() == AW / 2 * AH + n && !anim_show(lv_scr_act()));
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && !placed());  // not placed yet
+  CHECK(anim_used() == AW / 2 * AH + n && show_anims() && !anim_shows(0, 0));
   place(0, 0, 0, 10, 0, 0);
-  CHECK(anim_ready());
-  lv_obj_t *img = anim_show(lv_scr_act());
-  CHECK(img && anim_shows(img, 0));
-  sim_run(50);  // the first frame for 50 ms, the next for 60, ...
-  CHECK(anim_shows(img, 1));
+  CHECK(placed() && anim_shows(0, 0));  // shown as it's placed
+  sim_run(50);                          // the first frame for 50 ms, the next for 60, ...
+  CHECK(anim_shows(0, 1));
   sim_run(60);
-  CHECK(anim_shows(img, 2));  // same as frame 1, so a record with no rows
+  CHECK(anim_shows(0, 2));  // same as frame 1, so a record with no rows
   sim_run(70);
-  CHECK(anim_shows(img, 3));
+  CHECK(anim_shows(0, 3));
   sim_run(80);
-  CHECK(anim_shows(img, 0));  // and back to the start
-  lv_obj_del(img);
+  CHECK(anim_shows(0, 0));  // and back to the start
+  lv_obj_del(layer);
 
   // bad sizes, then bad data
-  CHECK(status(anim_send(0, AW - 1, n, d, 0)) == PIC_BAD_SIZE && !anim_ready());  // the slot's gone with it
+  CHECK(status(anim_send(0, AW - 1, n, d, 0)) == PIC_BAD_SIZE && !placed());  // the slot's gone with it
   CHECK(status(anim_send(0, PIC_MAX_W, n, d, 0)) == PIC_BAD_SIZE);
   CHECK(status(anim_send(0, AW, ANIM_POOL, d, 0)) == PIC_TOO_BIG);
   CHECK(status(anim_send(0, AW, UINT32_MAX, d, 0)) == PIC_TOO_BIG);  // doesn't wrap round to fit
-  uint8_t big[60] = {++id, 1};                                       // a frame bigger than the pool
-  put16(big + 2, 160);
-  put16(big + 4, 100);
-  big[6] = 1;
-  big[7] = ANIM_OPAQUE;
-  put32(big + 8, 4);
-  CHECK(status(pic_msg(K_ANIM_BEGIN, big, sizeof big)) == PIC_TOO_BIG);
+  uint8_t big[ANIM_BEGIN_HEAD + PIC_PAL_LEN];                        // a frame bigger than the pool
+  int bn = sim_anim_begin(big, ++id, 1, 160, 100, 1, ANIM_OPAQUE, 4, palette());
+  CHECK(status(pic_msg(K_ANIM_BEGIN, big, bn)) == PIC_TOO_BIG);
   big[1] = ANIM_SLOTS;  // no such slot
-  CHECK(status(pic_msg(K_ANIM_BEGIN, big, sizeof big)) == PIC_BAD);
+  CHECK(status(pic_msg(K_ANIM_BEGIN, big, bn)) == PIC_BAD);
   uint8_t bad[sizeof d];
   memcpy(bad, d, n);
   bad[4] = AH + 1;
@@ -463,19 +574,28 @@ static void test_anim(void) {
   // A picture coming in cancels an animation coming in. A finished animation stays until the ESP clears it.
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 0, 10, 0, 0);
-  uint8_t h[60] = {++id, 1};
-  put16(h + 2, AW);
-  put16(h + 4, AH);
-  h[6] = 1;
-  h[7] = 15;
-  put32(h + 8, n);
-  CHECK(pic_msg(K_ANIM_BEGIN, h, sizeof h) == -1 && data(d, n / 2) == -1);
+  uint8_t h[ANIM_BEGIN_HEAD + PIC_PAL_LEN];
+  int hn = sim_anim_begin(h, ++id, 1, AW, AH, 1, 15, n, palette());
+  CHECK(pic_msg(K_ANIM_BEGIN, h, hn) == -1 && data(d, n / 2) == -1);
   fill(0, H, 5);
-  CHECK(status(send_picture(16)) == PIC_DONE && shows() && anim_ready() && anim_used() == AW / 2 * AH + n);
+  CHECK(status(send_picture(16)) == PIC_DONE && shows() && placed() && anim_used() == AW / 2 * AH + n);
   CHECK(data(d + n / 2, n - n / 2) == -1 && end(plink_crc32(0, d, n)) == -1);  // the rest is no longer expected
-  CHECK(status(anim_send(1, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && anim_ready());
+  CHECK(status(anim_send(1, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE && placed());
   anim_clear_msg(ANIM_ALL);
-  CHECK(!anim_ready() && shows() && anim_used() == 0);
+  CHECK(!placed() && shows() && anim_used() == 0);
+  // Clearing another slot or a place leaves it coming in, clearing its own slot drops the rest of it
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 10, 0, 0);
+  h[0] = ++id;
+  CHECK(pic_msg(K_ANIM_BEGIN, h, hn) == -1 && data(d, n / 2) == -1);
+  anim_clear_msg(ANIM_PLACE_BIT | 0);
+  anim_clear_msg(0 | 300 << 8);
+  CHECK(data(d + n / 2, n - n / 2) == -1 && status(end(plink_crc32(0, d, n))) == PIC_DONE);
+  CHECK(anim_used() == AW / 2 * AH + n);
+  h[0] = ++id;
+  CHECK(pic_msg(K_ANIM_BEGIN, h, hn) == -1 && data(d, n / 2) == -1);
+  anim_clear_msg(1 | 300 << 8);
+  CHECK(data(d + n / 2, n - n / 2) == -1 && end(plink_crc32(0, d, n)) == -1 && anim_used() == 0);
 }
 
 // Two slots and places in step and out of step, sharing the pool
@@ -489,31 +609,27 @@ static void test_anim_slots(void) {
   CHECK(anim_used() == both);
   place(0, 0, 0, 0, 0, 0);
   place(1, 0, 100, 0, 0, 0);    // in step with place 0
-  place(2, 0, 200, 0, 1, 2);    // its own frame, 2 frames ahead
+  place(2, 0, 200, 0, 1, 254);  // its own frame, 254 frames ahead: 2 of the 4
   place(3, 1, 0, 100, 0, 0);    // slot 1
   place(4, 1, 100, 100, 1, 0);  // its own frame, in step as it happens
   CHECK(anim_used() == both + 2 * frame);
-  place(5, 2, 0, 0, 0, 0);              // no animation there
-  place(6, 0, PIC_MAX_W - 1, 0, 0, 0);  // off the screen
-  place(ANIM_PLACES, 0, 0, 0, 0, 0);    // no such place
+  place(5, 2, 0, 0, 0, 0);                // no animation there
+  place(6, 0, -10, PIC_MAX_H - 1, 0, 0);  // partly off the screen, where something can come in from
+  place(ANIM_PLACES, 0, 0, 0, 0, 0);      // no such place
   int16_t x, y;
-  CHECK(anim_pos(2, &x, &y) && x == 200 && y == 0 && !anim_pos(5, &x, &y) && !anim_pos(6, &x, &y));
-  lv_obj_t *img[5];
-  CHECK(anim_show(lv_scr_act()));
-  for (int i = 0; i < 5; i++)
-    img[i] = lv_obj_get_child(lv_scr_act(), -5 + i);
+  CHECK(anim_pos(2, &x, &y) && x == 200 && y == 0 && !anim_pos(5, &x, &y));
+  CHECK(anim_pos(6, &x, &y) && x == -10 && y == PIC_MAX_H - 1);
+  show_anims();
   // slot 0 shows a frame for 50, 60, 70, 80 ms, slot 1 for 100, 110, ...; place 2 starts on frame 2
-  CHECK(anim_shows(img[0], 0) && anim_shows(img[1], 0) && anim_shows(img[2], 2) && anim_shows(img[3], 0) &&
-        anim_shows(img[4], 0));
+  CHECK(anim_shows(0, 0) && anim_shows(1, 0) && anim_shows(2, 2) && anim_shows(3, 0) && anim_shows(4, 0));
   sim_run(50);
-  CHECK(anim_shows(img[0], 1) && anim_shows(img[1], 1) && anim_shows(img[2], 2) && anim_shows(img[3], 0) &&
-        anim_shows(img[4], 0));
+  CHECK(anim_shows(0, 1) && anim_shows(1, 1) && anim_shows(2, 2) && anim_shows(3, 0) && anim_shows(4, 0));
   sim_run(50);  // 100: place 2 on to frame 3 at 70, slot 1 to frame 1
-  CHECK(anim_shows(img[0], 1) && anim_shows(img[2], 3) && anim_shows(img[3], 1) && anim_shows(img[4], 1));
+  CHECK(anim_shows(0, 1) && anim_shows(2, 3) && anim_shows(3, 1) && anim_shows(4, 1));
   sim_run(10);  // 110: slot 0 to frame 2
-  CHECK(anim_shows(img[0], 2) && anim_shows(img[1], 2) && anim_shows(img[2], 3));
+  CHECK(anim_shows(0, 2) && anim_shows(1, 2) && anim_shows(2, 3));
   sim_run(40);  // 150: place 2 back to frame 0
-  CHECK(anim_shows(img[2], 0) && anim_shows(img[0], 2));
+  CHECK(anim_shows(2, 0) && anim_shows(0, 2));
   // a new place takes the old one's spot, a place with a frame of its own gives it back when cleared
   place(2, 1, 50, 50, 0, 0);
   CHECK(anim_used() == both + frame && anim_pos(2, &x, &y) && x == 50);
@@ -522,9 +638,9 @@ static void test_anim_slots(void) {
   // the pool is packed: clearing slot 0 moves slot 1 down, and it plays on from where it was
   anim_clear_msg(0);
   CHECK(anim_used() == frame + n2 && !anim_pos(0, &x, &y) && !anim_pos(1, &x, &y) && anim_pos(3, &x, &y));
-  CHECK(anim_shows(img[3], 1));
+  CHECK(anim_shows(3, 1));
   sim_run(60);  // 210
-  CHECK(anim_shows(img[3], 2));
+  CHECK(anim_shows(3, 2));
   // one byte too many for what's left
   CHECK(status(anim_send(0, AW, ANIM_POOL - anim_used() - frame + 1, d, 0)) == PIC_TOO_BIG &&
         anim_used() == frame + n2);
@@ -546,131 +662,168 @@ static void test_anim_slots(void) {
   place(1, 0, 20, 0, 1, 0);
   CHECK(!anim_pos(0, &x, &y) && anim_pos(1, &x, &y));
   anim_clear_msg(ANIM_ALL);
-  CHECK(anim_used() == 0 && !anim_ready());
+  CHECK(anim_used() == 0 && !placed());
   lv_obj_clean(lv_scr_act());
 }
 
-static bool anim_at(lv_obj_t *img, int x, int y) {
+// Whether place 0's box has its top left at x, y
+static bool box_at(int x, int y) {
+  anim_look_t l;
+  return anim_look(0, &l) && l.box.x1 == x && l.box.y1 == y;
+}
+
+static bool anim_at(int x, int y) {
   int16_t ax, ay;
-  if (!anim_pos(0, &ax, &ay))
-    return false;
-  lv_obj_update_layout(img);
-  return ax == x && ay == y && lv_obj_get_x(img) == x && lv_obj_get_y(img) == y;
+  return anim_pos(0, &ax, &ay) && ax == x && ay == y && box_at(x, y);
 }
 
-// whether the ghost images drawing the part over the right edge, the bottom one, and the corner are shown
-static bool ghosts_shown(lv_obj_t *img, bool right, bool below) {
-  bool on[3] = {right, below, right && below};
-  for (int i = 0; i < 3; i++)
-    if (lv_obj_has_flag(lv_obj_get_child(img, i), LV_OBJ_FLAG_HIDDEN) == on[i])
-      return false;
-  return true;
+// whether place 0 is drawn again a screen to the left, up, and both, for the part over the right or bottom edge
+static bool ghosts_shown(bool right, bool below) {
+  anim_look_t l;
+  return anim_look(0, &l) && l.tiles == (1 | right << 1 | below << 2 | (right && below) << 3);
 }
 
-// K_ANIM_MOVE: glides land on the target, drifts wrap round the screen, bad messages are ignored
+// GLIDE of place p's channel c to v over ms, eased
+static void glide_msg(int p, int c, int v, int ms, int ease) {
+  uint8_t m[7];
+  anim_msg(K_ANIM_GLIDE, m, sim_anim_glide(m, p, 1u << c, ms, ease, &v));
+}
+
+static void drift_ch(int p, int c, int v) {
+  uint8_t m[4];
+  anim_msg(K_ANIM_DRIFT, m, sim_anim_drift(m, p, 1u << c, &v));
+}
+
+// place 0 to x, y over ms, or drifting vx, vy px/s, each one message
+static void move_msg(int x, int y, int ms) {
+  uint8_t m[9];
+  int v[2] = {x, y};
+  anim_msg(K_ANIM_GLIDE, m, sim_anim_glide(m, 0, 1u << ANIM_X | 1u << ANIM_Y, ms, 0, v));
+}
+
+static void drift_msg(int vx, int vy) {
+  uint8_t m[6];
+  int v[2] = {vx, vy};
+  anim_msg(K_ANIM_DRIFT, m, sim_anim_drift(m, 0, 1u << ANIM_X | 1u << ANIM_Y, v));
+}
+
+// GLIDE and DRIFT of x and y: glides land on the target, drifts wrap round the screen, bad messages are ignored
 static void test_anim_move(void) {
   uint8_t d[512];
   uint32_t n = anim_records(d, 5);
-  uint8_t stop[2] = {0, ANIM_STOP}, glide[8] = {0, ANIM_GLIDE}, drift[6] = {0, ANIM_DRIFT},
-          bad[8] = {0, ANIM_WANDER + 1};
-  put16(glide + 2, 100);
-  put16(glide + 4, 50);
-  put16(drift + 2, (unsigned) -40);           // 40 px/s left, 2 px a step
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // no animation yet
+  move_msg(100, 50, 0);  // no animation yet
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 10, 10, 0, 0);
-  lv_obj_t *img = anim_show(lv_scr_act());
-  CHECK(img && anim_at(img, 10, 10) && ghosts_shown(img, false, false));  // 16x8 where it was placed
-  pic_msg(K_ANIM_MOVE, glide, 6);                                         // the wrong length for the mode
-  pic_msg(K_ANIM_MOVE, drift, 8);
-  pic_msg(K_ANIM_MOVE, stop, 3);
-  pic_msg(K_ANIM_MOVE, bad, 8);
-  pic_msg(K_ANIM_MOVE, NULL, 0);
+  show_anims();
+  CHECK(anim_at(10, 10) && ghosts_shown(false, false));  // 16x8 where it was placed
+  uint8_t glide[9] = {0, 1u << ANIM_X, 0, 0, 0, 100}, drift[4] = {0, 1u << ANIM_X, 0xD8, 0xFF};
+  anim_msg(K_ANIM_GLIDE, glide, 6);  // the wrong length
+  anim_msg(K_ANIM_GLIDE, glide, 9);  // one channel, two values
+  anim_msg(K_ANIM_DRIFT, drift, 5);
+  anim_msg(K_ANIM_GLIDE, NULL, 0);
+  glide[1] = 0;  // no channel
+  anim_msg(K_ANIM_GLIDE, glide, 5);
+  glide[1] = 1u << ANIM_CHANNELS;  // no such channel
+  anim_msg(K_ANIM_GLIDE, glide, 7);
+  glide[1] = 1u << ANIM_X | 1u << ANIM_SIZE;
+  plink_put16(glide + 7, 5);  // x is fine, size 5 isn't, so neither goes
+  anim_msg(K_ANIM_GLIDE, glide, sizeof glide);
+  glide[1] = 1u << ANIM_X;
+  glide[4] = ANIM_EASE_IN << 2;  // no such ease
+  anim_msg(K_ANIM_GLIDE, glide, 7);
+  drift[1] = 1u << ANIM_SIZE;  // only x, y and turn drift
+  anim_msg(K_ANIM_DRIFT, drift, sizeof drift);
   glide[0] = 1;  // no such place
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
-  glide[0] = 0;
+  glide[4] = 0;
+  anim_msg(K_ANIM_GLIDE, glide, 7);
   sim_run(200);
-  CHECK(anim_at(img, 10, 10));
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);  // ms = 0 is a jump
-  CHECK(anim_at(img, 100, 50));
-  put16(glide + 2, 310);  // partly off the right edge: that's where it is, no wrapping until it drifts
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
-  CHECK(anim_at(img, 310, 50) && ghosts_shown(img, false, false));
-  put16(drift + 4, 0);
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  CHECK(anim_at(10, 10));
+  move_msg(100, 50, 0);  // ms = 0 is a jump
+  CHECK(anim_at(100, 50));
+  move_msg(310, 50, 0);  // partly off the right edge: that's where it is, no wrapping until it drifts
+  CHECK(anim_at(310, 50) && ghosts_shown(false, false));
+  drift_msg(-40, 0);  // 2 px a step
   sim_run(50);
-  CHECK(anim_at(img, 308, 50) && ghosts_shown(img, true, false));
-  put16(glide + 2, (unsigned) -20);  // a glide can end partly off the screen
-  put16(glide + 4, 60);
-  put16(glide + 6, 1000);
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  CHECK(anim_at(308, 50) && ghosts_shown(true, false));
+  move_msg(-20, 60, 1000);  // a glide can end partly off the screen
   sim_run(500);
   int16_t x, y;
   anim_pos(0, &x, &y);
   CHECK(x == 144 && y == 55);  // halfway from 308, 50
   sim_run(500);
-  CHECK(anim_at(img, -20, 60));  // landed exactly
+  CHECK(anim_at(-20, 60));  // landed exactly
   sim_run(500);
-  CHECK(anim_at(img, -20, 60));               // and stays
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);  // a drift puts it on the screen again, from the right
+  CHECK(anim_at(-20, 60));  // and stays
+  drift_msg(-40, 0);        // a drift puts it on the screen again, from the right
   sim_run(50);
-  CHECK(anim_at(img, 298, 60) && ghosts_shown(img, false, false));
+  CHECK(anim_at(298, 60) && ghosts_shown(false, false));
   sim_run(50 * 149);
-  CHECK(anim_at(img, 0, 60));  // 2 px a step
+  CHECK(anim_at(0, 60));  // 2 px a step
   sim_run(50);
-  CHECK(anim_at(img, 318, 60) && ghosts_shown(img, true, false));  // over the right edge, the ghost draws the rest
+  CHECK(anim_at(318, 60) && ghosts_shown(true, false));  // over the right edge, the ghost draws the rest
   sim_run(50 * 159);
-  CHECK(anim_at(img, 0, 60) && ghosts_shown(img, false, false));
-  put16(drift + 2, 0);
-  put16(drift + 4, 100);  // 5 px a step down
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  CHECK(anim_at(0, 60) && ghosts_shown(false, false));
+  drift_msg(0, 100);  // 5 px a step down
   sim_run(50 * 35);
-  CHECK(anim_at(img, 0, 235) && ghosts_shown(img, false, true));
+  CHECK(anim_at(0, 235) && ghosts_shown(false, true));
   sim_run(50);
-  CHECK(anim_at(img, 0, 0) && ghosts_shown(img, false, false));
+  CHECK(anim_at(0, 0) && ghosts_shown(false, false));
   sim_run(50);
-  CHECK(anim_at(img, 0, 5));
-  put16(drift + 2, (unsigned) -1);  // the sub-pixel part adds up
-  put16(drift + 4, 0);
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  CHECK(anim_at(0, 5));
+  drift_msg(-1, 0);  // the sub-pixel part adds up
   sim_run(50);
-  CHECK(anim_at(img, 319, 5) && ghosts_shown(img, true, false));
+  CHECK(anim_at(319, 5) && ghosts_shown(true, false));
   sim_run(50 * 19);
-  CHECK(anim_at(img, 319, 5));
+  CHECK(anim_at(319, 5));
   sim_run(50);
-  CHECK(anim_at(img, 318, 5));
-  pic_msg(K_ANIM_MOVE, stop, 2);
+  CHECK(anim_at(318, 5));
+  drift_msg(0, 0);
   sim_run(1000);
-  CHECK(anim_at(img, 318, 5));
+  CHECK(anim_at(318, 5));
+  // LVGL too busy for two steps: the next one makes up for them
+  move_msg(100, 100, 0);
+  drift_msg(40, 0);
+  sim_run(50);
+  lv_tick_inc(150);
+  lv_timer_handler();
+  CHECK(anim_at(108, 100));
+  drift_msg(0, 0);
+  // the axes go their own ways: x drifts while y glides
+  move_msg(100, 100, 0);
+  drift_ch(0, ANIM_X, 40);
+  glide_msg(0, ANIM_Y, 120, 500, 0);
+  sim_run(500);
+  CHECK(anim_at(120, 120));
+  sim_run(500);
+  CHECK(anim_at(140, 120));
+  drift_msg(0, 0);
+  move_msg(318, 5, 0);
+  drift_msg(-1, 0);
+  drift_msg(0, 0);  // on the screen's torus again, still
   // the animation outlives its image, and the motion with it
-  lv_obj_del(img);
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  lv_obj_del(layer);
+  drift_msg(-1, 0);
   sim_run(2000);  // nothing moves without an image
-  img = anim_show(lv_scr_act());
-  CHECK(img && anim_at(img, 318, 5) && ghosts_shown(img, true, false));
+  show_anims();
+  CHECK(anim_at(318, 5) && ghosts_shown(true, false));
   sim_run(1000);
-  CHECK(anim_at(img, 317, 5));
-  lv_obj_del(img);
+  CHECK(anim_at(317, 5));
+  lv_obj_del(layer);
   // placing it again stops it and puts it there
   place(0, 0, 20, 10, 0, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   sim_run(1000);
-  CHECK(img && anim_at(img, 20, 10));
-  pic_msg(K_ANIM_MOVE, drift, sizeof drift);
+  CHECK(anim_at(20, 10));
+  drift_msg(-1, 0);
   anim_clear_msg(0);  // clearing the slot takes the place with it
   CHECK(!anim_pos(0, &x, &y));
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 20, 10, 0, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   sim_run(2000);
-  CHECK(anim_at(img, 20, 10));
-  put16(glide + 2, (unsigned) -32768);  // a glide across the whole int16 range
-  put16(glide + 4, 10);
-  put16(glide + 6, 0);
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
-  put16(glide + 2, 32767);
-  put16(glide + 6, 65535);
-  pic_msg(K_ANIM_MOVE, glide, sizeof glide);
+  CHECK(anim_at(20, 10));
+  glide_msg(0, ANIM_X, -32768, 0, 0);  // a glide across the whole int16 range
+  glide_msg(0, ANIM_X, 32767, 65535, 0);
   sim_run(50000);
   int16_t gx, gy;
   anim_pos(0, &gx, &gy);
@@ -678,51 +831,76 @@ static void test_anim_move(void) {
   sim_run(15550);  // landed
   anim_pos(0, &gx, &gy);
   CHECK(gx == 32767 && gy == 10);
-  lv_obj_del(img);
+  // a message every 30 ms doesn't hold it up, it drifts on at 2 px a step
+  move_msg(100, 100, 0);
+  drift_msg(40, 0);
+  for (int i = 0; i < 33; i++) {
+    glide_msg(0, ANIM_OPACITY, 100, 0, 0);
+    sim_run(30);
+  }
+  CHECK(anim_at(138, 100));
+  lv_obj_del(layer);
   anim_clear_msg(ANIM_ALL);
 }
 
-// The image's pixel at bx, by as the decoder gives it: its palette index, -1 where it's see-through
-static int anim_px(lv_obj_t *img, int bx, int by) {
-  lv_img_decoder_dsc_t dsc;
-  uint8_t line[PIC_MAX_W * LV_IMG_PX_SIZE_ALPHA_BYTE];
-  int w = lv_obj_get_width(img), k = -1;
-  if (bx >= w || lv_img_decoder_open(&dsc, lv_img_get_src(img), lv_color_black(), 0) != LV_RES_OK)
-    return -2;
-  if (lv_img_decoder_read_line(&dsc, 0, (lv_coord_t) by, (lv_coord_t) w, line) == LV_RES_OK) {
-    const uint8_t *p = line + bx * LV_IMG_PX_SIZE_ALPHA_BYTE;
-    lv_color_t c;
-    memcpy(&c, p, sizeof c);
-    for (int i = 0; i < 16 && p[LV_IMG_PX_SIZE_ALPHA_BYTE - 1]; i++)
-      if (c.full == lv_color_hex(rgb(i)).full)
-        k = i;
+// Glides ease in, out or both: from 0 to 200 over a second, where it is at 250 and 500 ms
+static void test_anim_ease(void) {
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 0, 0, 0);
+  show_anims();
+  static const int16_t WANT[4][2] = {{50, 100}, {12, 50}, {87, 150}, {31, 100}};  // none, in, out, both
+  for (int e = 0; e < 4; e++) {
+    glide_msg(0, ANIM_X, 0, 0, 0);
+    glide_msg(0, ANIM_X, 200, 1000, e);
+    int16_t x[2], y;
+    sim_run(250);
+    anim_pos(0, &x[0], &y);
+    sim_run(250);
+    anim_pos(0, &x[1], &y);
+    CHECK(x[0] == WANT[e][0] && x[1] == WANT[e][1]);
+    sim_run(500);
+    CHECK(anim_pos(0, &x[0], &y) && x[0] == 200);
   }
-  lv_img_decoder_close(&dsc);
-  return k;
+  lv_obj_del(layer);
+  anim_clear_msg(ANIM_ALL);
 }
 
-// The frame's pixel at ix, iy of the 16 x 8 it's drawn at, scale 2, as anim_px gives it
+// The frame's pixel at ix, iy of the 16 x 8 it's drawn at, scale 2, as drawn() gives it
 static int frame_px(int ix, int iy) {
   uint8_t b = an[0][iy / 2][ix / 4];
   int k = ix / 2 & 1 ? b & 15 : b >> 4;
   return k == 15 ? -1 : k;
 }
 
-// Whether every pixel of the image is the frame's at where(bx, by)
-static bool drawn_as(lv_obj_t *img, int w, int h, void (*where)(int bx, int by, int *ix, int *iy)) {
-  lv_obj_update_layout(img);
-  if (lv_obj_get_width(img) != w || lv_obj_get_height(img) != h)
+// Place k's pixel at bx, by of its box as drawn() gives it, -3 if it isn't drawn
+static int drawn_px(int k, int bx, int by) {
+  static int px[PIC_MAX_W * PIC_MAX_H];
+  anim_look_t l;
+  return drawn(k, &l, px) ? px[by * lv_area_get_width(&l.box) + bx] : -3;
+}
+
+// Whether place 0 is drawn w x h, every pixel the frame's at where(bx, by)
+static bool drawn_as(int w, int h, void (*where)(int bx, int by, int *ix, int *iy)) {
+  static int px[PIC_MAX_W * PIC_MAX_H];
+  anim_look_t l;
+  if (!drawn(0, &l, px) || lv_area_get_width(&l.box) != w || lv_area_get_height(&l.box) != h)
     return false;
   for (int by = 0; by < h; by++)
     for (int bx = 0; bx < w; bx++) {
       int ix, iy;
       where(bx, by, &ix, &iy);
-      if (anim_px(img, bx, by) != frame_px(ix, iy))
+      if (px[by * w + bx] != frame_px(ix, iy))
         return false;
     }
   return true;
 }
 
+static void at_same(int bx, int by, int *ix, int *iy) {
+  *ix = bx;
+  *iy = by;
+}
 static void at_90(int bx, int by, int *ix, int *iy) {  // turned a quarter clockwise: the right side faces down
   *ix = by;
   *iy = 7 - bx;
@@ -750,70 +928,58 @@ static void odd_frames(void) {
   }
 }
 
-// K_ANIM_TURN: quarter turns and flips draw exactly, turns go the short way, spins add up, bad messages are ignored
+static void flip_msg(int p, int flip) { anim_msg(K_ANIM_FLIP, (uint8_t[]) {(uint8_t) p, (uint8_t) flip}, 2); }
+
+// Turns and FLIP: quarter turns and flips draw exactly, turns go the short way, spins add up, bad messages are
+// ignored
 static void test_anim_turn(void) {
   odd_frames();
   uint8_t d[512];
   uint32_t n = anim_records(d, 5);
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 10, 10, 0, 0);
-  lv_obj_t *img = anim_show(lv_scr_act());
-  uint8_t to[7] = {0, ANIM_GLIDE}, spin[5] = {0, ANIM_DRIFT}, stop[3] = {0, ANIM_STOP};
+  show_anims();
   int a, flip;
-  put16(to + 3, 90);
-  pic_msg(K_ANIM_TURN, to, sizeof to);  // at once
-  CHECK(anim_angle(0, &a, &flip) && a == 90 && !flip && drawn_as(img, 8, 16, at_90));
-  CHECK(lv_obj_get_x(img) == 14 && lv_obj_get_y(img) == 6);  // centred where the 16 x 8 frame was
-  put16(to + 3, 180);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
-  CHECK(drawn_as(img, 16, 8, at_180) && lv_obj_get_x(img) == 10 && lv_obj_get_y(img) == 10);
-  to[2] = ANIM_FLIP_X;
-  put16(to + 3, 0);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
-  CHECK(anim_angle(0, &a, &flip) && a == 0 && flip == ANIM_FLIP_X && drawn_as(img, 16, 8, at_flip_x));
-  put16(to + 3, 90);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
-  CHECK(drawn_as(img, 8, 16, at_flip_x_90));
+  glide_msg(0, ANIM_TURN, 90, 0, 0);  // at once
+  CHECK(anim_angle(0, &a, &flip) && a == 90 && !flip && drawn_as(8, 16, at_90));
+  CHECK(box_at(14, 6));  // centred where the 16 x 8 frame was
+  glide_msg(0, ANIM_TURN, 180, 0, 0);
+  CHECK(drawn_as(16, 8, at_180) && box_at(10, 10));
+  flip_msg(0, ANIM_FLIP_X);
+  glide_msg(0, ANIM_TURN, 0, 0, 0);
+  CHECK(anim_angle(0, &a, &flip) && a == 0 && flip == ANIM_FLIP_X && drawn_as(16, 8, at_flip_x));
+  glide_msg(0, ANIM_TURN, 90, 0, 0);
+  CHECK(drawn_as(8, 16, at_flip_x_90));
   // a turn over time goes the short way round: 90 to 350 is 100 back, not 260 on
-  to[2] = 0;
-  put16(to + 3, 350);
-  put16(to + 5, 1000);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
+  flip_msg(0, 0);
+  glide_msg(0, ANIM_TURN, 350, 1000, 0);
   sim_run(500);
   CHECK(anim_angle(0, &a, &flip) && a >= 38 && a <= 42);
   sim_run(600);
   CHECK(anim_angle(0, &a, &flip) && a == 350);
   // a spin adds up past 360, and a stop keeps the angle
-  put16(spin + 3, 90);
-  pic_msg(K_ANIM_TURN, spin, sizeof spin);
+  drift_ch(0, ANIM_TURN, 90);
   sim_run(1000);
   CHECK(anim_angle(0, &a, &flip) && a >= 75 && a <= 80);
-  pic_msg(K_ANIM_TURN, stop, sizeof stop);
+  drift_ch(0, ANIM_TURN, 0);
   sim_run(1000);
   int b;
   CHECK(anim_angle(0, &b, &flip) && b == a);
-  // the wrong length for the mode, a bad mode or flip, and no such place change nothing
-  uint8_t bad_mode[3] = {0, ANIM_FACE + 1}, bad_flip[3] = {0, ANIM_STOP, 4}, nowhere[3] = {5, ANIM_STOP, ANIM_FLIP_Y};
-  pic_msg(K_ANIM_TURN, to, 5);
-  pic_msg(K_ANIM_TURN, spin, 7);
-  pic_msg(K_ANIM_TURN, bad_mode, sizeof bad_mode);
-  pic_msg(K_ANIM_TURN, bad_flip, sizeof bad_flip);
-  pic_msg(K_ANIM_TURN, nowhere, sizeof nowhere);
-  pic_msg(K_ANIM_TURN, NULL, 0);
+  // a bad flip, the wrong length and no such place change nothing
+  flip_msg(0, 4);
+  flip_msg(5, ANIM_FLIP_Y);
+  anim_msg(K_ANIM_FLIP, (uint8_t[]) {0, ANIM_FLIP_Y, 0}, 3);
+  anim_msg(K_ANIM_FLIP, NULL, 0);
   CHECK(anim_angle(0, &b, &flip) && b == a && !flip);
   // placed again, it starts unturned
-  lv_obj_del(img);
+  lv_obj_del(layer);
   place(0, 0, 10, 10, 0, 0);
-  img = anim_show(lv_scr_act());
-  CHECK(anim_angle(0, &a, &flip) && !a && !flip && lv_obj_get_width(img) == 16);
-  lv_obj_del(img);
+  show_anims();
+  CHECK(anim_angle(0, &a, &flip) && !a && !flip && drawn_as(16, 8, at_same));
+  lv_obj_del(layer);
   anim_clear_msg(ANIM_ALL);
 }
 
-static void at_same(int bx, int by, int *ix, int *iy) {
-  *ix = bx;
-  *iy = by;
-}
 static void at_200(int bx, int by, int *ix, int *iy) {
   *ix = bx / 2;
   *iy = by / 2;
@@ -828,87 +994,70 @@ static void at_90_200(int bx, int by, int *ix, int *iy) {
 }
 
 static int look_size(int place) {
-  int size, opa;
-  return anim_look(place, &size, &opa) ? size : -1;
+  anim_look_t l;
+  return anim_look(place, &l) ? l.size : -1;
 }
 static int look_opa(int place) {
-  int size, opa;
-  return anim_look(place, &size, &opa) ? opa : -1;
+  anim_look_t l;
+  return anim_look(place, &l) ? l.opa : -1;
 }
 
-// K_ANIM_SIZE and K_ANIM_FADE: sizes draw exactly round the middle, sizes and fades get there over time, a place
-// can fade in and a clear can fade it out first
+// Size and opacity: sizes draw exactly round the middle, sizes and fades get there over time, a place can fade in
+// and a clear can fade it out first
 static void test_anim_look(void) {
   odd_frames();
   uint8_t d[512], d2[ANIM_POOL];
   uint32_t n = anim_records(d, 5);
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 40, 40, 0, 0);
-  lv_obj_t *img = anim_show(lv_scr_act());
-  uint8_t size[5] = {0}, fade[4] = {0}, to[7] = {0, ANIM_GLIDE};
-  put16(size + 1, 200);
-  pic_msg(K_ANIM_SIZE, size, sizeof size);
-  CHECK(look_size(0) == 2000 && drawn_as(img, 32, 16, at_200) && lv_obj_get_x(img) == 32 && lv_obj_get_y(img) == 36);
-  put16(size + 1, 50);
-  pic_msg(K_ANIM_SIZE, size, sizeof size);
-  CHECK(drawn_as(img, 8, 4, at_50) && lv_obj_get_x(img) == 44 && lv_obj_get_y(img) == 42);
-  put16(to + 3, 90);  // a quarter turn at twice the size
-  pic_msg(K_ANIM_TURN, to, sizeof to);
-  put16(size + 1, 200);
-  pic_msg(K_ANIM_SIZE, size, sizeof size);
-  CHECK(drawn_as(img, 16, 32, at_90_200) && lv_obj_get_x(img) == 40 && lv_obj_get_y(img) == 28);
-  put16(to + 3, 0);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
-  put16(size + 1, 100);  // back over a second, then drawn straight again
-  put16(size + 3, 1000);
-  pic_msg(K_ANIM_SIZE, size, sizeof size);
+  show_anims();
+  glide_msg(0, ANIM_SIZE, 200, 0, 0);
+  CHECK(look_size(0) == 2000 && drawn_as(32, 16, at_200) && box_at(32, 36));
+  glide_msg(0, ANIM_SIZE, 50, 0, 0);
+  CHECK(drawn_as(8, 4, at_50) && box_at(44, 42));
+  glide_msg(0, ANIM_TURN, 90, 0, 0);  // a quarter turn at twice the size
+  glide_msg(0, ANIM_SIZE, 200, 0, 0);
+  CHECK(drawn_as(16, 32, at_90_200) && box_at(40, 28));
+  glide_msg(0, ANIM_TURN, 0, 0, 0);
+  glide_msg(0, ANIM_SIZE, 100, 1000, 0);  // back over a second, then drawn straight again
   sim_run(500);
-  CHECK(look_size(0) >= 1450 && look_size(0) <= 1550);
+  CHECK(look_size(0) == 1500);
   sim_run(600);
-  CHECK(look_size(0) == 1000 && drawn_as(img, 16, 8, at_same) && lv_obj_get_x(img) == 40);
-  uint8_t tiny[5] = {0}, huge[5] = {0};
-  put16(tiny + 1, 9);
-  put16(huge + 1, 401);
-  pic_msg(K_ANIM_SIZE, tiny, sizeof tiny);
-  pic_msg(K_ANIM_SIZE, huge, sizeof huge);
-  pic_msg(K_ANIM_SIZE, tiny, 4);
-  pic_msg(K_ANIM_SIZE, NULL, 0);
-  CHECK(look_size(0) == 1000);
+  CHECK(look_size(0) == 1000 && drawn_as(16, 8, at_same) && box_at(40, 40));
+  glide_msg(0, ANIM_SIZE, 9, 0, 0);  // out of range
+  glide_msg(0, ANIM_SIZE, 401, 0, 0);
+  glide_msg(0, ANIM_OPACITY, 101, 0, 0);
+  glide_msg(0, ANIM_SPEED, 1001, 0, 0);
+  CHECK(look_size(0) == 1000 && look_opa(0) == 1000);
   // to see-through over a second, then opaque at once
-  put16(fade + 2, 1000);
-  pic_msg(K_ANIM_FADE, fade, sizeof fade);
+  glide_msg(0, ANIM_OPACITY, 0, 1000, 0);
   sim_run(500);
-  CHECK(look_opa(0) >= 120 && look_opa(0) <= 135 && lv_obj_get_style_img_opa(img, LV_PART_MAIN) == look_opa(0));
+  CHECK(look_opa(0) == 500 && drawn_px(0, 0, 0) == -2);  // half the frame's, half what's behind
   sim_run(600);
   int16_t x, y;
   CHECK(look_opa(0) == 0 && anim_pos(0, &x, &y));
-  fade[1] = 255;
-  put16(fade + 2, 0);
-  pic_msg(K_ANIM_FADE, fade, sizeof fade);
-  CHECK(look_opa(0) == 255 && lv_obj_get_style_img_opa(img, LV_PART_MAIN) == 255);
-  fade[1] = 0;
-  pic_msg(K_ANIM_FADE, fade, 3);
-  CHECK(look_opa(0) == 255);
+  glide_msg(0, ANIM_OPACITY, 100, 0, 0);
+  CHECK(look_opa(0) == 1000 && drawn_px(0, 0, 0) == 1);
   // placed fading in over 400 ms
   lv_obj_clean(lv_scr_act());
   anim_clear_msg(ANIM_PLACE_BIT | 0);
   place_in(1, 0, 100, 40, 0, 0, 400);
-  img = anim_show(lv_scr_act());
+  show_anims();
   CHECK(look_opa(1) == 0);
   sim_run(200);
-  CHECK(look_opa(1) >= 120 && look_opa(1) <= 135);
+  CHECK(look_opa(1) == 500);
   sim_run(250);
-  CHECK(look_opa(1) == 255);
+  CHECK(look_opa(1) == 1000);
   // cleared over 500 ms: it stays while it fades, then goes, with nothing to tell the ESP
   anim_clear_msg(ANIM_PLACE_BIT | 1 | 500 << 8);
   sim_run(250);
-  CHECK(anim_pos(1, &x, &y) && look_opa(1) >= 120 && look_opa(1) <= 135);
+  CHECK(anim_pos(1, &x, &y) && look_opa(1) == 500);
   sim_run(300);
   CHECK(!anim_pos(1, &x, &y) && anim_gone() == -1);
   // a slot cleared over time goes with its last place, and gives back its room then
   place(0, 0, 0, 0, 0, 0);
   place(1, 0, 40, 0, 1, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   unsigned used = anim_used();
   anim_clear_msg(0 | 300 << 8);
   CHECK(anim_used() == used && anim_pos(0, &x, &y) && anim_pos(1, &x, &y));
@@ -916,11 +1065,21 @@ static void test_anim_look(void) {
   CHECK(!anim_pos(2, &x, &y));
   sim_run(400);
   CHECK(anim_used() == 0 && !anim_pos(0, &x, &y) && !anim_pos(1, &x, &y));
+  // also when its last places go at once or onto another slot
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  CHECK(status(anim_send(1, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 0, 0, 0);
+  place(1, 0, 40, 0, 0, 0);
+  anim_clear_msg(0 | 300 << 8);
+  anim_clear_msg(ANIM_PLACE_BIT | 0);
+  place(1, 1, 40, 0, 0, 0);
+  CHECK(anim_used() == AW / 2 * AH + n && anim_pos(1, &x, &y));
+  anim_clear_msg(ANIM_ALL);
   // but a new animation that needs the room takes it at once
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   lv_obj_clean(lv_scr_act());
   place(0, 0, 0, 0, 0, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   anim_clear_msg(0 | 5000 << 8);
   unsigned frame = AW / 2 * AH;
   uint32_t n2 = anim_records(d2, 5), m = (ANIM_POOL - frame - n2) / 5;
@@ -938,12 +1097,18 @@ static void test_anim_look(void) {
   CHECK(anim_used() == 0);
 }
 
+static void frames_msg(int slot, int rate) {
+  uint8_t m[3] = {(uint8_t) slot};
+  plink_put16(m + 1, rate);
+  anim_msg(K_ANIM_FRAMES, m, sizeof m);
+}
+
 static void rounds_msg(int p, int rounds, int fade, int tag) {
   uint8_t m[6] = {(uint8_t) p};
-  put16(m + 1, (unsigned) rounds);
-  put16(m + 3, (unsigned) fade);
+  plink_put16(m + 1, rounds);
+  plink_put16(m + 3, fade);
   m[5] = (uint8_t) tag;
-  pic_msg(K_ANIM_ROUNDS, m, sizeof m);
+  anim_msg(K_ANIM_ROUNDS, m, sizeof m);
 }
 
 // K_ANIM_ROUNDS: plays to the end of its rounds, a frame of its own holds the last one while it fades, then it goes
@@ -960,21 +1125,21 @@ static void test_anim_rounds(void) {
   while (anim_gone() >= 0)
     ;
   place(2, 0, 0, 10, 1, 0);
-  lv_obj_t *img = anim_show(lv_scr_act());
+  show_anims();
   rounds_msg(2, 1, 200, 7);
   sim_run(170);
-  CHECK(anim_shows(img, 2) && look_opa(2) == 255);
+  CHECK(anim_shows(2, 2) && look_opa(2) == 1000);
   sim_run(20);
-  CHECK(anim_shows(img, 3));  // the end of its round
+  CHECK(anim_shows(2, 3));  // the end of its round
   sim_run(100);
-  CHECK(anim_shows(img, 3) && look_opa(2) > 0 && look_opa(2) < 255 && anim_gone() == -1);
+  CHECK(look_opa(2) > 0 && look_opa(2) < 1000 && anim_gone() == -1);
   sim_run(200);
   int16_t x, y;
   CHECK(!anim_pos(2, &x, &y) && anim_gone() == (2 | 7 << 8) && anim_gone() == -1);
   // in step with the slot, the round it's in counts
   lv_obj_clean(lv_scr_act());
   place(0, 0, 0, 40, 0, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   rounds_msg(0, 2, 0, 9);
   sim_run(250);
   CHECK(anim_pos(0, &x, &y) && anim_gone() == -1);
@@ -982,7 +1147,7 @@ static void test_anim_rounds(void) {
   CHECK(!anim_pos(0, &x, &y) && anim_gone() == (0 | 9 << 8));
   // placed again before the ESP heard, there's nothing to tell
   place(3, 0, 0, 60, 1, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   rounds_msg(3, 1, 0, 1);
   sim_run(400);
   CHECK(!anim_pos(3, &x, &y));
@@ -990,10 +1155,10 @@ static void test_anim_rounds(void) {
   CHECK(anim_gone() == -1);
   // 0 plays on
   lv_obj_clean(lv_scr_act());
-  img = anim_show(lv_scr_act());
+  show_anims();
   rounds_msg(3, 1, 0, 2);
   rounds_msg(3, 0, 0, 2);
-  pic_msg(K_ANIM_ROUNDS, (uint8_t[]) {3, 1, 0, 0, 0}, 5);  // the wrong length
+  anim_msg(K_ANIM_ROUNDS, (uint8_t[]) {3, 1, 0, 0, 0}, 5);  // the wrong length
   sim_run(1000);
   CHECK(anim_pos(3, &x, &y) && anim_gone() == -1);
   // a single frame shows for its frame time each round
@@ -1002,55 +1167,63 @@ static void test_anim_rounds(void) {
   CHECK(status(anim_send(1, AW, n1, one, plink_crc32(0, one, n1))) == PIC_DONE);
   lv_obj_clean(lv_scr_act());
   place(4, 1, 100, 100, 0, 0);
-  img = anim_show(lv_scr_act());
+  show_anims();
   rounds_msg(4, 3, 0, 2);
   sim_run(250);
   CHECK(anim_pos(4, &x, &y));
   sim_run(150);
   CHECK(!anim_pos(4, &x, &y) && anim_gone() == (4 | 2 << 8));
+  // and only while it's shown, at its frame rate
+  lv_obj_clean(lv_scr_act());
+  place(4, 1, 100, 100, 0, 0);
+  rounds_msg(4, 2, 0, 3);
+  frames_msg(1, 50);  // 200 ms a round
+  sim_run(3000);
+  show_anims();
+  sim_run(350);
+  CHECK(anim_pos(4, &x, &y));
+  sim_run(100);
+  CHECK(!anim_pos(4, &x, &y) && anim_gone() == (4 | 3 << 8));
+  // cleared while it fades out after its rounds, alone or with its slot: it fades on as it was and still says so
+  for (int slot = 0; slot < 2; slot++) {
+    place(2, 0, 0, 10, 1, 0);
+    rounds_msg(2, 1, 400, 5);
+    sim_run(200);
+    anim_clear_msg(slot ? 0 | 100 << 8 : ANIM_PLACE_BIT | 2 | 100 << 8);
+    sim_run(200);
+    CHECK(anim_pos(2, &x, &y) && anim_gone() == -1);
+    sim_run(300);
+    CHECK(!anim_pos(2, &x, &y) && anim_gone() == (2 | 5 << 8));
+  }
   lv_obj_clean(lv_scr_act());
   anim_clear_msg(ANIM_ALL);
 }
 
 static void area_msg(int x0, int y0, int x1, int y1, int ex, int ey) {
   uint8_t m[11] = {0};
-  put16(m + 1, (unsigned) x0);
-  put16(m + 3, (unsigned) y0);
-  put16(m + 5, (unsigned) x1);
-  put16(m + 7, (unsigned) y1);
+  plink_put16(m + 1, x0);
+  plink_put16(m + 3, y0);
+  plink_put16(m + 5, x1);
+  plink_put16(m + 7, y1);
   m[9] = (uint8_t) ex;
   m[10] = (uint8_t) ey;
-  pic_msg(K_ANIM_AREA, m, sizeof m);
-}
-
-static void drift_msg(int vx, int vy) {
-  uint8_t m[6] = {0, ANIM_DRIFT};
-  put16(m + 2, (unsigned) vx);
-  put16(m + 4, (unsigned) vy);
-  pic_msg(K_ANIM_MOVE, m, sizeof m);
-}
-
-static void jump_msg(int x, int y) {
-  uint8_t m[8] = {0, ANIM_GLIDE};
-  put16(m + 2, (unsigned) x);
-  put16(m + 4, (unsigned) y);
-  pic_msg(K_ANIM_MOVE, m, sizeof m);
+  anim_msg(K_ANIM_AREA, m, sizeof m);
 }
 
 static void wander_msg(int s0, int s1, int heading, int spread, int l0, int l1, int r0, int r1) {
-  uint8_t m[18] = {0, ANIM_WANDER};
-  int v[8] = {s0, s1, heading, spread, l0, l1, r0, r1};
+  uint8_t m[17] = {0};
+  int v[8] = {s0 * 10, s1 * 10, heading, spread, l0, l1, r0, r1};  // speeds in tenths
   for (int i = 0; i < 8; i++)
-    put16(m + 2 + 2 * i, (unsigned) v[i]);
-  pic_msg(K_ANIM_MOVE, m, sizeof m);
+    plink_put16(m + 1 + 2 * i, v[i]);
+  anim_msg(K_ANIM_WANDER, m, sizeof m);
 }
 
 static void face_msg(int flags, int facing, int tilt, int rate, int len) {
-  uint8_t m[10] = {0, ANIM_FACE, 0, (uint8_t) flags};
-  put16(m + 4, (unsigned) facing);
-  put16(m + 6, (unsigned) tilt);
-  put16(m + 8, (unsigned) rate);
-  pic_msg(K_ANIM_TURN, m, len);
+  uint8_t m[8] = {0, (uint8_t) flags};
+  plink_put16(m + 2, facing);
+  plink_put16(m + 4, tilt);
+  plink_put16(m + 6, rate);
+  anim_msg(K_ANIM_FACE, m, len);
 }
 
 // How far a run of steps went, whether it kept to x0..x1, y0..y1 with its 16 x 8, and how often it stood still
@@ -1087,14 +1260,14 @@ static void test_anim_paths(void) {
   uint32_t n = anim_records(d, 5);
   CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
   place(0, 0, 100, 100, 0, 0);
-  lv_obj_t *img = anim_show(lv_scr_act());
+  show_anims();
   area_msg(50, 80, 200, 140, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
   drift_msg(100, 37);
   trail_t t = trail(400, 50, 80, 200, 140);
   CHECK(t.inside && t.lo_x == 50 && t.hi_x == 184 && t.lo_y == 80 && t.hi_y == 132);
   // out across the right edge and in at the left, and back
   area_msg(50, 80, 200, 140, ANIM_EDGE_CROSS, ANIM_EDGE_BOUNCE);
-  jump_msg(180, 100);
+  move_msg(180, 100, 0);
   drift_msg(100, 0);
   int xs[5], want[5] = {185, 190, 195, 34, 39};
   int16_t x, y;
@@ -1109,6 +1282,16 @@ static void test_anim_paths(void) {
   CHECK(anim_pos(0, &x, &y) && x == 200);
   sim_run(50);
   CHECK(anim_pos(0, &x, &y) && x == 195);
+  area_msg(50, 80, 70, 140, ANIM_EDGE_CROSS, ANIM_EDGE_BOUNCE);
+  drift_msg(3000, 0);  // across the area many times a step, and still about it
+  int lo = 9999, hi = -9999;
+  for (int i = 0; i < 40; i++) {
+    sim_run(50);
+    anim_pos(0, &x, &y);
+    lo = LV_MIN(lo, x);
+    hi = LV_MAX(hi, x);
+  }
+  CHECK(lo >= 50 - 16 && hi < 70 && hi > lo);
   // a wander about its area, resting now and then
   area_msg(60, 40, 260, 200, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
   wander_msg(20, 60, 0, 180, 200, 800, 0, 300);
@@ -1121,14 +1304,14 @@ static void test_anim_paths(void) {
   // a bad area or wander changes nothing
   area_msg(60, 40, 60, 200, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
   area_msg(60, 40, 260, 200, ANIM_EDGE_BOUNCE + 1, ANIM_EDGE_BOUNCE);
-  pic_msg(K_ANIM_AREA, (uint8_t[]) {0, 0, 0, 0, 0, 1, 0, 1, 0, 0}, 10);
+  anim_msg(K_ANIM_AREA, (uint8_t[]) {0, 0, 0, 0, 0, 1, 0, 1, 0, 0}, 10);
   t = trail(200, 60, 40, 260, 200);
   CHECK(t.inside);
 
   // frames that face right, mirrored to face left, leaning up to 30 degrees, upright when it stops
   area_msg(0, 0, PIC_MAX_W, PIC_MAX_H, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
-  jump_msg(150, 100);
-  face_msg(ANIM_FACE_MIRROR | ANIM_FACE_LEVEL, 0, 30, 0, 10);
+  move_msg(150, 100, 0);
+  face_msg(ANIM_FACE_MIRROR | ANIM_FACE_LEVEL, 0, 30, 0, 8);
   int a, flip;
   drift_msg(-50, 0);
   sim_run(50);
@@ -1139,35 +1322,315 @@ static void test_anim_paths(void) {
   drift_msg(50, 50);  // down to the right: unmirrored, the same lean the other way
   sim_run(50);
   CHECK(anim_angle(0, &a, &flip) && a == 30 && !flip);
-  uint8_t stop[2] = {0, ANIM_STOP};
-  pic_msg(K_ANIM_MOVE, stop, sizeof stop);
+  drift_msg(0, 0);
   sim_run(50);
   CHECK(anim_angle(0, &a, &flip) && a == 0 && !flip);
   // 90 degrees a second
-  face_msg(ANIM_FACE_MIRROR, 0, 30, 90, 10);
+  face_msg(ANIM_FACE_MIRROR, 0, 30, 90, 8);
   drift_msg(50, -50);
   sim_run(100);
   CHECK(anim_angle(0, &a, &flip) && a == 351);
   sim_run(500);
   CHECK(anim_angle(0, &a, &flip) && a == 330);
   // frames that face up turn all the way round toward where it goes
-  face_msg(0, 270, 180, 0, 10);
+  face_msg(0, 270, 180, 0, 8);
   drift_msg(50, 0);
   sim_run(50);
   CHECK(anim_angle(0, &a, &flip) && a == 90 && !flip);
-  face_msg(0, 270, 181, 0, 10);
-  face_msg(ANIM_FACE_LEVEL << 1, 270, 0, 0, 10);
-  face_msg(0, 270, 0, -1, 10);
-  face_msg(0, 270, 0, 0, 9);
+  face_msg(0, 270, 181, 0, 8);
+  face_msg(ANIM_FACE_LEVEL << 1, 270, 0, 0, 8);
+  face_msg(0, 270, 0, -1, 8);
+  face_msg(0, 270, 0, 0, 7);
   drift_msg(0, 50);
   sim_run(50);
   CHECK(anim_angle(0, &a, &flip) && a == 180);
-  uint8_t to[7] = {0, ANIM_GLIDE};  // a turn takes over
-  put16(to + 3, 45);
-  pic_msg(K_ANIM_TURN, to, sizeof to);
+  glide_msg(0, ANIM_TURN, 45, 0, 0);  // a turn takes over
   sim_run(200);
   CHECK(anim_angle(0, &a, &flip) && a == 45);
-  lv_obj_del(img);
+  lv_obj_del(layer);
+  anim_clear_msg(ANIM_ALL);
+}
+
+static void wave_msg(int p, int c, int lo, int hi, int rise, int fall, int hold_hi, int hold_lo, int jitter,
+                     int flags) {
+  uint8_t m[16] = {(uint8_t) p, (uint8_t) c};
+  int v[6] = {lo, hi, rise, fall, hold_hi, hold_lo};
+  for (int i = 0; i < 6; i++)
+    plink_put16(m + 2 + 2 * i, v[i]);
+  m[14] = (uint8_t) jitter;
+  m[15] = (uint8_t) flags;
+  anim_msg(K_ANIM_WAVE, m, sizeof m);
+}
+
+// WAVE: a size breathes there and back and settles, a blink holds at each end, a wave on x eases at its slow end,
+// random legs stay between low and high, a wave scales a glide and a fade out, and there are ANIM_WAVES at most,
+// counting the stopped ones only until they're needed
+static void test_anim_wave(void) {
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 100, 100, 0, 0);
+  show_anims();
+  wave_msg(0, ANIM_SIZE, 100, 120, 1000, 1000, 0, 0, 0, 0);
+  static const int BREATH[] = {1100, 1200, 1100, 1000, 1100};
+  bool ok = true;
+  for (int i = 0; i < 5; i++) {
+    sim_run(500);
+    ok &= look_size(0) == BREATH[i];
+  }
+  CHECK(ok);
+  wave_msg(0, ANIM_SIZE, 100, 100, 500, 500, 0, 0, 0, 0);  // back down over the fall time
+  sim_run(250);
+  CHECK(look_size(0) == 1050);
+  sim_run(350);
+  CHECK(look_size(0) == 1000);
+  // on for 500 ms and off for 300, at once
+  wave_msg(0, ANIM_OPACITY, 0, 100, 0, 0, 500, 300, 0, 0);
+  sim_run(450);
+  CHECK(look_opa(0) == 1000);
+  sim_run(100);
+  CHECK(look_opa(0) == 0);
+  sim_run(200);
+  CHECK(look_opa(0) == 0);
+  sim_run(100);
+  CHECK(look_opa(0) == 1000);
+  wave_msg(0, ANIM_OPACITY, 100, 100, 0, 0, 0, 0, 0, 0);
+  // 100 px right and back, slow at the low end: it eases in going out and eases out coming back
+  wave_msg(0, ANIM_X, 0, 100, 1000, 1000, 0, 0, 0, ANIM_WAVE_SLOW_LOW);
+  int16_t x, y;
+  sim_run(500);
+  CHECK(anim_pos(0, &x, &y) && x == 125 && y == 100);
+  sim_run(500);
+  CHECK(anim_pos(0, &x, &y) && x == 200);
+  sim_run(500);
+  CHECK(anim_pos(0, &x, &y) && x == 125);
+  sim_run(500);
+  CHECK(anim_pos(0, &x, &y) && x == 100);
+  wave_msg(0, ANIM_X, 0, 0, 0, 0, 0, 0, 0, 0);
+  // random legs with times that vary
+  wave_msg(0, ANIM_SIZE, 50, 150, 200, 200, 0, 0, 50, ANIM_WAVE_RANDOM);
+  int lo = 9999, hi = 0;
+  for (int i = 0; i < 200; i++) {
+    sim_run(50);
+    lo = LV_MIN(lo, look_size(0));
+    hi = LV_MAX(hi, look_size(0));
+  }
+  CHECK(lo >= 500 && hi <= 1500 && hi - lo > 500);
+  // it stays where low = high says, and scales what a glide sets
+  wave_msg(0, ANIM_SIZE, 120, 120, 0, 0, 0, 0, 0, 0);
+  glide_msg(0, ANIM_SIZE, 200, 0, 0);
+  sim_run(1000);
+  CHECK(look_size(0) == 2400);
+  wave_msg(0, ANIM_SIZE, 100, 100, 0, 0, 0, 0, 0, 0);
+  glide_msg(0, ANIM_SIZE, 100, 0, 0);
+  sim_run(100);
+  CHECK(look_size(0) == 1000);
+  // bad ones change nothing
+  wave_msg(0, ANIM_SIZE, 120, 110, 0, 0, 0, 0, 0, 0);
+  wave_msg(0, ANIM_SIZE, 120, 120, 0, 0, 0, 0, 101, 0);
+  wave_msg(0, ANIM_SIZE, 120, 120, 0, 0, 0, 0, 0, ANIM_WAVE_RANDOM << 1);
+  wave_msg(0, ANIM_CHANNELS, 120, 120, 0, 0, 0, 0, 0, 0);
+  anim_msg(K_ANIM_WAVE, (uint8_t[16]) {0, ANIM_SIZE, 120, 0, 120}, 15);
+  sim_run(100);
+  CHECK(look_size(0) == 1000);
+  // ANIM_WAVES at most, one more waits for one to go
+  lv_obj_clean(lv_scr_act());
+  place(1, 0, 10, 10, 0, 0);
+  place(2, 0, 10, 50, 0, 0);
+  show_anims();
+  for (int i = 0; i < ANIM_WAVES; i++) {
+    int c = i % ANIM_CHANNELS, v = c >= ANIM_SIZE ? 90 : 1;
+    wave_msg(i / ANIM_CHANNELS, c, v, v, 0, 0, 0, 0, 0, 0);
+  }
+  wave_msg(2, ANIM_SIZE, 150, 150, 0, 0, 0, 0, 0, 0);
+  sim_run(100);
+  CHECK(look_size(0) == 900 && look_size(2) == 1000);
+  wave_msg(0, ANIM_SIZE, 100, 100, 0, 0, 0, 0, 0, 0);
+  sim_run(100);
+  wave_msg(2, ANIM_SIZE, 150, 150, 0, 0, 0, 0, 0, 0);
+  sim_run(100);
+  CHECK(look_size(0) == 1000 && look_size(2) == 1500);
+  // one stopped but still on its way back makes room at once for a new one, not for a stop of none
+  wave_msg(0, ANIM_OPACITY, 100, 100, 1000, 1000, 0, 0, 0, 0);
+  wave_msg(2, ANIM_TURN, 0, 0, 0, 0, 0, 0, 0, 0);
+  sim_run(100);
+  CHECK(look_opa(0) > 900 && look_opa(0) < 1000);
+  wave_msg(2, ANIM_OPACITY, 50, 50, 0, 0, 0, 0, 0, 0);
+  sim_run(100);
+  CHECK(look_opa(0) == 1000 && look_opa(2) == 500);
+  // a place that goes takes its waves with it, and one leaving fades out flicker and all
+  anim_clear_msg(ANIM_PLACE_BIT | 1);
+  wave_msg(2, ANIM_OPACITY, 50, 100, 100, 100, 0, 0, 0, ANIM_WAVE_RANDOM);
+  anim_clear_msg(ANIM_PLACE_BIT | 2 | 500 << 8);
+  sim_run(300);
+  CHECK(anim_pos(2, &x, &y) && look_opa(2) >= 200 && look_opa(2) <= 400);
+  sim_run(300);
+  CHECK(!anim_pos(2, &x, &y));
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_ALL);
+}
+
+static void map_msg(int p, int c, int left, int right, int top, int bottom) {
+  uint8_t m[10] = {(uint8_t) p, (uint8_t) c};
+  int v[4] = {left, right, top, bottom};
+  for (int i = 0; i < 4; i++)
+    plink_put16(m + 2 + 2 * i, v[i]);
+  anim_msg(K_ANIM_MAP, m, sizeof m);
+}
+
+// MAP: size, opacity, turn and speed follow where its middle is across its area, and the places bigger from their
+// map are drawn in front
+static void test_anim_map(void) {
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 0, 0, 0);
+  show_anims();
+  area_msg(0, 0, 320, 200, ANIM_EDGE_BOUNCE, ANIM_EDGE_BOUNCE);
+  map_msg(0, ANIM_SIZE, 100, 100, 50, 100);  // smaller further up
+  move_msg(152, 96, 0);                      // the 16 x 8 frame's middle halfway down
+  CHECK(look_size(0) == 750);
+  move_msg(152, -4, 0);  // at the top
+  CHECK(look_size(0) == 500);
+  move_msg(152, 296, 0);  // below the area it's the bottom's
+  CHECK(look_size(0) == 1000);
+  map_msg(0, ANIM_SIZE, 50, 100, 50, 100);  // left to right too, the two multiply
+  move_msg(-8, -4, 0);
+  CHECK(look_size(0) == 250);
+  move_msg(152, 96, 0);
+  CHECK(look_size(0) == 562);
+  glide_msg(0, ANIM_SIZE, 200, 0, 0);  // and what a glide sets
+  CHECK(look_size(0) == 1124);
+  glide_msg(0, ANIM_SIZE, 100, 0, 0);
+  map_msg(0, ANIM_SIZE, 100, 100, 100, 100);
+  map_msg(0, ANIM_OPACITY, 100, 100, 20, 100);  // fainter further up
+  CHECK(look_size(0) == 1000 && look_opa(0) == 600);
+  map_msg(0, ANIM_OPACITY, 100, 100, 100, 100);
+  int a, flip;
+  map_msg(0, ANIM_TURN, 0, 360, 0, 0);  // rolls as it goes, half way round in the middle
+  CHECK(anim_angle(0, &a, &flip) && a == 180);
+  map_msg(0, ANIM_TURN, 0, 0, 0, 0);
+  map_msg(0, ANIM_X, 50, 50, 50, 50);  // not x or y
+  map_msg(0, ANIM_SPEED, 50, 50, 100, 100);
+  drift_msg(40, 0);
+  sim_run(500);
+  int16_t x, y;
+  CHECK(anim_pos(0, &x, &y) && x == 162 && y == 96);  // half of 2 px a step
+  drift_msg(0, 0);
+  // the nearer place is in front, and they swap as they go
+  lv_obj_clean(lv_scr_act());
+  place(0, 0, 100, 150, 0, 0);
+  place(1, 0, 200, 20, 0, 0);
+  map_msg(0, ANIM_SIZE, 100, 100, 50, 100);
+  map_msg(1, ANIM_SIZE, 100, 100, 50, 100);
+  show_anims();
+  anim_look_t l[2];
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].depth > l[1].depth);
+  move_msg(100, 0, 0);
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].depth < l[1].depth);
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_ALL);
+}
+
+// FRAMES: a slot's frames go at its rate, the one it's on too, 0 holds it
+static void test_anim_frames(void) {
+  memset(an, 0xFF, sizeof an);
+  an[0][1][1] = 0x12;
+  an[1][2][2] = 0x34;
+  an[2][2][1] = 0x34;
+  an[3][0][0] = 0x56;
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 10);  // 100, 110, 120, 130 ms
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 10, 0, 0);
+  show_anims();
+  frames_msg(0, 200);  // twice as fast, 50 ms left of the first frame
+  sim_run(80);
+  CHECK(anim_shows(0, 1));
+  sim_run(50);  // 130, the next one 55 ms after 50
+  CHECK(anim_shows(0, 2));
+  sim_run(60);
+  CHECK(anim_shows(0, 3));
+  frames_msg(0, 0);
+  sim_run(1000);
+  CHECK(anim_shows(0, 3));
+  frames_msg(0, 100);
+  frames_msg(ANIM_SLOTS, 0);  // no such slot, too fast, the wrong length
+  frames_msg(0, 1001);
+  anim_msg(K_ANIM_FRAMES, (uint8_t[]) {0, 0}, 2);
+  sim_run(100);
+  CHECK(anim_shows(0, 0));  // on at once, for 140 ms
+  sim_run(100);
+  CHECK(anim_shows(0, 1));
+  // to 1 % and back after a moment: what's left of the frame is back to its time at 100 %, not 11 s
+  frames_msg(0, 1);
+  sim_run(50);
+  frames_msg(0, 100);
+  sim_run(100);
+  CHECK(anim_shows(0, 2));
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_ALL);
+}
+
+// px a loop of the 4 test frames redraws, a frame at a time from paused
+static unsigned long loop_px(void) {
+  unsigned long px = sim_px;
+  for (int i = 0; i < 4; i++) {
+    frames_msg(0, 100);  // on at once
+    sim_run(20);
+    frames_msg(0, 0);
+    sim_run(30);
+  }
+  return sim_px - px;
+}
+
+// A frame redraws the rectangle it changed, flipped or sized too, and a size that leaves the box as it is redraws
+// nothing. Every place is drawn by one object, without LVGL's heap.
+static void test_anim_redraw(void) {
+  memset(an, 0xFF, sizeof an);
+  an[0][1][1] = 0x12;
+  an[1][2][2] = 0x34;
+  an[2][2][1] = 0x34;
+  an[3][0][0] = 0x56;
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 10);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  for (int k = 0; k < ANIM_PLACES; k++)
+    place(k, 0, 10 + 30 * k, 100, 0, 0);
+  lv_mem_monitor_t m0, m1;
+  lv_mem_monitor(&m0);
+  show_anims();
+  lv_mem_monitor(&m1);
+  CHECK(m0.free_size - m1.free_size < 200);
+  lv_obj_clean(lv_scr_act());
+  anim_clear_msg(ANIM_ALL);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 100, 100, 0, 0);
+  show_anims();
+  frames_msg(0, 0);
+  sim_run(100);
+  unsigned long plain = loop_px();
+  CHECK(plain == 8 * 4 + 8 * 2 + 8 * 6 + 8 * 4);  // the rectangles the records changed, at 2x
+  flip_msg(0, ANIM_FLIP_X | ANIM_FLIP_Y);
+  sim_run(100);
+  CHECK(loop_px() == plain && !sim_stale());
+  glide_msg(0, ANIM_SIZE, 200, 0, 0);
+  sim_run(100);
+  CHECK(loop_px() == 18 * 10 + 18 * 6 + 17 * 13 + 17 * 9 && !sim_stale());  // twice that, and half a pixel round
+  glide_msg(0, ANIM_TURN, 30, 0, 0);
+  sim_run(100);
+  loop_px();
+  CHECK(!sim_stale());
+  glide_msg(0, ANIM_TURN, 0, 0, 0);
+  glide_msg(0, ANIM_SIZE, 100, 0, 0);
+  sim_run(100);
+  unsigned long px = sim_px;
+  wave_msg(0, ANIM_SIZE, 97, 100, 1000, 1000, 0, 0, 0, 0);  // 16 x 8 all the way
+  sim_run(3000);
+  CHECK(sim_px == px && look_size(0) < 1000);
+  lv_obj_clean(lv_scr_act());
   anim_clear_msg(ANIM_ALL);
 }
 
@@ -1283,6 +1746,14 @@ static void test_deflate(void) {
 }
 
 // ---------------------------------------------------------------- number and time formatting
+// The letters' opacity table only has room for 4 bpp, see lv_draw_sw_letter.c in lib/lvgl-ci600.patch
+static void test_fonts(void) {
+  const lv_font_t *fonts[] = {&font_f12, &font_f14, &font_f16, &font_f20, &font_f28, &font_n40,
+                              &font_n64, &icons_16, &icons_22, &icons_32, &icons_48};
+  for (size_t i = 0; i < LEN(fonts); i++)
+    CHECK(((const lv_font_fmt_txt_dsc_t *) fonts[i]->dsc)->bpp <= 4);
+}
+
 static void test_formats(void) {
   char b[24];
   CHECK(!strcmp(fmt_dec(b, 12345, 3), "12.345"));
@@ -1312,7 +1783,7 @@ static void test_values(void) {
     CHECK(d.min <= d.max);
     if (d.key)
       CHECK((int) val_by_key(d.key) == v);  // keys must be unique, they identify values on the link and in flash
-    if ((d.flags & (VF_CX60 | VF_CMD)) == VF_CX60)
+    if ((d.flags & (VF_CX60 | VF_BY_HAND)) == VF_CX60)
       CHECK((int) val_by_cx60(val_cx60_reg((val_t) v)) == v);
   }
   val_set(V_BRIGHTNESS, 150);
@@ -1456,12 +1927,6 @@ static void test_clock(void) {
 }
 
 // ---------------------------------------------------------------- the Modbus server
-static int frame(uint8_t *f, int n) {  // appends the CRC
-  uint16_t c = mb_crc(f, n);
-  f[n] = c & 0xFF;
-  f[n + 1] = c >> 8;
-  return n + 2;
-}
 
 static void test_mbserver(void) {
   uint8_t q[300], r[MB_MAX_FRAME];
@@ -1469,46 +1934,46 @@ static void test_mbserver(void) {
   // a frame longer than any reply isn't answered, the reply would overflow
   memset(q, 0, sizeof q);
   q[0] = 3, q[1] = 0x64;
-  CHECK(mb_frame(q, frame(q, 280), r) == 0);
+  CHECK(mb_frame(q, pbus_put_crc(q, 280), r) == 0);
   // the bootloader request is only accepted exactly as the updaters send it
   uint8_t enter[8] = {3, 0x64, 2, 0};
-  CHECK(mb_frame(enter, frame(enter, 4), r) == 6 && MB.enter_bootloader);
+  CHECK(mb_frame(enter, pbus_put_crc(enter, 4), r) == 6 && MB.enter_bootloader);
   MB.enter_bootloader = false;
   uint8_t other[8] = {3, 0x64, 3, 0};
-  CHECK(mb_frame(other, frame(other, 4), r) == 0 && !MB.enter_bootloader);
+  CHECK(mb_frame(other, pbus_put_crc(other, 4), r) == 0 && !MB.enter_bootloader);
   // write coils with a byte count that doesn't match the coil count
   uint8_t coils[16] = {3, 0x0F, 0, 0, 0, 20, 1, 0xFF};
-  CHECK(mb_frame(coils, frame(coils, 8), r) == 5 && r[1] == 0x8F);
+  CHECK(mb_frame(coils, pbus_put_crc(coils, 8), r) == 5 && r[1] == 0x8F);
   // only an actual change is reported to the main loop
   uint8_t w[8] = {0, 0x06, 0, 0x0C, 0, 200};
   uint16_t reg;
-  mb_frame(w, frame(w, 6), r);
+  mb_frame(w, pbus_put_crc(w, 6), r);
   CHECK(mb_take_changed(&reg) && reg == 0x0C && !mb_take_changed(&reg));
-  mb_frame(w, frame(w, 6), r);
+  mb_frame(w, pbus_put_crc(w, 6), r);
   CHECK(!mb_take_changed(&reg));  // same value again
   // discovery reads the input registers: our mark, the patch level and the version
   uint8_t disc[8] = {3, 0x04, 0, 0, 0, 5};
-  CHECK(mb_frame(disc, frame(disc, 6), r) == 15 && (r[3] << 8 | r[4]) == FW_TYPE && (r[5] << 8 | r[6]) == 0);
+  CHECK(mb_frame(disc, pbus_put_crc(disc, 6), r) == 15 && (r[3] << 8 | r[4]) == FW_TYPE && (r[5] << 8 | r[6]) == 0);
   CHECK((r[7] << 8 | r[8]) == FW_PATCH && (r[9] << 8 | r[10]) == FW_VERSION);
   // Fan down twice, NORMAL -> MIN -> STOP. The CX60 has read MIN when STOP comes, and its relay of MIN mustn't
   // undo STOP.
   mb_write(0x000, 1);
   uint8_t rd[8] = {3, 0x03, 0, 0, 0, 1};
-  CHECK(mb_frame(rd, frame(rd, 6), r) == 7 && r[4] == 1);
+  CHECK(mb_frame(rd, pbus_put_crc(rd, 6), r) == 7 && r[4] == 1);
   mb_write(0x000, 0);
   uint8_t relay[8] = {0, 0x65, 0, 0, 0, 1};
-  mb_frame(relay, frame(relay, 6), r);
+  mb_frame(relay, pbus_put_crc(relay, 6), r);
   CHECK(MB.hold[0] == 0 && (MB.pending[0] & 1));  // the coil stays set for the CX60 to read STOP
-  CHECK(mb_frame(rd, frame(rd, 6), r) == 7 && r[4] == 0);
+  CHECK(mb_frame(rd, pbus_put_crc(rd, 6), r) == 7 && r[4] == 0);
   relay[5] = 0;
-  mb_frame(relay, frame(relay, 6), r);
+  mb_frame(relay, pbus_put_crc(relay, 6), r);
   CHECK(MB.hold[0] == 0 && !(MB.pending[0] & 1));
 }
 
 // ---------------------------------------------------------------- the CX60's clock, which the panels keep
 static void relay(uint16_t reg, uint16_t v) {  // the CX60 passing a panel's change on to all panels
   uint8_t q[8] = {0, 0x65, (uint8_t) (reg >> 8), (uint8_t) reg, (uint8_t) (v >> 8), (uint8_t) v}, r[MB_MAX_FRAME];
-  mb_frame(q, frame(q, 6), r);
+  mb_frame(q, pbus_put_crc(q, 6), r);
 }
 
 static void block(uint16_t reg, const uint16_t *v, int n) {  // an FC16 broadcast, the CX60's own blocks
@@ -1518,14 +1983,12 @@ static void block(uint16_t reg, const uint16_t *v, int n) {  // an FC16 broadcas
     q[7 + 2 * i] = (uint8_t) (v[i] >> 8);
     q[8 + 2 * i] = (uint8_t) v[i];
   }
-  mb_frame(q, frame(q, 7 + 2 * n), r);
+  mb_frame(q, pbus_put_crc(q, 7 + 2 * n), r);
 }
 
 static void cx60(uint16_t reg, uint16_t v) { block(reg, &v, 1); }  // one register of a status block
 
-static bool coil(uint16_t reg) { return MB.pending[reg / 32] >> (reg % 32) & 1; }
-
-static bool clock_coils(void) { return coil(0x94) && coil(0x95); }
+static bool clock_coils(void) { return mb_pending(0x94) && mb_pending(0x95); }
 
 static void test_bus_clock(void) {
   model_defaults();
@@ -1631,14 +2094,14 @@ static void test_settings(void) {
   memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
   settings_load();
   M.brightness = 42;
-  settings_touch(true);
+  plat_save(true);
   settings_flush();
   model_defaults();
   settings_load();
   CHECK(M.brightness == 42);
   // power fails while saving, the previous save is still there
   M.brightness = 55;
-  settings_touch(true);
+  plat_save(true);
   stub_flash_writes_left = 3;
   settings_flush();
   stub_flash_writes_left = -1;
@@ -1647,10 +2110,10 @@ static void test_settings(void) {
   CHECK(M.brightness == 42);
   // the next save works, and a save with no changes erases nothing
   M.brightness = 55;
-  settings_touch(true);
+  plat_save(true);
   settings_flush();
   int erases = stub_flash_erases;
-  settings_touch(true);
+  plat_save(true);
   settings_flush();
   CHECK(stub_flash_erases == erases);
   model_defaults();
@@ -1666,7 +2129,7 @@ static void test_settings(void) {
   // saves take turns on all the pages, and the newest is loaded wherever it is
   for (int i = 0; i < 2 * FLASH_SETTINGS_PAGES; i++) {
     M.brightness = 10 + i;
-    settings_touch(true);
+    plat_save(true);
     settings_flush();
   }
   uint32_t magic = *(const uint32_t *) stub_flash;
@@ -1679,7 +2142,7 @@ static void test_settings(void) {
   // a change on the keys is saved 5 s after the last one, others at most once an hour
   erases = stub_flash_erases;
   M.brightness = 70;
-  settings_touch(false);
+  plat_save(false);
   stub_ms += 6000;
   settings_poll();
   CHECK(stub_flash_erases == erases);  // written less than an hour ago
@@ -1687,12 +2150,12 @@ static void test_settings(void) {
   settings_poll();
   CHECK(stub_flash_erases == erases + 1);
   M.brightness = 71;
-  settings_touch(false);
+  plat_save(false);
   stub_ms += 6000;
   settings_poll();
   CHECK(stub_flash_erases == erases + 1);
   M.brightness = 72;
-  settings_touch(true);  // on the keys, saves this one and the one waiting
+  plat_save(true);  // on the keys, saves this one and the one waiting
   stub_ms += 1000;
   settings_poll();
   CHECK(stub_flash_erases == erases + 1);  // not before 5 s
@@ -1713,7 +2176,7 @@ static void test_settings(void) {
   settings_load();
   stub_flash_bad = FLASH_SETTINGS;
   M.brightness = 61;
-  settings_touch(true);
+  plat_save(true);
   settings_flush();
   settings_flush();
   stub_flash_bad = 0;
@@ -1737,7 +2200,7 @@ static void test_runtime(void) {
   // the low words come every second, and mustn't hold up a save made on the keys
   int erases = stub_flash_erases;
   M.brightness = 33;
-  settings_touch(true);
+  plat_save(true);
   for (int s = 0; s < 7; s++) {
     rt[17]++;
     block(0x14C, rt, 20);
@@ -1819,27 +2282,26 @@ static void test_leds(void) {
 }
 
 // ---------------------------------------------------------------- the week program
-static int layout_changes;  // see --wrap in the Makefile
+static int layout_changes, saver_builds;  // see --wrap in the Makefile
 void __wrap_ui_layout_changed(void) { layout_changes++; }
+void __real_ui_value_changed(val_t v);
+void __wrap_ui_value_changed(val_t v) {
+  saver_builds += v == V_SCREENSAVER;
+  __real_ui_value_changed(v);
+}
 
 static period_t period(int start, int end, int idx) {
-  return (period_t) {.start_h = (uint8_t) (start / 60),
-                     .start_m = (uint8_t) (start % 60),
-                     .end_h = (uint8_t) (end / 60),
-                     .end_m = (uint8_t) (end % 60),
-                     .level = MODE_NORMAL,
-                     .idx = (uint8_t) idx,
-                     .setpoint = 200};
+  return (period_t) {(uint16_t) start, (uint16_t) end, MODE_NORMAL, (uint8_t) idx, 200};
 }
 
 static void test_schedule(void) {
   model_defaults();
   mb_init(3, FW_VERSION, FW_PATCH);
   // a new period is 08:00-16:00 if that's free, else the first free time
-  CHECK(sched_edit(0, -1) && M.n_periods[0] == 1 && M.period.start == 8 * 60 && M.period.end == 16 * 60);
+  CHECK(sched_edit(0, -1) && M.n_periods[0] == 1 && M.period.p.start == 8 * 60 && M.period.p.end == 16 * 60);
   const period_t day[3] = {period(390, 480, 0), period(480, 930, 1), period(930, 1350, 2)};
   sched_store(1, day, 3);
-  CHECK(sched_edit(1, -1) && M.period.idx == 3 && M.period.start == 0 && M.period.end == 390);
+  CHECK(sched_edit(1, -1) && M.period.p.idx == 3 && M.period.p.start == 0 && M.period.p.end == 390);
   CHECK(!sched_can_add(1));
   const period_t full[3] = {period(0, 480, 0), period(480, 960, 1), period(960, 1440, 2)};
   sched_store(2, full, 3);
@@ -1851,7 +2313,7 @@ static void test_schedule(void) {
   const period_t gap6[2] = {period(0, 480, 0), period(486, 1440, 1)};
   sched_store(3, gap6, 2);
   int32_t lo, hi;
-  CHECK(sched_edit(3, -1) && M.period.start == 480 && M.period.end == 486);
+  CHECK(sched_edit(3, -1) && M.period.p.start == 480 && M.period.p.end == 486);
   sched_range(V_PERIOD_START, &lo, &hi);
   CHECK(lo == 480 && hi == 481);
   // an edit stays between its neighbours, 08:00-15:30 between 06:30-08:00 and 15:30-22:30
@@ -1859,11 +2321,11 @@ static void test_schedule(void) {
   CHECK(sched_edit(1, 1));
   val_set(V_PERIOD_START, 7 * 60);
   val_set(V_PERIOD_END, 1440);
-  CHECK(M.period.start == 480 && M.period.end == 930);
+  CHECK(M.period.p.start == 480 && M.period.p.end == 930);
   val_set(V_PERIOD_START, 1000);  // pushes the end along, as far as the next one
-  CHECK(M.period.start == 925 && M.period.end == 930);
+  CHECK(M.period.p.start == 925 && M.period.p.end == 930);
   val_set(V_PERIOD_END, 0);
-  CHECK(M.period.start == 480 && M.period.end == 485 && M.week[1][1].end_m == 5);
+  CHECK(M.period.p.start == 480 && M.period.p.end == 485 && M.week[1][1].end == 485);
   // the screens are rebuilt when a day changes, also from the bus, and not when it doesn't
   layout_changes = 0;
   sched_store(1, M.week[1], M.n_periods[1]);
@@ -1978,28 +2440,66 @@ static uint16_t esp_num;  // number of the ESP's next message
 static void from_esp(uint16_t key, const uint8_t *b, int n, bool ack) {
   const pbulk_panel_t *p = link_bulk_state();
   uint8_t f[PBULK_FRAME_MAX] = {PBULK_ADDR, PBULK_FC_SEND, (uint8_t) (3 + n), M.bus_addr}, a[PBULK_ANSWER_FRAME_MAX];
-  put16(f + PBULK_ESESS, 0xE5);
-  put16(f + PBULK_NUM, esp_num++);
-  put16(f + PBULK_PSESS, ack ? p->psess : 0);
-  put16(f + PBULK_PNEXT, p->pnum);
-  put16(f + PBULK_PAYLOAD, key);
+  plink_put16(f + PBULK_ESESS, 0xE5);
+  plink_put16(f + PBULK_NUM, esp_num++);
+  plink_put16(f + PBULK_PSESS, ack ? p->psess : 0);
+  plink_put16(f + PBULK_PNEXT, p->pnum);
+  plink_put16(f + PBULK_PAYLOAD, key);
   f[PBULK_PAYLOAD + 2] = (uint8_t) n;
   memcpy(f + PBULK_PAYLOAD + 3, b, (size_t) n);
-  put16(f + PBULK_PAYLOAD + 3 + n, pbus_crc16(f, PBULK_PAYLOAD + 3 + n));
+  pbus_put_crc(f, PBULK_PAYLOAD + 3 + n);
   link_bulk_frame(f, PBULK_FRAME(3 + n), 0, 0, a);
   link_poll();
 }
 
 static void number_from_esp(uint16_t key, uint32_t v, bool ack) {
   uint8_t b[4];
-  put32(b, v);
+  plink_put32(b, v);
   from_esp(key, b, 4, ack);
+}
+
+static int32_t via_link(uint16_t key, const uint8_t *b, int n) {
+  uint8_t m[256] = {0};  // DATA in multiples of 4 bytes, the ESP pads its last. Each 4 count as a message.
+  memcpy(m, b, (size_t) n);
+  from_esp(key, m, key == K_PIC_DATA ? (n + 3) & ~3 : n, false);
+  esp_num = (uint16_t) (esp_num + (key == K_PIC_DATA ? (n + 3) / 4 - 1 : 0));
+  return -1;
+}
+
+static void test_link_picture(void) {
+  to_pic = via_link;
+  fill(0, H, 21);
+  saver_builds = 0;
+  send_picture(64);
+  CHECK(pic_state() == PIC_READY && shows() && saver_builds > 0);
+  saver_builds = 0;
+  fill(1, 2, 22);
+  uint8_t b[512];
+  unsigned n = pack(1, 2, b);
+  rest_zip(patch(1, 2, n, false), b, n, NULL, 0, 64);
+  CHECK(shows() && saver_builds == 0);
+  to_pic = pic_msg;
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+}
+
+// Our K_SETTINGS as link_poll() queues them, taken out so the next ones fit. Returns how many.
+static int settings_out(uint32_t *out, int max) {
+  plink_t *l = (plink_t *) link_queue();
+  int k = 0;
+  for (int i = 0; i < 20; i++) {
+    for (int j = 0; j < l->qn && k < max; j++)
+      if (l->key[j] == K_SETTINGS)
+        out[k++] = l->value[j];
+    l->qn = 0;
+    link_poll();
+  }
+  return k;
 }
 
 static bool queued(uint16_t key, uint32_t value) {
   const plink_t *l = link_queue();
   for (int i = 0; i < l->qn; i++)
-    if (l->q[i].key == key && l->q[i].value == value)
+    if (l->key[i] == key && l->value[i] == value)
       return true;
   return false;
 }
@@ -2013,7 +2513,7 @@ static void test_advanced(void) {
   unit_poll();
   CHECK(M.adv.deice_temp == -150);
   val_set(V_DEICE_TEMP, -200);
-  CHECK(MB.hold[0x159] == -200 && coil(0x159));
+  CHECK(MB.hold[0x159] == -200 && mb_pending(0x159));
   // DIP switches, the panels the unit found and the filter changes
   cx60(0x10F, 1);
   cx60(0x112, 1);
@@ -2034,7 +2534,7 @@ static void test_advanced(void) {
   CHECK(M.adv.pi[1] == 500 && MB.hold[0x0B6] == 500);
   // A test writes its value, then its enable, and is over after a minute like in the CX60
   val_set(V_TEST_SPEED, MODE_MAX + 1);
-  CHECK(MB.hold[0x0A8] == MODE_MAX && MB.hold[0x143] == 1 && coil(0x0A8) && coil(0x143));
+  CHECK(MB.hold[0x0A8] == MODE_MAX && MB.hold[0x143] == 1 && mb_pending(0x0A8) && mb_pending(0x143));
   val_set(V_TEST_HEATER, 1);
   CHECK(MB.hold[0x145] == 1 && MB.hold[0x146] == 1);
   for (int s = 0; s < 59; s++)
@@ -2060,14 +2560,15 @@ static void test_unit(void) {
   unit_poll();
   CHECK(M.heater_enabled);
   val_set(V_HEATER, 0);
-  CHECK(!MB.hold[0x13F] && !MB.hold[0x140] && !MB.hold[0x141] && coil(0x13F) && coil(0x140) && coil(0x141));
+  CHECK(!MB.hold[0x13F] && !MB.hold[0x140] && !MB.hold[0x141] && mb_pending(0x13F) && mb_pending(0x140) &&
+        mb_pending(0x141));
   for (uint16_t r = 0x13F; r <= 0x141; r++)
     relay(r, 0);
   cx60(0x10E, 0);
   unit_poll();
   CHECK(!M.heater_enabled);
   val_set(V_HEATER, 1);
-  CHECK(M.heater_enabled && MB.hold[0x141] == 1 && coil(0x141) && !coil(0x13F) && !coil(0x140));
+  CHECK(M.heater_enabled && MB.hold[0x141] == 1 && mb_pending(0x141) && !mb_pending(0x13F) && !mb_pending(0x140));
   relay(0x141, 1);
   for (int s = 0; s < 3; s++) {  // our flag is one vote, and the unit didn't take it: no heater, say
     cx60(0x0C3, (uint16_t) (200 + s));
@@ -2090,7 +2591,7 @@ static void test_unit(void) {
   CHECK(M.mode == MODE_NORMAL && M.mode_now == MODE_MAX && M.boost_on && M.boost_left == 10);
   val_set(V_BOOST, 0);
   val_set(V_MODE, MODE_MAX);
-  CHECK(coil(0x13B) && MB.hold[0x000] == MODE_MAX && coil(0x000));
+  CHECK(mb_pending(0x13B) && MB.hold[0x000] == MODE_MAX && mb_pending(0x000));
   relay(0x13B, 1);
   relay(0x000, MODE_MAX);
   cx60(0x0C1, 0);
@@ -2107,7 +2608,7 @@ static void test_unit(void) {
   cx60(0x114, REG_SUPPLY);
   unit_poll();
   val_set(V_REGULATION, REG_EXTRACT);
-  CHECK(MB.hold[0x114] == REG_EXTRACT && coil(0x114) && MB.hold[0x136] == 1 && coil(0x136));
+  CHECK(MB.hold[0x114] == REG_EXTRACT && mb_pending(0x114) && MB.hold[0x136] == 1 && mb_pending(0x136));
   // supply air too cold, 0x0C2 is min + 6
   cx60(0x00D, 160);
   cx60(0x0C2, 166);
@@ -2123,10 +2624,10 @@ static void test_unit(void) {
   unit_poll();
   M.esp_online = true;
   val_set(V_SETPOINT, 215);
-  CHECK(!coil(0x00C));
+  CHECK(!mb_pending(0x00C));
   M.esp_online = false;
   val_set(V_SETPOINT, 220);
-  CHECK(coil(0x00C) && MB.hold[0x00C] == 220);
+  CHECK(mb_pending(0x00C) && MB.hold[0x00C] == 220);
   relay(0x00C, 210);
   unit_poll();
   CHECK(M.setpoint == 210);
@@ -2168,23 +2669,23 @@ static void test_unit(void) {
 
   // A boost the CX60 doesn't count down, nothing answers at address 1, is stopped after a while and the user told
   val_set(V_BOOST, 1);
-  CHECK(coil(0x13A));
+  CHECK(mb_pending(0x13A));
   for (int s = 0; s < 12; s++) {  // counting down
     cx60(0x0C1, (uint16_t) (1800 - s));
     unit_poll();
     unit_second();
   }
-  CHECK(M.boost_on && !coil(0x13B) && !toasts);
+  CHECK(M.boost_on && !mb_pending(0x13B) && !toasts);
   for (int s = 0; s < 10; s++) {  // stuck, 9 seconds without a change
     cx60(0x0C1, 1700);
     unit_poll();
     unit_second();
   }
-  CHECK(!coil(0x13B) && !toasts);
+  CHECK(!mb_pending(0x13B) && !toasts);
   cx60(0x0C1, 1700);
   unit_poll();
   unit_second();
-  CHECK(coil(0x13B) && toasts == 1);
+  CHECK(mb_pending(0x13B) && toasts == 1);
   cx60(0x0C1, 0);
   unit_poll();
 
@@ -2227,6 +2728,68 @@ static void test_link(void) {
   wakes = 0;
   number_from_esp(K_SHOW_VIEW, VIEW_FLOW, false);
   CHECK(views == 1 && shown_view == VIEW_FLOW && !input_idle() && wakes == 1);
+  // Before the ESP flashes us it asks for our settings: the format, each saved value, then how many
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  M.theme = 2;
+  plat_save_now();
+  int saved_n = 0, theme_at = -1;
+  for (val_t s = val_next(V_NONE, VF_SAVED, 0); s != V_COUNT; s = val_next(s, VF_SAVED, 0))
+    saved_n++;
+  number_from_esp(K_SETTINGS, 0, false);
+  uint32_t snap[256];
+  int k = settings_out(snap, 256);
+  for (int i = 0; i < k; i++)
+    if (snap[i] == ((uint32_t) K_THEME << 16 | 2))
+      theme_at = i;
+  CHECK(k == saved_n + 2 && snap[0] == SETTINGS_FORMAT && snap[k - 1] == ((uint32_t) SETTINGS_END << 16 | saved_n));
+  CHECK(theme_at > 0);
+  // Not taken by a panel with settings of its own
+  int resets = stub_resets;
+  M.theme = 0;
+  for (int i = 0; i < k; i++)
+    number_from_esp(K_SETTINGS, snap[i], false);
+  CHECK(M.theme == 0 && stub_resets == resets);
+  // After the flash it starts without any and says so, and takes them back and restarts with them saved
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  settings_load();
+  link_init();
+  CHECK(queued(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK | HELLO_FRESH));
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16, false);
+  for (int i = 0; i < k; i++)
+    number_from_esp(K_SETTINGS, snap[i], false);
+  CHECK(M.theme == 2 && stub_resets == resets + 1);
+  M.theme = 0;
+  settings_load();
+  CHECK(M.theme == 2 && !plat_fresh());  // saved before the restart
+  // none from another format, nor with one missing
+  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
+  settings_load();
+  M.theme = 0;
+  snap[0]++;
+  for (int i = 0; i < k; i++)
+    number_from_esp(K_SETTINGS, snap[i], false);
+  snap[0]--;
+  for (int i = 0; i < k; i++)
+    if (i != theme_at)
+      number_from_esp(K_SETTINGS, snap[i], false);
+  CHECK(M.theme == 0 && stub_resets == resets + 1);
+  plat_save_now();
+  settings_load();  // with settings again, for what follows
+  // a toggle's words and a text share their room: each only takes its own, and a new type starts empty
+  uint8_t def[ITEM_DEF_LEN] = {ITEM_TOGGLE};
+  item_t *it = &M.items[1];
+  from_esp(K_ITEM_DEF + 1, def, sizeof def, false);
+  from_esp(K_ITEM_ON + 1, (const uint8_t *) "Open", 4, false);
+  from_esp(K_ITEM_TEXT + 1, (const uint8_t *) "Washing", 7, false);
+  CHECK(!strcmp(it->on, "Open") && !it->off[0]);
+  def[0] = ITEM_TEXT;
+  from_esp(K_ITEM_DEF + 1, def, sizeof def, false);
+  CHECK(!it->text[0]);
+  from_esp(K_ITEM_ON + 1, (const uint8_t *) "Open", 4, false);
+  from_esp(K_ITEM_TEXT + 1, (const uint8_t *) "Washing", 7, false);
+  CHECK(!strcmp(it->text, "Washing"));
+  from_esp(K_ITEM_DEF + 1, def, sizeof def, false);  // the same type again keeps it
+  CHECK(!strcmp(it->text, "Washing"));
   // the setpoint goes to the ESP, but not while it's offline
   M.esp_online = false;
   val_set(V_SETPOINT, 230);
@@ -2271,9 +2834,24 @@ static void test_link(void) {
   const uint16_t spare = 0x0D0;  // keys no message has, so they're values
   for (uint16_t k = spare; plink_room(link_queue()); k++)
     link_send(k, 1);
+  uint8_t d[512];  // and its animations are gone with it, it sends them again
+  uint32_t n = anim_records(d, 5);
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  place(0, 0, 0, 10, 0, 0);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
-  CHECK(link_queue()->q[0].key == K_HELLO && link_queue()->q[0].value == (uint32_t) PLINK_VERSION << 16);
-  CHECK(queued(spare, 1) && link_queue()->qn == PLINK_QUEUE);
+  CHECK(link_queue()->key[0] == K_HELLO && link_queue()->value[0] == (uint32_t) PLINK_VERSION << 16);
+  CHECK(queued(spare, 1) && link_queue()->qn == PLINK_QUEUE && !placed() && !anim_used());
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);  // also after the answer to ours
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16, false);
+  CHECK(!anim_used());
+  // An animation shows and goes on its own, the screen isn't built again for it
+  saver_builds = 0;
+  CHECK(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))) == PIC_DONE);
+  uint8_t at[10] = {0};
+  from_esp(K_ANIM_PLACE, at, sizeof at, false);
+  number_from_esp(K_ANIM_CLEAR, ANIM_PLACE_BIT | 0, false);
+  number_from_esp(K_ANIM_CLEAR, ANIM_ALL, false);
+  CHECK(!saver_builds && !anim_used());
   // A CX60 value in the ignored answer goes again unless a newer one waits. Item values don't.
   link_init();
   M.esp_version = PLINK_VERSION;
@@ -2283,7 +2861,7 @@ static void test_link(void) {
   link_poll();  // they're in the answer
   link_send(K_FAN_NORM_SUP, 60);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
-  CHECK(link_queue()->q[0].key == K_HELLO && queued(K_SETPOINT, 215) && queued(K_FAN_NORM_SUP, 60));
+  CHECK(link_queue()->key[0] == K_HELLO && queued(K_SETPOINT, 215) && queued(K_FAN_NORM_SUP, 60));
   CHECK(!queued(K_FAN_NORM_SUP, 50) && !queued(K_ITEM_VALUE + 1, 7));
 
   // ESP switched off: offline at once, and until it's heard again
@@ -2303,15 +2881,22 @@ int main(void) {
   sim_display_init();
   anim_init();
   test_picture();
+  test_picture_parts();
   test_jpeg();
   test_deflate();
   test_anim();
   test_anim_slots();
   test_anim_move();
+  test_anim_ease();
   test_anim_turn();
   test_anim_look();
   test_anim_rounds();
   test_anim_paths();
+  test_anim_wave();
+  test_anim_map();
+  test_anim_frames();
+  test_anim_redraw();
+  test_fonts();
   test_formats();
   test_values();
   test_items();
@@ -2326,6 +2911,7 @@ int main(void) {
   test_unit();
   test_advanced();
   test_link();
+  test_link_picture();
   char why[96] = "";
   if (menu_check(why, sizeof why)) {
     printf("menus: %s\n", why);

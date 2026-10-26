@@ -12,8 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-void settings_load(void);           // call before the UI starts
-void settings_touch(bool quickly);  // something changed, quickly = save 5 s after the last such change
-void settings_poll(void);           // main loop, saves when it's time
-void settings_flush(void);          // save now if anything is unsaved, before a restart
-uint32_t settings_saves(void);      // since the flash was erased
+// Also plat.h's plat_save(), plat_save_now() and plat_fresh(). plat_save(true) saves 5 s after the last such change.
+void settings_load(void);       // call before the UI starts
+void settings_poll(void);       // main loop, saves when it's time
+void settings_flush(void);      // save now if anything is unsaved, before a restart
+uint32_t settings_saves(void);  // since the flash was erased

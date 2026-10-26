@@ -5,6 +5,7 @@
 #include "layout.h"
 #include "lcd.h"
 #include "link.h"
+#include "mbserver.h"
 #include "panel.h"
 #include "plat.h"
 #include "room.h"
@@ -112,6 +113,31 @@ void plat_stats(plat_stats_t *s) {
                        .heap_peak = used > heap_peak ? used : heap_peak};
 }
 
+// Value changes and actions. The CX60 part of them is unit.c's, and saving is settings.c's
+void plat_value_changed(val_t v) {
+  if (v == V_BUS_ADDR)
+    MB.addr = M.bus_addr;  // the CX60 only notices after its next restart
+  if (v == V_ROOM_OFFSET)
+    M.t_room = T_NONE;  // start over with the new offset instead of smoothing toward it
+  unit_value_changed(v);
+}
+
+void plat_action(int a) {
+  switch (a) {
+    case A_RESET_PANEL:
+      panel_defaults();
+      plat_save(true);
+      // fall through
+    case A_RESTART:
+      settings_flush();
+      board_reset();
+      break;
+    default:
+      unit_action(a);
+      break;
+  }
+}
+
 static void second(void) {
   uptime_s++;
   board_rtc_poll();
@@ -144,11 +170,12 @@ int main(void) {
   drv.hor_res = SCR_W;
   drv.ver_res = SCR_H;
   drv.flush_cb = flush;
+  drv.rounder_cb = pic_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
   uint32_t t = board_rtc_get();
   clock_from_unix(t);
-  if (t > SECS_1970_TO_2000)
+  if (t > PLINK_EPOCH)
     clock_follow(t, t);  // the saved dst_now may be stale, or the settings wiped
   ui_init();
   link_init();

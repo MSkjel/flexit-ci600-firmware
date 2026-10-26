@@ -3,15 +3,18 @@
 #   make shots          every screen as build/out/shots/*.png, plus a contact sheet
 #   make gallery        the README's screens and a page of all of them in build/out/gallery, after make check
 #   make met            the ESP's weather picture for a set of weathers, in build/out/met
-#   make esp_sync       copy proto/ into the ESP repo, which builds the same files
+#   make esp_sync       copy proto/ into the ESP repo, which builds the same files. FORCE=1 drops changes there
 ROOT     := ..
 BUILD    := build$(if $(SAN),-san)
+OBJ_DIR  := $(BUILD)/obj
+COMPILE   = $(CC) $(CPPFLAGS) $(CFLAGS)
 AUTHORS  := MSkjel
 .DEFAULT_GOAL := check
 include $(ROOT)/config.mk
 OUT      := $(BUILD)/out
 ESP_REPO ?= $(abspath $(ROOT)/../esphome-flexit-modbus-server)
 ESP_CODE := $(ESP_REPO)/packages/code
+ESP_MET  := $(ESP_CODE)/met
 CC       := gcc -m32 -msse2 -mfpmath=sse  # SSE floats round the same everywhere, which the JPEGs in the goldens need
 CXX      := g++ -m32 -msse2 -mfpmath=sse
 ifdef SAN
@@ -22,57 +25,61 @@ CFLAGS   := -O1 -g -std=gnu11 $(WARN) $(SANFLAGS)
 CXXFLAGS := -O1 -g -std=gnu++17 $(WARN) $(SANFLAGS)
 LDLIBS   := $(SANFLAGS) -lm
 
-obj = $(patsubst %,$(BUILD)/obj/%.o,$(1))
-APP := $(patsubst $(ROOT)/%.c,$(BUILD)/obj/%.o,$(APP_SRC) $(LV_SRC)) $(LV_COPY_SRC:.c=.o)
-SIMLIB := $(call obj,sim/simlib sim/ppm)
+obj = $(patsubst %,$(OBJ_DIR)/%.o,$(1))
+SIMLIB   := $(APP_OBJ) $(call obj,sim/simlib sim/ppm)
+HW_OBJ   := $(call obj,sim/board_stub hw/mbserver hw/unit hw/room hw/settings)  # hw/ on a fake board
+LINK_OBJ := $(call obj,proto/pbulk proto/pbus proto/plink proto/pdeflate)
 
-$(BUILD)/sim: $(APP) $(SIMLIB) $(call obj,sim/sim sim/sim_model sim/sim_esp)
-$(BUILD)/lang_test: $(APP) $(SIMLIB) $(call obj,sim/lang_test sim/sim_model sim/sim_esp)
-$(BUILD)/replay: $(APP) $(SIMLIB) $(call obj,sim/replay sim/board_stub hw/mbserver hw/unit hw/room)
-$(BUILD)/unit_test: $(APP) $(SIMLIB) $(call obj,sim/unit_test sim/board_stub hw/mbserver hw/unit hw/room hw/settings)
+PROGS := sim lang_test unit_test replay link_test bulk_test
+$(BUILD)/sim: $(SIMLIB) $(call obj,sim/sim sim/sim_model sim/sim_esp)
+$(BUILD)/lang_test: $(SIMLIB) $(call obj,sim/lang_test sim/sim_model sim/sim_esp)
+$(BUILD)/unit_test: $(SIMLIB) $(HW_OBJ) $(call obj,sim/unit_test)
+$(BUILD)/replay: $(SIMLIB) $(HW_OBJ) $(call obj,sim/replay)
 # unit_test records the calls input.c, link.c and the week program make into the UI
-$(BUILD)/unit_test: LDLIBS += -Wl,--wrap=ui_key,--wrap=ui_idle,--wrap=ui_wake,--wrap=ui_toast,--wrap=ui_layout_changed,--wrap=ui_show_view
-$(BUILD)/link_test: $(call obj,sim/link_test proto/pbulk proto/pbus proto/plink proto/pdeflate)
-$(BUILD)/bulk_test: $(call obj,sim/bulk_test proto/pbulk proto/pbus proto/plink proto/pdeflate)
-$(BUILD)/sim $(BUILD)/lang_test $(BUILD)/unit_test $(BUILD)/replay $(BUILD)/link_test $(BUILD)/bulk_test:
+$(BUILD)/unit_test: LDLIBS += -Wl,--wrap=ui_key,--wrap=ui_idle,--wrap=ui_wake,--wrap=ui_toast,--wrap=ui_layout_changed,--wrap=ui_show_view,--wrap=ui_value_changed
+$(BUILD)/link_test: $(LINK_OBJ) $(call obj,sim/link_test)
+$(BUILD)/bulk_test: $(LINK_OBJ) $(call obj,sim/bulk_test)
+$(addprefix $(BUILD)/,$(PROGS)):
 	$(CC) -o $@ $^ $(LDLIBS)
+
+# packages/code/met/*.cpp, built apart from main.cpp as on the ESP
+MET_OBJ := $(patsubst $(ESP_MET)/%.cpp,$(OBJ_DIR)/esp_met/%.o,$(wildcard $(ESP_MET)/*.cpp))
+$(OBJ_DIR)/esp_met/%.o: $(ESP_MET)/%.cpp $(BUILD_MK)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
-# gen.py also checks the ESP's copies of proto/
-ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/*)
-$(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py $(ESP_YAML) $(ESP_PROTO)
+# gen.py also checks the ESP's copies of proto/ against proto.lock, and lists the headers in packages/code
+ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/*)
+$(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML) $(ESP_PROTO)
 	@test -d $(ESP_REPO) || { echo "needs the ESP repo: ESP_REPO=<esphome-flexit-modbus-server>"; exit 1; }
 	@mkdir -p $(dir $@)
 	python3 esp_yaml/gen.py $(ESP_REPO) $@
-$(BUILD)/obj/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
-$(BUILD)/obj/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DMET_SAMPLE='"$(abspath esp_yaml/met_sample.json)"'
-$(BUILD)/esp_test: $(APP) $(SIMLIB) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness)
+$(OBJ_DIR)/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
+$(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DMET_SAMPLE='"$(abspath esp_yaml/met_sample.json)"'
+$(BUILD)/esp_test: $(SIMLIB) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) $(MET_OBJ)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
-# met_render draws the ESP's weather picture from packages/code/panel/met_scene.h for a set of weathers and times
-$(BUILD)/obj/sim/met_render.o: CPPFLAGS += -I$(ESP_CODE)/panel
-$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm)
+# met_render draws the ESP's weather picture from packages/code/met/met_scene.h for a set of weathers and times
+$(OBJ_DIR)/sim/met_render.o: CPPFLAGS += -I$(ESP_MET)
+$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
-$(BUILD)/obj/%.o: $(ROOT)/%.c $(ROOT)/config.mk $(FW_STAMP) | $(LVGL_PATCHED)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
-$(BUILD)/obj/%.o: $(ROOT)/%.cpp $(ROOT)/config.mk $(FW_STAMP)
+$(OBJ_DIR)/%.o: $(ROOT)/%.cpp $(ROOT)/config.mk $(FW_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
-$(BUILD)/obj/lib/%.o: CFLAGS += -w
-$(BUILD)/obj/ui/ui_info.o: $(AUTHORS_H)
-# the patched LVGL copies find their relative includes next to the originals
-$(LV_COPY)/%.o: $(LV_COPY)/%.c $(ROOT)/config.mk $(FW_STAMP)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -w -I$(LVGL)/$(dir $*) -c -o $@ $<
+# LVGL's warnings aren't ours
+$(OBJ_DIR)/lib/%.o $(LV_COPY)/%.o: CFLAGS += -w
 
 # Every screen the tests draw. Their hashes are in golden.txt.
 SCREENS := shots/*.ppm shots_no/*.ppm shots*/checks/*.ppm esp/*.ppm replay/*.ppm
 # hashed and sorted by name in C order, since wildcards sort by the locale and CI has another one
 HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 
-check: $(BUILD)/sim $(BUILD)/lang_test $(BUILD)/unit_test $(BUILD)/replay $(BUILD)/link_test $(BUILD)/bulk_test $(BUILD)/esp_test lang
+# bulk_test SECONDS CONTROL_TICK_MS SEED ESP_RX_THRESHOLD PANEL_2, three runs: the defaults; a slow CX60, the
+# ESP's bytes late in big chunks and a second panel on the bus; and a CX60 in between with another seed
+check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/esp $(OUT)/replay
 	$(BUILD)/unit_test
 	$(BUILD)/link_test
@@ -128,7 +135,7 @@ met: $(BUILD)/met_render
 	python3 shots.py --scale 1 --cols 6 $(OUT)/met
 
 esp_sync:
-	cp $(wildcard $(ROOT)/proto/*.[ch]) $(ESP_CODE)/panel/
+	python3 esp_yaml/esp_sync.py $(ROOT) $(ESP_REPO) $(if $(filter 1,$(FORCE)),--force)
 
 clean:
 	rm -rf build build-san

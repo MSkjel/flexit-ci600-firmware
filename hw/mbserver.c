@@ -6,9 +6,10 @@
 
 mb_t MB;
 
-uint16_t mb_crc(const uint8_t *p, int n) {
-  return pbus_crc16(p, n);  // the same CRC, table-driven
-}
+#define FC_BOOTLOADER 0x64  // enter the bootloader, from the updaters
+#define FC_RELAY 0x65       // Flexit's relay of a panel's change
+// Exception codes
+enum { EX_FUNCTION = 1, EX_ADDRESS = 2, EX_VALUE = 3 };
 
 void mb_init(uint8_t addr, uint16_t version, uint8_t patch) {
   memset(&MB, 0, sizeof MB);
@@ -20,32 +21,35 @@ void mb_init(uint8_t addr, uint16_t version, uint8_t patch) {
 
 static bool bit(const uint32_t *map, uint16_t reg) { return map[reg / 32] >> (reg % 32) & 1; }
 
+static void put_bit(uint32_t *map, uint16_t reg, bool on) {
+  if (on)
+    map[reg / 32] |= 1u << (reg % 32);
+  else
+    map[reg / 32] &= ~(1u << (reg % 32));
+}
+
 // Returns false if the coil stays set: the relay was of an older value of ours and the CX60 has to read the new one.
 static bool set_pending(uint16_t reg, bool on) {
-  if (on)
-    MB.pending[reg / 32] |= 1u << (reg % 32);
-  else if (bit(MB.again, reg)) {
-    MB.again[reg / 32] &= ~(1u << (reg % 32));
+  if (!on && bit(MB.again, reg)) {
+    put_bit(MB.again, reg, false);
     return false;
-  } else
-    MB.pending[reg / 32] &= ~(1u << (reg % 32));
+  }
+  put_bit(MB.pending, reg, on);
   return true;
 }
 
 bool mb_written(uint16_t reg) { return reg < MB_REGS && bit(MB.written, reg); }
 bool mb_relayed(uint16_t reg) { return reg < MB_REGS && bit(MB.relayed, reg); }
+bool mb_pending(uint16_t reg) { return reg < MB_REGS && bit(MB.pending, reg); }
 
 // Only flags the main loop if it's the first value or a different one.
 static void stored(uint16_t reg, uint16_t value, bool relayed) {
-  if (relayed)
-    MB.relayed[reg / 32] |= 1u << (reg % 32);
-  else
-    MB.relayed[reg / 32] &= ~(1u << (reg % 32));
+  put_bit(MB.relayed, reg, relayed);
   if (bit(MB.written, reg) && MB.hold[reg] == (int16_t) value)
     return;
   MB.hold[reg] = (int16_t) value;
-  MB.written[reg / 32] |= 1u << (reg % 32);
-  MB.changed[reg / 32] |= 1u << (reg % 32);
+  put_bit(MB.written, reg, true);
+  put_bit(MB.changed, reg, true);
   MB.any_changed = true;
 }
 
@@ -54,22 +58,18 @@ void mb_load(uint16_t reg, int16_t value) {
     stored(reg, (uint16_t) value, false);
 }
 
-static int finish(uint8_t *r, int n) {
-  uint16_t c = mb_crc(r, n);
-  r[n] = c & 0xFF;
-  r[n + 1] = c >> 8;
-  return n + 2;
-}
-
+// An exception reply, none to a broadcast
 static int exception(const uint8_t *q, uint8_t *r, uint8_t code) {
+  if (!q[0])
+    return 0;
   r[0] = q[0];
   r[1] = q[1] | 0x80;
   r[2] = code;
-  return finish(r, 3);
+  return pbus_put_crc(r, 3);
 }
 
 int mb_frame(const uint8_t *q, int n, uint8_t *r) {
-  if (n < 4 || n > MB_MAX_FRAME || mb_crc(q, n - 2) != (q[n - 2] | q[n - 1] << 8)) {
+  if (n > MB_MAX_FRAME || !pbus_crc_ok(q, n)) {
     MB.errors++;
     return 0;
   }
@@ -82,13 +82,12 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
   uint8_t fc = q[1];
   uint16_t a = n >= 6 ? (uint16_t) (q[2] << 8 | q[3]) : 0;
   uint16_t cnt = n >= 8 ? (uint16_t) (q[4] << 8 | q[5]) : 0;
-  int len;
 
   switch (fc) {
     case 0x01:  // read coils, the pending flags. The CX60 reads past the end too, those are 0
     case 0x02:  // read discrete inputs, always 0
       if (bcast || n != 8 || !cnt || cnt > 2000)
-        return bcast ? 0 : exception(q, r, 3);
+        return exception(q, r, EX_VALUE);
       r[0] = q[0];
       r[1] = fc;
       r[2] = (uint8_t) ((cnt + 7) / 8);
@@ -97,14 +96,14 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
         for (uint16_t i = 0; i < cnt; i++)
           if (a + i < MB_REGS && bit(MB.pending, a + i))
             r[3 + i / 8] |= 1u << (i % 8);
-      return finish(r, 3 + r[2]);
+      return pbus_put_crc(r, 3 + r[2]);
 
     case 0x03:  // read holding registers
     case 0x04:  // read input registers (discovery)
       if (bcast || n != 8 || !cnt || cnt > 125)
-        return bcast ? 0 : exception(q, r, 3);
+        return exception(q, r, EX_VALUE);
       if (fc == 0x03 ? a + cnt > MB_REGS : a + cnt > 5)
-        return exception(q, r, 2);
+        return exception(q, r, EX_ADDRESS);
       r[0] = q[0];
       r[1] = fc;
       r[2] = (uint8_t) (cnt * 2);
@@ -113,62 +112,53 @@ int mb_frame(const uint8_t *q, int n, uint8_t *r) {
         r[3 + 2 * i] = v >> 8;
         r[4 + 2 * i] = v & 0xFF;
       }
-      return finish(r, 3 + r[2]);
+      return pbus_put_crc(r, 3 + r[2]);
 
     case 0x05:  // write single coil
       if (n != 8)
         return 0;
       if (a < MB_REGS)
         set_pending(a, cnt == 0xFF00);
-      if (bcast)
-        return 0;
-      memcpy(r, q, 6);
-      return finish(r, 6);
+      break;
 
-    case 0x06:  // write single register
-    case 0x65:  // Flexit's relay of a panel's change, write the register and clear its coil
+    case 0x06:      // write single register
+    case FC_RELAY:  // write the register and clear its coil
       if (n != 8)
         return 0;
-      if (a < MB_REGS && (fc != 0x65 || set_pending(a, false)))
-        stored(a, cnt, fc == 0x65);
-      if (bcast)
-        return 0;
-      memcpy(r, q, 6);
-      return finish(r, 6);
+      if (a < MB_REGS && (fc != FC_RELAY || set_pending(a, false)))
+        stored(a, cnt, fc == FC_RELAY);
+      break;
 
     case 0x0F:  // write multiple coils
       if (n < 9 || n != 9 + q[6] || !cnt || q[6] != (cnt + 7) / 8)
-        return bcast ? 0 : exception(q, r, 3);
+        return exception(q, r, EX_VALUE);
       for (uint16_t i = 0; i < cnt; i++)
         if (a + i < MB_REGS)
           set_pending(a + i, (q[7 + i / 8] >> (i % 8)) & 1);
-      if (bcast)
-        return 0;
-      memcpy(r, q, 6);
-      return finish(r, 6);
+      break;
 
     case 0x10:  // write multiple registers
       if (n < 9 || n != 9 + q[6] || q[6] != cnt * 2)
-        return bcast ? 0 : exception(q, r, 3);
+        return exception(q, r, EX_VALUE);
       for (uint16_t i = 0; i < cnt; i++)
         if (a + i < MB_REGS)
           stored(a + i, (uint16_t) (q[7 + 2 * i] << 8 | q[8 + 2 * i]), false);
-      if (bcast)
-        return 0;
-      memcpy(r, q, 6);
-      return finish(r, 6);
+      break;
 
-    case 0x64:  // enter the bootloader for a firmware update. The updaters send [addr 0x64 2 0 crc].
+    case FC_BOOTLOADER:  // for a firmware update. The updaters send [addr 0x64 2 0 crc].
       if (bcast || n != 6 || q[2] != 2 || q[3] != 0)
         return 0;
       MB.enter_bootloader = true;
-      len = n - 2;
-      memcpy(r, q, len);
-      return finish(r, len);
+      memcpy(r, q, 4);
+      return pbus_put_crc(r, 4);
 
     default:
-      return bcast ? 0 : exception(q, r, 1);
+      return exception(q, r, EX_FUNCTION);
   }
+  if (bcast)  // the writes echo the request's first 6 bytes
+    return 0;
+  memcpy(r, q, 6);
+  return pbus_put_crc(r, 6);
 }
 
 // The CX60 sends its relay right behind another server's reply with no idle gap, so one receive can hold
@@ -180,7 +170,7 @@ static int frame_len(const uint8_t *q, int n) {
   int c[4], k = 0;
   if (fc & 0x80)
     c[k++] = 5;
-  if (fc <= 0x06 || fc == 0x65)
+  if (fc <= 0x06 || fc == FC_RELAY)
     c[k++] = 8;
   if (fc >= 0x01 && fc <= 0x04)
     c[k++] = 5 + q[2];
@@ -189,13 +179,13 @@ static int frame_len(const uint8_t *q, int n) {
     c[k++] = 8;
   }
   for (int i = 0; i < k; i++)
-    if (c[i] <= n && mb_crc(q, c[i] - 2) == (q[c[i] - 2] | q[c[i] - 1] << 8))
+    if (c[i] <= n && pbus_crc_ok(q, c[i]))
       return c[i];
   return 0;
 }
 
 int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
-  if (n >= 4 && mb_crc(q, n - 2) == (q[n - 2] | q[n - 1] << 8))
+  if (pbus_crc_ok(q, n))
     return mb_frame(q, n, r);  // a single frame
   int reply = 0, off = 0;
   bool junk = false;
@@ -221,7 +211,7 @@ void mb_write(uint16_t reg, int16_t value) {
     return;
   // The CX60 may have read the old value already. Its relay of that would undo this one, so it's skipped.
   if (bit(MB.pending, reg))
-    MB.again[reg / 32] |= 1u << (reg % 32);
+    put_bit(MB.again, reg, true);
   MB.hold[reg] = value;
   set_pending(reg, true);
 }

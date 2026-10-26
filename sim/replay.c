@@ -5,7 +5,6 @@
 #include "clock.h"
 #include "mbserver.h"
 #include "room.h"
-#include "settings.h"
 #include "sim.h"
 #include "ui.h"
 #include "unit.h"
@@ -16,11 +15,9 @@
 model_t M;
 extern uint32_t stub_ms, stub_rtc;  // board_stub.c
 
-// hw/settings.c isn't linked in
-void settings_load(void) {}
-void settings_touch(bool by_user) { (void) by_user; }
-void settings_poll(void) {}
-void settings_flush(void) {}
+// hw/main.c isn't linked in
+void plat_value_changed(val_t v) { unit_value_changed(v); }
+void plat_action(int a) { unit_action(a); }
 
 static int unhex(const char *h, uint8_t *b) {
   int n = 0;

@@ -7,6 +7,7 @@
 #include "pbulk.h"
 #include "pdeflate.h"
 #include "pjpeg.h"
+#include "cx60.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,14 +18,18 @@ unsigned long sim_cycles;
 static uint32_t now_us;                           // bus time
 static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8];  // the CX60's status broadcast and its poll of the panel
 
+static unsigned long sent_to_panel;
+
 // Waits for room in the queue like a real sender, running the link meanwhile.
 static void send(uint16_t key, const void *b, int n) {
-  while (!pbulk_esp_send(&FL, key, b, n, plink_kind(key) == PLINK_VALUE))
+  while (!pbulk_esp_send(&FL, key, b, n, plink_bulk_flags(key)))
     sim_link_run(1);
+  sent_to_panel++;
 }
 
 static void send_number(uint16_t key, uint32_t v) {
-  uint8_t b[4] = {(uint8_t) v, (uint8_t) (v >> 8), (uint8_t) (v >> 16), (uint8_t) (v >> 24)};
+  uint8_t b[4];
+  plink_put32(b, v);
   send(key, b, 4);
 }
 
@@ -52,12 +57,6 @@ static void esp_got(void *u, uint16_t key, const uint8_t *b, int n) {
     last_ack_status = (int) (v >> 24);
 }
 
-static void fin(uint8_t *f, int n) {
-  uint16_t c = pbus_crc16(f, n - 2);
-  f[n - 2] = c & 0xFF;
-  f[n - 1] = c >> 8;
-}
-
 // One 110 ms CX60 cycle. Status broadcast, the ESP's frame at most 1.5 ms after it and the panel's answer,
 // then the CX60 polls the panel 14 ms after the broadcast.
 static void cx60_cycle(void) {
@@ -72,7 +71,7 @@ static void cx60_cycle(void) {
       pbulk_esp_answer(&FL, a, an, esp_got, NULL);
   }
   link_bus(POLL, 8, end + 14000, end + 14000 + 9 * PBUS_BYTE_US, (end + 14000) / 1000);
-  now_us += 110000;
+  now_us += PBUS_CYCLE_US;
   sim_cycles++;
 }
 
@@ -106,33 +105,10 @@ static void send_data(bool pieces) {
   pic_sending = true;
 }
 
-static void put16(uint8_t *b, unsigned v) {
-  b[0] = (uint8_t) v;
-  b[1] = (uint8_t) (v >> 8);
-}
-
-static void put32(uint8_t *b, uint32_t v) {
-  put16(b, v & 0xFFFF);
-  put16(b + 2, v >> 16);
-}
-
-static void put_palette(uint8_t *b, const uint32_t *pal) {
-  for (int i = 0; i < 16; i++, b += 3) {
-    b[0] = (uint8_t) (pal[i] >> 16);
-    b[1] = (uint8_t) (pal[i] >> 8);
-    b[2] = (uint8_t) pal[i];
-  }
-}
-
 unsigned sim_esp_send_picture(void) {
   comp_len = pack_rows(tp_base, 0, TP_H);
-  // BEGIN: id, format, w, h, len, palette
-  uint8_t h[58] = {++pic_id, PIC_PALETTE};
-  put16(h + 2, TP_W);
-  put16(h + 4, TP_H);
-  put32(h + 6, comp_len);
-  put_palette(h + 10, tp_palette);
-  send(K_PIC_BEGIN, h, sizeof h);
+  uint8_t h[PIC_BEGIN_HEAD + PIC_PAL_LEN];
+  send(K_PIC_BEGIN, h, sim_pic_begin(h, ++pic_id, PIC_PALETTE, TP_W, TP_H, comp_len, tp_palette));
   send_data(true);
   return comp_len;
 }
@@ -178,10 +154,11 @@ static uint32_t photo_px(void *ctx, int x, int y) {
 // The photo as a JPEG at quality q, into comp. Returns the length, 0 if it doesn't fit in PIC_POOL.
 static unsigned photo_jpeg(int q) {
   pjpeg_t j;
-  pjpeg_begin(&j, 320, 240, q, comp, PIC_POOL);
+  pjpeg_begin(&j, PIC_MAX_W, PIC_MAX_H, q, comp, PIC_POOL);
   while (pjpeg_mcu(&j, photo_px, NULL)) {
   }
-  return pjpeg_end(&j);
+  uint32_t n = pjpeg_end(&j);
+  return n <= PIC_POOL ? n : 0;
 }
 
 unsigned sim_esp_send_photo(int *quality) {
@@ -195,11 +172,8 @@ unsigned sim_esp_send_photo(int *quality) {
   }
   *quality = lo;
   comp_len = photo_jpeg(lo);
-  uint8_t h[10] = {++pic_id, PIC_JPEG};  // BEGIN: id, format, w, h, len
-  put16(h + 2, 320);
-  put16(h + 4, 240);
-  put32(h + 6, comp_len);
-  send(K_PIC_BEGIN, h, sizeof h);
+  uint8_t h[PIC_BEGIN_HEAD];
+  send(K_PIC_BEGIN, h, sim_pic_begin(h, ++pic_id, PIC_JPEG, PIC_MAX_W, PIC_MAX_H, comp_len, NULL));
   send_data(false);
   return comp_len;
 }
@@ -214,11 +188,8 @@ unsigned sim_esp_send_moon(int *y_out, int *count_out) {
       y1 = y;
     }
   comp_len = pack_rows(tp_moon, y0, y1 - y0 + 1);
-  uint8_t h[9] = {++pic_id};  // id, y, count, len, no palette
-  put16(h + 1, (unsigned) y0);
-  put16(h + 3, (unsigned) (y1 - y0 + 1));
-  put32(h + 5, comp_len);
-  send(K_PIC_PATCH, h, sizeof h);
+  uint8_t h[PIC_PATCH_HEAD];
+  send(K_PIC_PATCH, h, sim_pic_patch(h, ++pic_id, y0, y1 - y0 + 1, comp_len, NULL));
   send_data(true);
   *y_out = y0;
   *count_out = y1 - y0 + 1;
@@ -238,9 +209,8 @@ void sim_esp_send_dawn(void) {
     }
     pal[i] = (uint32_t) (r << 16 | g << 8 | b);
   }
-  uint8_t h[57] = {++pic_id};
-  put_palette(h + 9, pal);
-  send(K_PIC_PATCH, h, sizeof h);
+  uint8_t h[PIC_PATCH_HEAD + PIC_PAL_LEN];
+  send(K_PIC_PATCH, h, sim_pic_patch(h, ++pic_id, 0, 0, 0, pal));
   send_number(K_PIC_END, plink_crc32(0, comp, 0));
 }
 
@@ -268,15 +238,9 @@ unsigned sim_esp_send_animation(int x, int y) {
   for (int f = 0; f <= AN_FRAMES; f++)
     comp_len += plink_anim_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
                                   comp + comp_len);
-  // ANIM_BEGIN: id, slot, w, h, scale, transparent colour, len, palette. Then place 0 at x, y once it's in.
-  uint8_t h[60] = {++pic_id, 0};
-  put16(h + 2, AN_W);
-  put16(h + 4, AN_H);
-  h[6] = 1;
-  h[7] = 15;
-  put32(h + 8, comp_len);
-  put_palette(h + 12, PAL);
-  send(K_ANIM_BEGIN, h, sizeof h);
+  // into slot 0 at scale 1, colour 15 transparent. Then place 0 at x, y once it's in.
+  uint8_t h[ANIM_BEGIN_HEAD + PIC_PAL_LEN];
+  send(K_ANIM_BEGIN, h, sim_anim_begin(h, ++pic_id, 0, AN_W, AN_H, 1, 15, comp_len, PAL));
   send_data(false);
   place_x = x;
   place_y = y;
@@ -284,22 +248,16 @@ unsigned sim_esp_send_animation(int x, int y) {
   return comp_len;
 }
 
-// ANIM_PLACE: place, slot, x, y, own, start, fade
 void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start) {
-  uint8_t m[10] = {(uint8_t) place, (uint8_t) slot};
-  put16(m + 2, (unsigned) x);
-  put16(m + 4, (unsigned) y);
-  m[6] = (uint8_t) own;
-  m[7] = (uint8_t) start;
-  send(K_ANIM_PLACE, m, sizeof m);
+  uint8_t m[10];
+  send(K_ANIM_PLACE, m, sim_anim_place(m, place, slot, x, y, own, start, 0));
 }
 
-void sim_esp_move_animation(int mode, int a, int b, int ms) {
-  uint8_t m[8] = {0, (uint8_t) mode};
-  put16(m + 2, (unsigned) a);
-  put16(m + 4, (unsigned) b);
-  put16(m + 6, (unsigned) ms);
-  send(K_ANIM_MOVE, m, mode == ANIM_GLIDE ? 8 : mode == ANIM_DRIFT ? 6 : 2);
+void sim_esp_move_animation(uint16_t key, int a, int b, int ms) {
+  uint8_t m[9];
+  int v[2] = {a, b};
+  unsigned xy = 1u << ANIM_X | 1u << ANIM_Y;
+  send(key, m, key == K_ANIM_GLIDE ? sim_anim_glide(m, 0, xy, ms, 0, v) : sim_anim_drift(m, 0, xy, v));
 }
 
 static void esp_pump(void) {
@@ -326,12 +284,12 @@ static void item(int i) {
   item_t it;
   sim_item(i, &it);
   uint8_t d[ITEM_DEF_LEN] = {it.type, it.flags, it.icon, it.dec};
-  put16(d + 4, it.step);
-  put16(d + 6, it.id);
-  put32(d + 8, (uint32_t) it.min);
-  put32(d + 12, (uint32_t) it.max);
+  plink_put16(d + 4, it.step);
+  plink_put16(d + 6, it.id);
+  plink_put32(d + 8, (uint32_t) it.min);
+  plink_put32(d + 12, (uint32_t) it.max);
   for (int k = 0; k < 4; k++)
-    put16(d + 16 + 2 * k, (uint16_t) it.level[k]);
+    plink_put16(d + 16 + 2 * k, (uint16_t) it.level[k]);
   send(K_ITEM_DEF + i, d, sizeof d);
   send_text(K_ITEM_LABEL + i, it.label);
   send_text(K_ITEM_UNIT + i, it.unit);
@@ -355,19 +313,15 @@ int sim_link_settle(void) {
   int quiet = 0;
   while (quiet < 3 && sim_cycles - start < 200000) {
     sim_link_run(1);
-    bool idle = !pbulk_esp_pending(&FL) && !link_queue()->qn && !link_bulk_state()->out_full && !pic_sending;
+    bool idle = !FL.qn && !link_queue()->qn && !link_bulk_state()->out_full && !pic_sending;
     quiet = idle ? quiet + 1 : 0;
   }
   return quiet < 3 ? -1 : (int) (sim_cycles - start);  // -1 = still talking after 200000 cycles
 }
 
 void sim_esp_init(void) {
-  memcpy(STATUS, (const uint8_t[]) {0x00, 0x10, 0x00, 0xBE, 0x00, 0x55, 0xAA}, 7);
-  for (int i = 7; i < PBUS_STATUS_LEN - 2; i++)
-    STATUS[i] = (uint8_t) i;
-  fin(STATUS, PBUS_STATUS_LEN);
-  memcpy(POLL, (const uint8_t[]) {3, 0x01, 0x00, 0x00, 0x00, 0x40}, 6);
-  fin(POLL, 8);
+  cx60_status(STATUS);
+  cx60_poll(POLL, 3);
   pbulk_esp_init(&FL, 0x2B, 3);
   link_init();
   send_number(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);
@@ -383,12 +337,12 @@ void sim_esp_fill(void) {
   static const uint8_t TYPE[] = {ITEM_SENSOR, ITEM_TOGGLE, ITEM_NUMBER}, ICON[] = {ICN_THERMO, ICN_BULB, ICN_PLUG};
   for (int i = SIM_N_ITEMS; i < N_ITEMS; i++) {
     int k = i - SIM_N_ITEMS, t = TYPE[k % 3];
-    char name[24], label[ITEM_LABEL];
+    char name[24], label[ITEM_LABEL_LEN];
     snprintf(name, sizeof name, "extra_%d", k);
     uint8_t d[ITEM_DEF_LEN] = {(uint8_t) t, ITEMF_VIEW | ITEMF_MENU, ICON[k % 3], t == ITEM_TOGGLE ? 0 : 1};
-    put16(d + 4, 5);
-    put16(d + 6, (uint16_t) sim_item_id(name));
-    put32(d + 12, t == ITEM_TOGGLE ? 1 : 1000);
+    plink_put16(d + 4, 5);
+    plink_put16(d + 6, plink_item_id(name));
+    plink_put32(d + 12, t == ITEM_TOGGLE ? 1 : 1000);
     send(K_ITEM_DEF + i, d, sizeof d);
     snprintf(label, sizeof label, "Basement sensor %2u", (unsigned) (k + 1) % 100u);  // about as long as labels get
     send_text(K_ITEM_LABEL + i, label);
@@ -407,7 +361,6 @@ void sim_esp_notify(const char *text, int icon, int level) {
 void sim_esp_set(uint16_t key, uint32_t value) { send_number(key, value); }
 
 void sim_esp_report(const char *what) {
-  printf("  %-30s %6lu cycles so far, panel sent %lu / got %lu, ESP got %lu (last key 0x%03X = %lu), pic ack %d\n",
-         what, sim_cycles, (unsigned long) link_queue()->sent, (unsigned long) link_bulk_state()->taken, got_from_panel,
-         last_key, (unsigned long) last_val, last_ack_status);
+  printf("  %-30s %6lu cycles so far, ESP sent %lu, got %lu (last key 0x%03X = %lu), pic ack %d\n", what, sim_cycles,
+         sent_to_panel, got_from_panel, last_key, (unsigned long) last_val, last_ack_status);
 }

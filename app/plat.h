@@ -5,6 +5,7 @@
 void plat_value_changed(val_t v);                 // user or ESP changed v, write it to the bus etc.
 void plat_save(bool by_user);                     // a saved value changed. by_user = from the panel's keys, save soon
 void plat_save_now(void);                         // save right away, for a value a restart mustn't lose
+bool plat_fresh(void);                            // started with no saved settings, like after a flash
 void plat_action(int a);                          // action_t
 void plat_time_set(void);                         // M.yy..M.ss were set, set our clock and the CX60's
 void plat_period_set(void);                       // M.period changed, write it to the unit

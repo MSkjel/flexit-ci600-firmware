@@ -11,9 +11,10 @@
 #define TREND_NONE INT16_MAX  // no sample yet (LVGL's LV_CHART_POINT_NONE)
 #define TREND_LEN 96          // 24 h at 15 min
 #define N_TRENDS 4            // ESP sensors the panel can keep a 24 h trend of
+#define PERIODS_PER_DAY 4     // the CX60's week program slots a day
 #define NOTE_LEN (PLINK_TEXT_MAX + 1)
 
-enum { TR_OUTDOOR, TR_SUPPLY, TR_EXTRACT, TR_ROOM, TR_N };        // temperature trend series, M.trend[]
+enum { TR_OUTDOOR, TR_SUPPLY, TR_EXTRACT, TR_ROOM, TR_COUNT };    // temperature trend series, M.trend[]
 enum { DT_INDOOR, DT_OUTDOOR, DT_SUPPLY, DT_EXTRACT, DT_COUNT };  // which temperature the dashboard shows big
 // how the clock and temperatures are drawn over a picture
 enum { SAVER_TEXT_BAND, SAVER_TEXT_SHADOW, SAVER_TEXT_PLAIN, SAVER_TEXT_SMALL, SAVER_TEXT_COUNT };
@@ -32,17 +33,16 @@ typedef struct {
 
 // One period of a day in the week program
 typedef struct {
-  uint8_t start_h, start_m, end_h, end_m, level;  // level = MODE_*
-  uint8_t idx;                                    // which of the day's four CX60 slots it uses
-  int16_t setpoint;                               // 0.1 C
+  uint16_t start, end;  // minutes after midnight
+  uint8_t level;        // MODE_*
+  uint8_t idx;          // which of the day's CX60 slots it uses
+  int16_t setpoint;     // 0.1 C
 } period_t;
 
 // The period open in Schedule > day > period, edited through V_PERIOD_*. See sched_edit()
 typedef struct {
-  uint8_t day, idx;     // day 0 = Monday, idx as in period_t
-  uint16_t start, end;  // minutes after midnight
-  uint8_t level;
-  int16_t setpoint;
+  uint8_t day;  // 0 = Monday
+  period_t p;
 } period_edit_t;
 
 // Item defined by the ESP, K_ITEM_* in proto/plink_keys.h. type 0 = unused slot
@@ -51,9 +51,13 @@ typedef struct item {
   uint16_t step, id;               // id = hash of the item's name, tiles and trends refer to it by that
   int32_t value, min, max;
   int16_t level[4];  // ITEMF_LEVELS: bad below [0], good from [1] to [2], bad above [3], fair in between
-  char label[ITEM_LABEL], unit[ITEM_UNIT];
-  char on[ITEM_STATE], off[ITEM_STATE];  // a toggle's words for on and off, "" for On and Off
-  char text[ITEM_TEXT_LEN];              // an ITEM_TEXT's value, "" for none
+  char label[ITEM_LABEL_LEN], unit[ITEM_UNIT_LEN];
+  union {  // by type
+    struct {
+      char on[ITEM_STATE_LEN], off[ITEM_STATE_LEN];  // an ITEM_TOGGLE's words for on and off, "" for On and Off
+    };
+    char text[ITEM_TEXT_LEN];  // an ITEM_TEXT's value, "" for none
+  };
 } item_t;
 
 // 24 h of one ITEMF_TREND sensor. Kept by item id so it carries on when the ESP renumbers its items.
@@ -116,7 +120,7 @@ typedef struct {
 
   // schedule
   bool week_program;
-  period_t week[7][4];  // each day's periods, sorted by start time
+  period_t week[7][PERIODS_PER_DAY];  // each day's periods, sorted by start time
   uint8_t n_periods[7];
   period_edit_t period;
 
@@ -129,7 +133,7 @@ typedef struct {
   uint8_t note_icon, note_level;  // ICN_*, NOTE_*
   bool note_new;
 
-  uint8_t trend[TR_N][TREND_LEN];  // last 24 h of the temperatures, oldest first, encoded by trend_code()
+  uint8_t trend[TR_COUNT][TREND_LEN];  // last 24 h of the temperatures, oldest first, encoded by trend_code()
 
   // system
   uint16_t cx60_version;
