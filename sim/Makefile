@@ -48,6 +48,14 @@ $(OBJ_DIR)/esp_met/%.o: $(ESP_MET)/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
+# packages/code/panel/*.cpp, built apart from main.cpp as on the ESP. Not update.cpp, it needs ESP-IDF and the ESP
+# repo's update_test.cpp runs it
+PANEL_CPP := $(filter-out %/update.cpp,$(wildcard $(ESP_CODE)/panel/*.cpp))
+PANEL_OBJ := $(patsubst $(ESP_CODE)/panel/%.cpp,$(OBJ_DIR)/esp_panel/%.o,$(PANEL_CPP))
+$(OBJ_DIR)/esp_panel/%.o: $(ESP_CODE)/panel/%.cpp $(BUILD_MK)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
+
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
 # gen.py also checks the ESP's copies of proto/ against proto.lock, and lists the headers in packages/code
@@ -58,7 +66,8 @@ $(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML
 	python3 esp_yaml/gen.py $(ESP_REPO) $@
 $(OBJ_DIR)/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
 $(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DMET_SAMPLE='"$(abspath esp_yaml/met_sample.json)"'
-$(BUILD)/esp_test: $(SIMLIB) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) $(MET_OBJ)
+$(BUILD)/esp_test: $(SIMLIB) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) $(PANEL_OBJ) \
+                   $(MET_OBJ)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 # met_render draws the ESP's weather picture from packages/code/met/met_scene.h for a set of weathers and times

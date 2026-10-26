@@ -419,7 +419,7 @@ static bool load_ppm(Image &img, const char *path) {  // P6, 8 bits
 static double ycc_dist(uint32_t a, uint32_t b) {
   double d[3] = {(double) (a >> 16) - (b >> 16), (double) (a >> 8 & 255) - (b >> 8 & 255),
                  (double) (a & 255) - (b & 255)};
-  return pic::ycc(d, d);
+  return panel::ycc(d, d);
 }
 
 // A JPEG on the panel should be about as far off the ESP's picture as the encoder reckoned
@@ -578,7 +578,7 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
       }
   uint32_t pal[16] = {};
   std::vector<uint16_t> bins;
-  int colours = pic::median_cut(hist, A.transp == 15 ? 15 : 16, pal, bins);
+  int colours = panel::median_cut(hist, A.transp == 15 ? 15 : 16, pal, bins);
   if (memcmp(pal, A.pal, sizeof pal))
     return false;
   std::vector<uint8_t> lut(4096);
@@ -1836,7 +1836,7 @@ static void anim_hello_while_made() {
   const uint8_t *at = nullptr;
   for (int k = 0; k < 1000 && !(anim::W.phase == anim::MAKE && anim::W.f == 2); k++) {
     reads = 0;
-    anim::loop();
+    anim::loop(micros() + panel::SLICE_US);
     most = std::max(most, reads);
     if (anim::W.phase == anim::MAKE) {
       moved |= at && six->data.data() != at;
@@ -1851,6 +1851,32 @@ static void anim_hello_while_made() {
   int r = run_until([&] { return six->state == anim::SENT && settled(); }, 3000);
   CHECK(r >= 0 && anim_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
         (unsigned) anim_delays("six").size());
+  anim::clear("");
+}
+
+// A long frame goes on in empty records. Past the end of the pool they must fit the records' capacity, or the
+// records move, a peak the RAM check doesn't count. The animation is refused there anyway.
+static void anim_long_frame() {
+  step("an animation's long frame past the end of the pool");
+  anim::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
+  anim::show("long");
+  anim::W.a = anim::find("long");
+  anim::start();
+  while (anim::W.phase == anim::COUNT)
+    anim::count();
+  anim::Anim &a = *anim::W.a;
+  uint32_t seed = 5;
+  for (auto &b : anim::W.frame)
+    b = (uint8_t) (lcg(seed) >> 24);  // noise, so each record is a frame's size
+  const uint8_t *at = a.data.data();
+  size_t room = a.data.capacity(), past;
+  while ((past = a.data.size()) + a.frame_bytes() <= ANIM_POOL)
+    anim::record(nullptr, anim::W.frame, 100);
+  bool ok = anim::record(&anim::W.prev, anim::W.frame, 20000);  // 8 records of 2.55 s
+  CHECK(anim::W.phase == anim::MAKE && room == anim::data_max() && ok && a.data.data() == at &&
+            a.data.capacity() == room && a.data.size() == past,
+        "a long frame past the pool: the records moved %d, %u bytes of %u", a.data.data() != at,
+        (unsigned) a.data.size(), (unsigned) a.data.capacity());
   anim::clear("");
 }
 
@@ -2561,6 +2587,93 @@ static void end_lost() {
   h = real;
 }
 
+// Refused transfers. A bad CRC goes again, a patch the panel can't take goes again as the whole picture, a JPEG or
+// an animation it can't take doesn't.
+static void refused() {
+  step("transfers the panel refuses");
+  static int turn;  // DONE acks to answer with st instead
+  static uint8_t st;
+  auto &h = panel::handlers[K_PIC_ACK];
+  auto real = h;
+  h = [real](uint32_t a) {
+    if (a >> 24 == PIC_DONE && turn > 0) {
+      turn--;
+      a = (uint32_t) st << 24 | (a & 0xFFFFFF);
+    }
+    real(a);
+  };
+  uint8_t ids = panel::transfer_ids;
+  auto went = [&ids] { return (uint8_t) (panel::transfer_ids - ids); };
+  std::string bad = std::to_string(PIC_BAD), want;
+  st = PIC_BAD_CRC;
+  turn = 1;
+  draw_photo(panel_picture_dusk, 320, 240);
+  pic::show("dusk");
+  CHECK(picture("a JPEG with a bad CRC", 8000) >= 0 && !turn && went() == 2 && pn_pic_format() == PIC_JPEG,
+        "a JPEG with a bad CRC: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
+  st = PIC_BAD;
+  turn = 1;
+  draw_photo(panel_picture_dusk, 300, 240);
+  ids = panel::transfer_ids;
+  pic::show("dusk");
+  want = "dusk: the panel didn't take it (" + bad + ")";
+  run_until([&] { return panel_picture_status.state == want; }, 8000);
+  run(50);
+  CHECK(!turn && went() == 1 && panel_picture_status.state == want && pic::S.phase == pic::IDLE,
+        "a JPEG the panel can't draw: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
+  draw_dusk(panel_picture_dusk, 200, false);
+  pic::show("dusk");
+  CHECK(picture("16 colours after a refused JPEG", 6000) >= 0, "dusk not shown");
+  turn = 1;
+  draw_dusk(panel_picture_dusk, 215, false);
+  ids = panel::transfer_ids;
+  pic::show("dusk");
+  CHECK(picture("a patch the panel can't take", 6000) >= 0 && !turn && went() == 2 && pic::S.jobs.empty(),
+        "a refused patch: %d transfers", went());
+  panel_anim_ball.turn_off();
+  run(3);
+  turn = 1;
+  ids = panel::transfer_ids;
+  panel_anim_ball.turn_on();
+  want = "ball: the panel didn't take it (" + bad + ")";
+  int r = until_anim_status(want.c_str());
+  run(50);
+  CHECK(r >= 0 && !turn && went() == 1 && anim::find("ball")->state == anim::FAILED,
+        "an animation the panel can't take: %d transfers, '%s'", went(), panel_animation_status.state.c_str());
+  st = PIC_BAD_CRC;
+  turn = 1;
+  ids = panel::transfer_ids;
+  anim::show("ball");  // tried again
+  r = until_anim_status("Shown: ball");
+  CHECK(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
+        went(), panel_animation_status.state.c_str());
+  h = real;
+}
+
+// An animation on its way while the panel is away: no DATA goes until it's back
+static void anim_while_away() {
+  step("an animation on its way while the panel is away");
+  panel_anim_ball.turn_off();
+  panel_anim_noise.turn_on();
+  int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
+  cx60_cycle();  // the panel takes what's queued, so there's room for more
+  uint32_t pos = anim::W.t.pos;
+  unsigned queued = panel::link::waiting();
+  server->updating_ = true;  // update.cpp has the bus
+  for (int k = 0; k < 20; k++)
+    panel::loop();
+  CHECK(r >= 0 && !panel::link::connected && anim::W.t.pos == pos && panel::link::waiting() == queued,
+        "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (anim::W.t.pos - pos),
+        panel::link::waiting() - queued);
+  server->updating_ = false;
+  r = until_anim_status("Shown: noise, drifting");
+  CHECK(r >= 0 && same_anim("noise", 0), "noise not shown once the panel was back: '%s'",
+        panel_animation_status.state.c_str());
+  panel_anim_noise.turn_off();
+  panel_anim_ball.turn_on();
+  until_anim_status("Shown: ball");
+}
+
 static void unknown_names() {
   step("names that aren't there, and none");
   pic::show("nope");
@@ -2721,7 +2834,7 @@ static void online_downloads() {
 
   // the same picture downloaded again: made again, nothing sent
   size_t mark = log_all.size();
-  uint8_t ids = pic::transfer_ids;
+  uint8_t ids = panel::transfer_ids;
   o.fetched = millis() - o.every;
   run(1);
   CHECK(cam_server.heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
@@ -2730,8 +2843,8 @@ static void online_downloads() {
   pic::changed("webcam");
   bool ok = shown(3000) >= 0;
   int made = times_logged("Picture webcam: 320x240 as a JPEG", mark);
-  CHECK(ok && made == 1 && pic::transfer_ids == ids, "the same JPEG: made %d times, %d transfers", made,
-        (uint8_t) (pic::transfer_ids - ids));
+  CHECK(ok && made == 1 && panel::transfer_ids == ids, "the same JPEG: made %d times, %d transfers", made,
+        (uint8_t) (panel::transfer_ids - ids));
 
   // a failed refresh: the panel keeps the picture until the next one
   o.fetched = millis() - o.every;
@@ -3011,6 +3124,19 @@ static void settings_flash() {
   run_until([] { return pn_online() && settled(); }, 300);
 }
 
+// A missing icon is warned about once, not at every hello, and its id goes anyway
+static void item_icon_typo() {
+  step("an item's icon that isn't there");
+  size_t at = log_all.size();
+  panel::Item("typo", ITEM_SENSOR).view(false).menu(false).icon("nope").add();
+  run(3);
+  restart_panel();
+  CHECK(pitem("typo").icon == ICN_CIRCLE && times_logged("No icon called 'nope'", at) == 1 &&
+            panel::icon("Fire") == ICN_FIRE,
+        "an icon called 'nope': %d on the panel, warned %d times", pitem("typo").icon,
+        times_logged("No icon called 'nope'", at));
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("usage: esp_test OUTDIR [PICTURE.ppm]\n");
@@ -3057,6 +3183,7 @@ int main(int argc, char **argv) {
   anim_repeats();
   anim_esp_restart();
   anim_hello_while_made();
+  anim_long_frame();
   anim_off_screen();
   anim_shown_again();
   anim_timing();
@@ -3079,6 +3206,8 @@ int main(int argc, char **argv) {
   weather_scene();
   picture_cleared_mid_anim();
   end_lost();
+  refused();
+  anim_while_away();
   unknown_names();
   cleared_and_shown();
   online_again();
@@ -3094,6 +3223,7 @@ int main(int argc, char **argv) {
   notes_while_away();
   bootloader_away();
   settings_flash();
+  item_icon_typo();
   printf("\n%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

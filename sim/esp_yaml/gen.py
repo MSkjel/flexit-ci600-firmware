@@ -274,7 +274,7 @@ def collect(esp):
             files = sorted(os.listdir(where)) if os.path.isdir(where) else [os.path.basename(where)]
             base = where if os.path.isdir(where) else os.path.dirname(where)
             for f in files:
-                if f == "update.h":
+                if f.startswith("update"):
                     continue  # update.yaml's panel updater, tested on its own against the bootloader
                 full = os.path.join(base, f)
                 check_include(full, f)
