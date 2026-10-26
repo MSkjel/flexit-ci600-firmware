@@ -26,14 +26,14 @@ static void live_town() {
     size_t from = log_all.size();
     met::weather.wind_from = 20;
     met::redraw();
-    CHECK(picture("A day in town, an east wind", 6000) >= 0, "the east wind's picture not shown");
+    CHECK_MSG(picture("A day in town, an east wind", 6000) >= 0, "the east wind's picture not shown");
     play(4, 1, "a_day_in_town_east");
-    CHECK(!logged("Weather animation:", from), "the east wind started the show again");
+    CHECK_MSG(!logged("Weather animation:", from), "the east wind started the show again");
     const anim::Anim *flag = anim::find("w_flag");
     Look l = flag ? look(flag->copies[0].place) : Look{};
     int pole = panel_scene().pole_x;
-    CHECK(l.shown && l.x == pole && l.flip == ANIM_FLIP_X, "the flag in an east wind: at %d, flip %d, the pole at %d",
-          l.x, l.flip, pole);
+    CHECK_MSG(l.shown && l.x == pole && l.flip == ANIM_FLIP_X,
+              "the flag in an east wind: at %d, flip %d, the pole at %d", l.x, l.flip, pole);
   }
   show({"A day in town", "partlycloudy_day", 0, 40, 30, 0, 6, 12, 0, utc(2026, 9, 20, 10), met::G_CITY, 0, 30, 1},
        "autumn");

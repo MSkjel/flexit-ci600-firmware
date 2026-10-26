@@ -14,8 +14,8 @@ static void live_land() {
     met::weather.wind_from = 20;
     live::stop();
     met::redraw();
-    CHECK(picture(want, 6000) >= 0 && !strcmp(show_on(), want), "%s with the wind the other way", want);
-    CHECK(panel_scene().at.wdir > 0, "%s: the wind from the north-east doesn't blow things to the right", want);
+    CHECK_MSG(picture(want, 6000) >= 0 && !strcmp(show_on(), want), "%s with the wind the other way", want);
+    CHECK_MSG(panel_scene().at.wdir > 0, "%s: the wind from the north-east doesn't blow things to the right", want);
   };
   // show, symbol, clouds high mid low, rain, wind, temperature, fog, UTC, ground, heater, seconds, shots
   show({"Gulls over the cabin", "clearsky_day", 0, 0, 0, 0, 7, 18, 0, utc(2026, 6, 10, 11), met::G_HILLS, 0, 30, 2});

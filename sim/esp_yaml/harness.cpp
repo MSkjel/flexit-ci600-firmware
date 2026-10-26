@@ -6,6 +6,7 @@
 #include <sstream>
 #include <tuple>
 #include "gen_panel.cpp"
+#include "check.h"
 #include "cx60.h"
 #include "met_case.h"
 #include "panel_side.h"
@@ -16,18 +17,6 @@ namespace pic = flexit::panel::picture;
 namespace anim = flexit::panel::anim;
 namespace met = flexit::panel::met;
 namespace live = flexit::panel::met::live;
-
-static int fails, checks;
-#define CHECK(cond, ...) \
-  do { \
-    checks++; \
-    if (!(cond)) { \
-      fails++; \
-      printf("  FAIL %s:%d: ", __FILE__, __LINE__); \
-      printf(__VA_ARGS__); \
-      printf("\n"); \
-    } \
-  } while (0)
 
 static void step(const char *what) { printf("%s\n", what); }
 
@@ -147,7 +136,8 @@ static void link_frame() {
   server->sent.clear();
   int n = (int) f.size();
   link_frames++;
-  CHECK(server->frame_length && server->frame_length(f.data(), f.size()) == f.size(), "the component can't size %d", n);
+  CHECK_MSG(server->frame_length && server->frame_length(f.data(), f.size()) == f.size(), "the component can't size %d",
+            n);
   now_us += 300 + (uint32_t) n * PBUS_BYTE_US;  // the ESP starting up, then its frame
   uint32_t idle = now_us + PBUS_BYTE_US;
   if (link_lost_frames > 0) {
@@ -509,7 +499,7 @@ static int picture(const char *name, int max_cycles) {
                 max_cycles);
   printf("  %s: %s after %lu cycles (%.1f s on the bus)\n", name, panel_picture_status.state.c_str(), cycles - c0,
          (cycles - c0) * 0.11);
-  CHECK(r < 0 || same_picture(), "%s: the panel draws something else than the ESP's picture", name);
+  CHECK_MSG(r < 0 || same_picture(), "%s: the panel draws something else than the ESP's picture", name);
   return r;
 }
 
@@ -667,7 +657,7 @@ static void play(int seconds, int shots, const std::string &name) {
       std::string shot;
       for (char c : name + "_" + std::to_string(n++))
         shot += isalnum((unsigned char) c) ? (char) tolower(c) : '_';
-      CHECK(taken.insert(shot).second, "live/%s.ppm taken twice", shot.c_str());
+      CHECK_MSG(taken.insert(shot).second, "live/%s.ppm taken twice", shot.c_str());
       sim_shot(live_dir.c_str(), shot.c_str());
     }
   }
@@ -677,7 +667,7 @@ static void play(int seconds, int shots, const std::string &name) {
 // Nothing a show must never log since log_all was at from
 static void live_quiet(const std::string &name, size_t from) {
   for (const char *bad : LIVE_BAD)
-    CHECK(!logged(bad, from), "%s: '%s' in the log", name.c_str(), bad);
+    CHECK_MSG(!logged(bad, from), "%s: '%s' in the log", name.c_str(), bad);
 }
 
 // The show for c's weather from its start, c.seconds of it with c.shots shots as live/WANT[_TAG]_n.ppm, and its
@@ -711,12 +701,12 @@ static void show(const Live &c, const char *tag = "", bool chances = false) {
   pic::show("weather");
   met::animate(true);
   bool drawn = picture(name.c_str(), 6000) >= 0;
-  CHECK(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
+  CHECK_MSG(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
   if (chances)
     chances_now();
   play(c.seconds, c.shots, name);
   live_quiet(name, from);
-  CHECK(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
+  CHECK_MSG(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
 }
 
 // ---------------------------------------------------------------- online pictures
@@ -755,42 +745,43 @@ static void boot() {
   panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
-  CHECK(pic::S.want == "dusk" && anim::find("ball"),
-        "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
-        anim::find("ball") != nullptr);
+  CHECK_MSG(pic::S.want == "dusk" && anim::find("ball"),
+            "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
+            anim::find("ball") != nullptr);
   pic::clear();
   panel_clear_animation.execute("");
-  CHECK(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
-        "panel settings known before the panel reported them: brightness %g, idle %g, screensaver '%s'",
-        panel_brightness.state, panel_idle_brightness.state, panel_screensaver.state.c_str());
+  CHECK_MSG(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
+            "panel settings known before the panel reported them: brightness %g, idle %g, screensaver '%s'",
+            panel_brightness.state, panel_idle_brightness.state, panel_screensaver.state.c_str());
 }
 
 static void hello() {
   step("hello, both ways");
   int c = run_until([] { return pn_online() && panel::link::connected && settled(); }, 2000);
-  CHECK(c >= 0, "no link after 2000 cycles");
+  CHECK_MSG(c >= 0, "no link after 2000 cycles");
   int hellos = times_logged("Panel says hello");  // times the ESP sent the panel its state
-  CHECK(hellos == 1, "the ESP sent its state %d times", hellos);
-  CHECK(!link_early, "%d frames sent sooner than %d us after the status", link_early, PBUS_START_MIN_US);
-  CHECK(!link_late, "%d answers ended later than %u us after the status", link_late, (unsigned) link_end());
-  CHECK(gap_frames > 0, "nothing sent in the gaps after polls");
-  CHECK(pn_get(K_SETPOINT) == 200 && pn_reg(0x004) != 20,
-        "the ESP sent unit settings it doesn't have: setpoint %d, max supply %d", pn_get(K_SETPOINT), pn_reg(0x004));
+  CHECK_MSG(hellos == 1, "the ESP sent its state %d times", hellos);
+  CHECK_MSG(!link_early, "%d frames sent sooner than %d us after the status", link_early, PBUS_START_MIN_US);
+  CHECK_MSG(!link_late, "%d answers ended later than %u us after the status", link_late, (unsigned) link_end());
+  CHECK_MSG(gap_frames > 0, "nothing sent in the gaps after polls");
+  CHECK_MSG(pn_get(K_SETPOINT) == 200 && pn_reg(0x004) != 20,
+            "the ESP sent unit settings it doesn't have: setpoint %d, max supply %d", pn_get(K_SETPOINT),
+            pn_reg(0x004));
   printf("  linked and settled after %d cycles\n", c);
-  CHECK(panel_screensaver.state == panel_screensaver.options[pn_get(K_SCREENSAVER)], "screensaver %s vs panel %d",
-        panel_screensaver.state.c_str(), pn_get(K_SCREENSAVER));
-  CHECK(panel_brightness.state == pn_get(K_BRIGHTNESS), "brightness %g vs %d", panel_brightness.state,
-        pn_get(K_BRIGHTNESS));
-  CHECK(panel_idle_brightness.state == pn_get(K_IDLE_BRIGHTNESS), "idle brightness %g vs %d",
-        panel_idle_brightness.state, pn_get(K_IDLE_BRIGHTNESS));
-  CHECK(fabsf(panel_temperature.state * 10 - pn_get(K_ROOM_TEMP)) < 0.5f, "temperature %g vs %d",
-        panel_temperature.state, pn_get(K_ROOM_TEMP));
-  CHECK(panel_firmware.state == "0.1.0", "firmware version '%s'", panel_firmware.state.c_str());
+  CHECK_MSG(panel_screensaver.state == panel_screensaver.options[pn_get(K_SCREENSAVER)], "screensaver %s vs panel %d",
+            panel_screensaver.state.c_str(), pn_get(K_SCREENSAVER));
+  CHECK_MSG(panel_brightness.state == pn_get(K_BRIGHTNESS), "brightness %g vs %d", panel_brightness.state,
+            pn_get(K_BRIGHTNESS));
+  CHECK_MSG(panel_idle_brightness.state == pn_get(K_IDLE_BRIGHTNESS), "idle brightness %g vs %d",
+            panel_idle_brightness.state, pn_get(K_IDLE_BRIGHTNESS));
+  CHECK_MSG(fabsf(panel_temperature.state * 10 - pn_get(K_ROOM_TEMP)) < 0.5f, "temperature %g vs %d",
+            panel_temperature.state, pn_get(K_ROOM_TEMP));
+  CHECK_MSG(panel_firmware.state == "0.1.0", "firmware version '%s'", panel_firmware.state.c_str());
   printf("  panel firmware %s, temperature %.1f C, screensaver %s, brightness %.0f %%\n", panel_firmware.state.c_str(),
          panel_temperature.state, panel_screensaver.state.c_str(), panel_brightness.state);
   int y, mo, d, h, mi;
   pn_clock(&y, &mo, &d, &h, &mi);
-  CHECK(y == 2026 && mo == 10 && d == 18 && h == 21 && mi == 30, "clock %d-%d-%d %d:%d", y, mo, d, h, mi);
+  CHECK_MSG(y == 2026 && mo == 10 && d == 18 && h == 21 && mi == 30, "clock %d-%d-%d %d:%d", y, mo, d, h, mi);
   // the local hour changes, say summer time starts. The panel must follow within a few cycles
   flexit_panel_time.t.hour = 22;
   tz_offset_s = 3600;
@@ -800,7 +791,7 @@ static void hello() {
         return h == 22;
       },
       20);
-  CHECK(cycles_to_clock >= 0, "the panel's clock didn't follow the hour: %d:%d", h, mi);
+  CHECK_MSG(cycles_to_clock >= 0, "the panel's clock didn't follow the hour: %d:%d", h, mi);
   flexit_panel_time.t.hour = 21;
   tz_offset_s = 0;
   run_until(
@@ -811,12 +802,12 @@ static void hello() {
       20);
   for (const char *n : {"fireplace", "fireplace_minutes", "humidity", "humidity_boost", "humidity_trigger", "co2",
                         "co2_control", "co2_target", "summer_cooling"}) {
-    CHECK(pitem(n).type && (pitem(n).flags & ITEMF_COMFORT), "the panel doesn't have comfort item %s", n);
-    CHECK(pitem(n).id == plink_item_id(n), "%s: id %d on the panel, its hash %d", n, pitem(n).id, plink_item_id(n));
+    CHECK_MSG(pitem(n).type && (pitem(n).flags & ITEMF_COMFORT), "the panel doesn't have comfort item %s", n);
+    CHECK_MSG(pitem(n).id == plink_item_id(n), "%s: id %d on the panel, its hash %d", n, pitem(n).id, plink_item_id(n));
   }
-  CHECK(!pitem(N_ITEMS - 1).type, "item %d, which nothing sent, has type %d", N_ITEMS - 1, pitem(N_ITEMS - 1).type);
-  CHECK(pitem("humidity").value == 55 && pitem("co2").value == 912, "humidity %d, co2 %d", pitem("humidity").value,
-        pitem("co2").value);
+  CHECK_MSG(!pitem(N_ITEMS - 1).type, "item %d, which nothing sent, has type %d", N_ITEMS - 1, pitem(N_ITEMS - 1).type);
+  CHECK_MSG(pitem("humidity").value == 55 && pitem("co2").value == 912, "humidity %d, co2 %d", pitem("humidity").value,
+            pitem("co2").value);
 }
 
 // esp_test OUTDIR PICTURE.ppm: only how the panel draws that picture
@@ -826,10 +817,10 @@ static int custom_picture(const char *path) {
     return 1;
   }
   pic::show("dusk");
-  CHECK(picture(path, 6000) >= 0, "picture not shown");
+  CHECK_MSG(picture(path, 6000) >= 0, "picture not shown");
   pn_shot(outdir, "esp_custom");
   printf("  %s/esp_custom.ppm\n", outdir);
-  return fails ? 1 : 0;
+  return check_fails ? 1 : 0;
 }
 
 static void items() {
@@ -840,23 +831,24 @@ static void items() {
   static const int TYPE[] = {ITEM_SENSOR, ITEM_TOGGLE, ITEM_TOGGLE, ITEM_NUMBER, ITEM_BUTTON, ITEM_TEXT};
   for (int i = 0; i < 6; i++) {
     PanelItem p = pitem(NAME[i]);
-    CHECK(p.type == TYPE[i] && !strcmp(p.label, LABEL[i]), "%s: type %d label '%s'", NAME[i], p.type, p.label);
+    CHECK_MSG(p.type == TYPE[i] && !strcmp(p.label, LABEL[i]), "%s: type %d label '%s'", NAME[i], p.type, p.label);
     printf("  %s: type %d flags 0x%02X icon %d '%s' %d%s (%d..%d step %d, %d decimals)\n", NAME[i], p.type, p.flags,
            p.icon, p.label, p.value, p.unit, p.min, p.max, p.step, p.dec);
   }
   PanelItem p = pitem("temperature");
-  CHECK(p.dec == 1 && p.step == 5 && p.min == 100 && p.max == 300 && p.value == 200 && (p.flags & ITEMF_COMFORT),
-        "temperature: %d decimals, step %d, %d..%d, value %d, flags 0x%02X", p.dec, p.step, p.min, p.max, p.value,
-        p.flags);
+  CHECK_MSG(p.dec == 1 && p.step == 5 && p.min == 100 && p.max == 300 && p.value == 200 && (p.flags & ITEMF_COMFORT),
+            "temperature: %d decimals, step %d, %d..%d, value %d, flags 0x%02X", p.dec, p.step, p.min, p.max, p.value,
+            p.flags);
   p = pitem("inside_humidity");
-  CHECK(p.value == 55 && (p.flags & (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS)) == (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS),
-        "sensor value %d flags 0x%02X", p.value, p.flags);
-  CHECK(pitem("heater_enabled").flags & ITEMF_RO, "a binary sensor the panel may change");
-  CHECK(!(pitem("heater").flags & ITEMF_RO), "a switch the panel can't change");
-  CHECK((pitem("washer").flags & ITEMF_RO) && !strcmp(pn_item_text(item("washer")), "Washing"),
-        "text item: flags 0x%02X, shows '%s'", pitem("washer").flags, pn_item_text(item("washer")));
-  CHECK(!(pitem("clear_alarms").flags & ITEMF_VIEW) && (pitem("clear_alarms").flags & ITEMF_MENU),
-        "button flags 0x%02X", pitem("clear_alarms").flags);
+  CHECK_MSG(
+      p.value == 55 && (p.flags & (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS)) == (ITEMF_RO | ITEMF_TREND | ITEMF_LEVELS),
+      "sensor value %d flags 0x%02X", p.value, p.flags);
+  CHECK_MSG(pitem("heater_enabled").flags & ITEMF_RO, "a binary sensor the panel may change");
+  CHECK_MSG(!(pitem("heater").flags & ITEMF_RO), "a switch the panel can't change");
+  CHECK_MSG((pitem("washer").flags & ITEMF_RO) && !strcmp(pn_item_text(item("washer")), "Washing"),
+            "text item: flags 0x%02X, shows '%s'", pitem("washer").flags, pn_item_text(item("washer")));
+  CHECK_MSG(!(pitem("clear_alarms").flags & ITEMF_VIEW) && (pitem("clear_alarms").flags & ITEMF_MENU),
+            "button flags 0x%02X", pitem("clear_alarms").flags);
 }
 
 static void item_decimals() {
@@ -869,61 +861,61 @@ static void item_decimals() {
   run_until(settled, 200);
   run(3);
   PanelItem m = pitem("many_decimals"), q = pitem("ppm");
-  CHECK(m.dec == 3 && m.value == 1500, "5 decimals asked for: %d on the panel, value %d", m.dec, m.value);
+  CHECK_MSG(m.dec == 3 && m.value == 1500, "5 decimals asked for: %d on the panel, value %d", m.dec, m.value);
   // 900 ppm is between good and bad, so its levels have to fit the panel's 16 bits
-  CHECK(q.dec == 1 && q.value == 9120 && pn_item_level(item("ppm"), 2) == 8000 &&
-            pn_item_level(item("ppm"), 3) == 12000 && (q.flags & ITEMF_LEVELS),
-        "ppm with 2 decimals: %d decimals, value %d, levels %d %d", q.dec, q.value, pn_item_level(item("ppm"), 2),
-        pn_item_level(item("ppm"), 3));
+  CHECK_MSG(q.dec == 1 && q.value == 9120 && pn_item_level(item("ppm"), 2) == 8000 &&
+                pn_item_level(item("ppm"), 3) == 12000 && (q.flags & ITEMF_LEVELS),
+            "ppm with 2 decimals: %d decimals, value %d, levels %d %d", q.dec, q.value, pn_item_level(item("ppm"), 2),
+            pn_item_level(item("ppm"), 3));
   // the step goes as 16 bits, the value as 32
   int big = Item("big", ITEM_NUMBER).view(false).menu(false).decimals(2).range(0, 1e8f, 1000).add();
   panel::item_value(big, 3e8f);
   run_until(settled, 200);
   run(3);
   PanelItem b = pitem("big");
-  CHECK(b.dec == 1 && b.step == 10000 && b.value == INT32_MAX,
-        "step 1000 with 2 decimals: %d decimals, step %d, 3e8 is %d", b.dec, b.step, b.value);
+  CHECK_MSG(b.dec == 1 && b.step == 10000 && b.value == INT32_MAX,
+            "step 1000 with 2 decimals: %d decimals, step %d, 3e8 is %d", b.dec, b.step, b.value);
   panel::item_value(big, -3e8f);
   run(5);
-  CHECK(pitem("big").value == -INT32_MAX, "-3e8 is %d", pitem("big").value);
+  CHECK_MSG(pitem("big").value == -INT32_MAX, "-3e8 is %d", pitem("big").value);
   size_t at = log_all.size();
   Item("long_label", ITEM_SENSOR).view(false).menu(false).label("Living room temperature|Stue").add();
   run_until(settled, 200);
   run(3);
-  CHECK(!strcmp(pitem("long_label").label, "Living room tempera") &&
-            logged("'long_label': the panel shows 19 bytes of its label, 'Living room temperature'", at) &&
-            !logged("'Stue'", at),
-        "a 23 byte label: '%s' on the panel", pitem("long_label").label);
+  CHECK_MSG(!strcmp(pitem("long_label").label, "Living room tempera") &&
+                logged("'long_label': the panel shows 19 bytes of its label, 'Living room temperature'", at) &&
+                !logged("'Stue'", at),
+            "a 23 byte label: '%s' on the panel", pitem("long_label").label);
 }
 
 static void item_language() {
   step("their texts in the panel's language");
   int fp = item("fireplace");
-  CHECK(!pn_item_help(fp), "help before the ESP sent it");
+  CHECK_MSG(!pn_item_help(fp), "help before the ESP sent it");
   run(10);
   const char *help = pn_item_help(fp);
-  CHECK(help && strstr(help, "fireplace draws"), "fireplace help: %s", help ? help : "(none)");
+  CHECK_MSG(help && strstr(help, "fireplace draws"), "fireplace help: %s", help ? help : "(none)");
   pn_set(K_LANGUAGE, 1);
   run(20);
-  CHECK(panel_language == 1, "the panel's language not kept for a restart: %d", panel_language);
-  CHECK(!strcmp(pitem("inside_humidity").label, "Bad") && !strcmp(pitem("fireplace").label, "Peis") &&
-            !strcmp(pitem("temperature").label, "Setpoint"),
-        "in Norwegian: '%s', '%s', '%s'", pitem("inside_humidity").label, pitem("fireplace").label,
-        pitem("temperature").label);
-  CHECK(!strcmp(pn_item_text(item("washer")), "Vasker"), "the text item in Norwegian: '%s'",
-        pn_item_text(item("washer")));
-  CHECK(!pn_item_help(fp), "the English help kept");
+  CHECK_MSG(panel_language == 1, "the panel's language not kept for a restart: %d", panel_language);
+  CHECK_MSG(!strcmp(pitem("inside_humidity").label, "Bad") && !strcmp(pitem("fireplace").label, "Peis") &&
+                !strcmp(pitem("temperature").label, "Setpoint"),
+            "in Norwegian: '%s', '%s', '%s'", pitem("inside_humidity").label, pitem("fireplace").label,
+            pitem("temperature").label);
+  CHECK_MSG(!strcmp(pn_item_text(item("washer")), "Vasker"), "the text item in Norwegian: '%s'",
+            pn_item_text(item("washer")));
+  CHECK_MSG(!pn_item_help(fp), "the English help kept");
   run(10);
   help = pn_item_help(fp);
-  CHECK(help && strstr(help, "peisen trekker"), "fireplace help in Norwegian: %s", help ? help : "(none)");
+  CHECK_MSG(help && strstr(help, "peisen trekker"), "fireplace help in Norwegian: %s", help ? help : "(none)");
   int hb = item("humidity_boost");
   pn_item_help(hb);  // another item's help doesn't push the fireplace's out
   run(10);
-  CHECK(pn_item_help(hb) && pn_item_help(fp), "the fireplace help wasn't kept after another item's");
+  CHECK_MSG(pn_item_help(hb) && pn_item_help(fp), "the fireplace help wasn't kept after another item's");
   pn_set(K_LANGUAGE, 0);
   run(20);
-  CHECK(!strcmp(pitem("fireplace").label, "Fireplace") && panel_language == 0, "back in English: '%s', kept %d",
-        pitem("fireplace").label, panel_language);
+  CHECK_MSG(!strcmp(pitem("fireplace").label, "Fireplace") && panel_language == 0, "back in English: '%s', kept %d",
+            pitem("fireplace").label, panel_language);
 }
 
 static void ha_sets_settings() {
@@ -934,14 +926,14 @@ static void ha_sets_settings() {
   panel::set("theme", 2);  // the panel_set action
   run_until(settled, 200);
   run(3);
-  CHECK(pn_get(K_SCREENSAVER) == 1, "screensaver %d", pn_get(K_SCREENSAVER));
-  CHECK(pn_get(K_BRIGHTNESS) == 60, "brightness %d", pn_get(K_BRIGHTNESS));
-  CHECK(pn_get(K_LEDS) == (3 << 2), "leds %d", pn_get(K_LEDS));
-  CHECK(pn_get(K_THEME) == 2, "theme %d", pn_get(K_THEME));
+  CHECK_MSG(pn_get(K_SCREENSAVER) == 1, "screensaver %d", pn_get(K_SCREENSAVER));
+  CHECK_MSG(pn_get(K_BRIGHTNESS) == 60, "brightness %d", pn_get(K_BRIGHTNESS));
+  CHECK_MSG(pn_get(K_LEDS) == (3 << 2), "leds %d", pn_get(K_LEDS));
+  CHECK_MSG(pn_get(K_THEME) == 2, "theme %d", pn_get(K_THEME));
   // the panel doesn't echo what the ESP sets, so the ESP shows it itself
-  CHECK(panel_screensaver.state == panel_screensaver.options[1] && panel_brightness.state == 60,
-        "Home Assistant shows screensaver '%s', brightness %g", panel_screensaver.state.c_str(),
-        panel_brightness.state);
+  CHECK_MSG(panel_screensaver.state == panel_screensaver.options[1] && panel_brightness.state == 60,
+            "Home Assistant shows screensaver '%s', brightness %g", panel_screensaver.state.c_str(),
+            panel_brightness.state);
   panel::set("theme", 0);
   panel::set("screensaver", 3);  // the panel_set action
   panel::set("idle_brightness", 25);
@@ -952,15 +944,16 @@ static void ha_sets_settings() {
   panel::set("leds", 5);  // the LED selects do those
   run_until(settled, 200);
   run(20);
-  CHECK(pn_get(K_SCREENSAVER) == 3 && pn_get(K_IDLE_BRIGHTNESS) == 25 && pn_get(K_NIGHT) == 1 &&
-            pn_get(K_KEY_LOCK) == 1 && pn_get(K_LEDS) == (3 << 2),
-        "panel_set: screensaver %d, idle brightness %d, night %d, key lock %d, leds %d", pn_get(K_SCREENSAVER),
-        pn_get(K_IDLE_BRIGHTNESS), pn_get(K_NIGHT), pn_get(K_KEY_LOCK), pn_get(K_LEDS));
-  CHECK(panel_screensaver.idx == 3 && panel_idle_brightness.state == 25 && panel_night.state && panel_key_lock.state,
-        "panel_set not in Home Assistant: screensaver '%s', idle brightness %g, night %d, key lock %d",
-        panel_screensaver.state.c_str(), panel_idle_brightness.state, panel_night.state, panel_key_lock.state);
-  CHECK(!strcmp(pitem("fireplace").label, "Peis"), "panel_set language: '%s'", pitem("fireplace").label);
-  CHECK(logged("No panel setting called 'leds'", leds_at), "panel_set took leds");
+  CHECK_MSG(pn_get(K_SCREENSAVER) == 3 && pn_get(K_IDLE_BRIGHTNESS) == 25 && pn_get(K_NIGHT) == 1 &&
+                pn_get(K_KEY_LOCK) == 1 && pn_get(K_LEDS) == (3 << 2),
+            "panel_set: screensaver %d, idle brightness %d, night %d, key lock %d, leds %d", pn_get(K_SCREENSAVER),
+            pn_get(K_IDLE_BRIGHTNESS), pn_get(K_NIGHT), pn_get(K_KEY_LOCK), pn_get(K_LEDS));
+  CHECK_MSG(
+      panel_screensaver.idx == 3 && panel_idle_brightness.state == 25 && panel_night.state && panel_key_lock.state,
+      "panel_set not in Home Assistant: screensaver '%s', idle brightness %g, night %d, key lock %d",
+      panel_screensaver.state.c_str(), panel_idle_brightness.state, panel_night.state, panel_key_lock.state);
+  CHECK_MSG(!strcmp(pitem("fireplace").label, "Peis"), "panel_set language: '%s'", pitem("fireplace").label);
+  CHECK_MSG(logged("No panel setting called 'leds'", leds_at), "panel_set took leds");
   panel::set("night", 0);
   panel::set("key_lock", 0);
   panel::set("language", 0);
@@ -974,8 +967,8 @@ static void menu_sets_settings() {
   pn_set(K_SCREENSAVER, 4);
   run_until(settled, 200);
   run(3);
-  CHECK(panel_key_lock.state, "key lock not on in Home Assistant");
-  CHECK(panel_screensaver.state == "Picture and clock", "screensaver %s", panel_screensaver.state.c_str());
+  CHECK_MSG(panel_key_lock.state, "key lock not on in Home Assistant");
+  CHECK_MSG(panel_screensaver.state == "Picture and clock", "screensaver %s", panel_screensaver.state.c_str());
 }
 
 static void items_from_panel() {
@@ -984,47 +977,47 @@ static void items_from_panel() {
   pn_set(value_key("temperature"), 225);
   pn_set(value_key("clear_alarms"), 1);
   run(30);
-  CHECK(heater.state, "heater not on");
-  CHECK(!strcmp(pn_item_text(item("heater")), "Heating"), "a switch with words shows '%s'",
-        pn_item_text(item("heater")));
-  CHECK(fabsf(temperature.state - 22.5f) < 0.01f, "temperature %g", temperature.state);
-  CHECK(clear_alarms.presses == 1, "button pressed %d times", clear_alarms.presses);
+  CHECK_MSG(heater.state, "heater not on");
+  CHECK_MSG(!strcmp(pn_item_text(item("heater")), "Heating"), "a switch with words shows '%s'",
+            pn_item_text(item("heater")));
+  CHECK_MSG(fabsf(temperature.state - 22.5f) < 0.01f, "temperature %g", temperature.state);
+  CHECK_MSG(clear_alarms.presses == 1, "button pressed %d times", clear_alarms.presses);
   inside_humidity.publish_state(61.4f);
   heater_enabled.publish_state(false);
   run(10);
-  CHECK(pitem("inside_humidity").value == 61, "sensor %d", pitem("inside_humidity").value);
-  CHECK(pitem("heater_enabled").value == 0, "binary sensor %d", pitem("heater_enabled").value);
-  CHECK(!strcmp(pn_item_text(item("heater_enabled")), "Blocked"), "binary sensor shown as '%s', not its off_text",
-        pn_item_text(item("heater_enabled")));
+  CHECK_MSG(pitem("inside_humidity").value == 61, "sensor %d", pitem("inside_humidity").value);
+  CHECK_MSG(pitem("heater_enabled").value == 0, "binary sensor %d", pitem("heater_enabled").value);
+  CHECK_MSG(!strcmp(pn_item_text(item("heater_enabled")), "Blocked"), "binary sensor shown as '%s', not its off_text",
+            pn_item_text(item("heater_enabled")));
   pn_set(value_key("heater_enabled"), 1);  // read only: nothing happens
   run(10);
-  CHECK(!heater_enabled.state, "binary sensor changed from the panel");
+  CHECK_MSG(!heater_enabled.state, "binary sensor changed from the panel");
 }
 
 static void ha_switch() {
   step("a Home Assistant switch");
   int dl = item("door_lock");
-  CHECK(pitem(dl).value == ITEM_UNKNOWN, "a lock Home Assistant hasn't told us about shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == ITEM_UNKNOWN, "a lock Home Assistant hasn't told us about shows '%s'", pn_item_text(dl));
   pn_set(value_key("door_lock"), 1);  // HA isn't there yet
   run(150);
-  CHECK(pitem(dl).value == ITEM_UNKNOWN, "locked before Home Assistant had a state shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == ITEM_UNKNOWN, "locked before Home Assistant had a state shows '%s'", pn_item_text(dl));
   ha_door_lock_state.publish_state("unlocked");
   run(10);
-  CHECK(pitem(dl).value == 0 && !strcmp(pn_item_text(dl), "Unlocked"), "unlocked shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == 0 && !strcmp(pn_item_text(dl), "Unlocked"), "unlocked shows '%s'", pn_item_text(dl));
   pn_set(value_key("door_lock"), 1);  // locked on the panel, the lock takes its time
   run(5);
   ha_door_lock_state.publish_state("locking");
   run(60);
-  CHECK(pitem(dl).value == 1, "the panel went back to '%s' while the lock was locking", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == 1, "the panel went back to '%s' while the lock was locking", pn_item_text(dl));
   ha_door_lock_state.publish_state("locked");
   run(10);
-  CHECK(pitem(dl).value == 1 && !strcmp(pn_item_text(dl), "Locked"), "locked shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == 1 && !strcmp(pn_item_text(dl), "Locked"), "locked shows '%s'", pn_item_text(dl));
   pn_set(value_key("door_lock"), 0);  // the lock never follows
   run(150);
-  CHECK(pitem(dl).value == 1, "an unlock the lock never did shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == 1, "an unlock the lock never did shows '%s'", pn_item_text(dl));
   ha_door_lock_state.publish_state("unavailable");
   run(10);
-  CHECK(pitem(dl).value == ITEM_UNKNOWN, "an unavailable lock shows '%s'", pn_item_text(dl));
+  CHECK_MSG(pitem(dl).value == ITEM_UNKNOWN, "an unavailable lock shows '%s'", pn_item_text(dl));
 }
 
 static void text_item() {
@@ -1032,22 +1025,22 @@ static void text_item() {
   int wi = item("washer");
   ha_washer.publish_state("Vasker ferdig!\xC3\xA5");  // 16 bytes, the 15th byte is half a character
   run(10);
-  CHECK(!strcmp(pn_item_text(wi), "Vasker ferdig!"), "a long text shows as '%s'", pn_item_text(wi));
+  CHECK_MSG(!strcmp(pn_item_text(wi), "Vasker ferdig!"), "a long text shows as '%s'", pn_item_text(wi));
   ha_washer.publish_state("Dishwasher done");  // 15 bytes fit
   run(10);
-  CHECK(!strcmp(pn_item_text(wi), "Dishwasher done"), "a 15 byte text shows as '%s'", pn_item_text(wi));
+  CHECK_MSG(!strcmp(pn_item_text(wi), "Dishwasher done"), "a 15 byte text shows as '%s'", pn_item_text(wi));
   ha_washer.publish_state("");
   run(10);
-  CHECK(!strcmp(pn_item_text(wi), "\xE2\x80\x93"), "an empty text shows as '%s'", pn_item_text(wi));
+  CHECK_MSG(!strcmp(pn_item_text(wi), "\xE2\x80\x93"), "an empty text shows as '%s'", pn_item_text(wi));
   ha_washer.publish_state("Washing");
   run(10);
   pn_set(value_key("washer"), 1);  // read only: the panel keeps the text and the ESP hears nothing
   run(10);
-  CHECK(!strcmp(pn_item_text(wi), "Washing") && pn_get(value_key("washer")) == ITEM_UNKNOWN,
-        "a text item set from the panel: '%s', value %d", pn_item_text(wi), pn_get(value_key("washer")));
+  CHECK_MSG(!strcmp(pn_item_text(wi), "Washing") && pn_get(value_key("washer")) == ITEM_UNKNOWN,
+            "a text item set from the panel: '%s', value %d", pn_item_text(wi), pn_get(value_key("washer")));
   pn_restart();  // without restart_panel()'s 5 cycles more, which would move the frames of the animation shots
   run_until([] { return pn_online() && settled(); }, 2000);
-  CHECK(!strcmp(pn_item_text(wi), "Washing"), "the text after a panel restart: '%s'", pn_item_text(wi));
+  CHECK_MSG(!strcmp(pn_item_text(wi), "Washing"), "the text after a panel restart: '%s'", pn_item_text(wi));
 }
 
 static void ha_entities() {
@@ -1056,60 +1049,60 @@ static void ha_entities() {
   ha_front_door.publish_state(true);
   ha_door_lock_state.publish_state("locked");
   run(20);
-  CHECK(pitem("hot_water").value == 61 && pitem("front_door").value == 1 && pitem("door_lock").value == 1,
-        "hot water %d, front door %d, door lock %d", pitem("hot_water").value, pitem("front_door").value,
-        pitem("door_lock").value);
+  CHECK_MSG(pitem("hot_water").value == 61 && pitem("front_door").value == 1 && pitem("door_lock").value == 1,
+            "hot water %d, front door %d, door lock %d", pitem("hot_water").value, pitem("front_door").value,
+            pitem("door_lock").value);
   ha_actions.clear();
   pn_set(value_key("door_lock"), 0);
   run(20);
-  CHECK(ha_actions.size() == 1 && ha_actions[0].action == "lock.unlock" &&
-            ha_actions[0].data["entity_id"] == "lock.front_door",
-        "unlocking from the panel asked Home Assistant for %s",
-        ha_actions.empty() ? "nothing" : ha_actions[0].action.c_str());
+  CHECK_MSG(ha_actions.size() == 1 && ha_actions[0].action == "lock.unlock" &&
+                ha_actions[0].data["entity_id"] == "lock.front_door",
+            "unlocking from the panel asked Home Assistant for %s",
+            ha_actions.empty() ? "nothing" : ha_actions[0].action.c_str());
   ha_door_lock_state.publish_state("unlocked");
   run(10);
-  CHECK(pitem("door_lock").value == 0, "the lock shows %d once it's unlocked", pitem("door_lock").value);
+  CHECK_MSG(pitem("door_lock").value == 0, "the lock shows %d once it's unlocked", pitem("door_lock").value);
 }
 
 static void comfort() {
   step("comfort");
   pn_set(value_key("fireplace"), 1);
   run(30);
-  CHECK(fireplace_mode_switch.state, "fireplace not on");
+  CHECK_MSG(fireplace_mode_switch.state, "fireplace not on");
   pn_set(value_key("fireplace_minutes"), 45);
   run(10);
-  CHECK(fireplace_duration.state == 45, "fireplace minutes %g", fireplace_duration.state);
+  CHECK_MSG(fireplace_duration.state == 45, "fireplace minutes %g", fireplace_duration.state);
   fireplace_mode_switch.publish_state(false);
   fireplace_mode_switch.refuse = true;  // like when the unit is stopped
   run(10);
   pn_set(value_key("fireplace"), 1);
   run(5);
-  CHECK(pn_get(value_key("fireplace")) == 1, "the panel should show its request at first");
+  CHECK_MSG(pn_get(value_key("fireplace")) == 1, "the panel should show its request at first");
   run(30);
-  CHECK(pn_get(value_key("fireplace")) == 0, "the panel still shows fireplace on after the ESP refused");
+  CHECK_MSG(pn_get(value_key("fireplace")) == 0, "the panel still shows fireplace on after the ESP refused");
   pn_set(value_key("humidity_trigger"), 120);
   run(10);
-  CHECK(fabsf(humidity_trigger_delta.state - 12.0f) < 0.01f, "humidity trigger %g", humidity_trigger_delta.state);
+  CHECK_MSG(fabsf(humidity_trigger_delta.state - 12.0f) < 0.01f, "humidity trigger %g", humidity_trigger_delta.state);
   pn_set(value_key("co2_control"), 1);
   run(10);
-  CHECK(co2_control.state == "Stepped", "co2 control %s", co2_control.state.c_str());
+  CHECK_MSG(co2_control.state == "Stepped", "co2 control %s", co2_control.state.c_str());
   co2_control.control(3);
   run(10);
   pn_set(value_key("co2_control"), 0);
   run(10);
-  CHECK(co2_control.state == "Off", "co2 control %s", co2_control.state.c_str());
+  CHECK_MSG(co2_control.state == "Off", "co2 control %s", co2_control.state.c_str());
   pn_set(value_key("co2_control"), 1);
   run(10);
-  CHECK(co2_control.state == "PI", "co2 control %s, should be back to PI", co2_control.state.c_str());
+  CHECK_MSG(co2_control.state == "PI", "co2 control %s, should be back to PI", co2_control.state.c_str());
   co2.publish_state(1250);
   run(10);
-  CHECK(pitem("co2").value == 1250, "co2 %d", pitem("co2").value);
+  CHECK_MSG(pitem("co2").value == 1250, "co2 %d", pitem("co2").value);
   co2.publish_state(NAN);  // unavailable
   run(10);
-  CHECK(pitem("co2").value == ITEM_UNKNOWN, "co2 %d when unavailable", pitem("co2").value);
+  CHECK_MSG(pitem("co2").value == ITEM_UNKNOWN, "co2 %d when unavailable", pitem("co2").value);
   co2.publish_state(1250);
   run(10);
-  CHECK(pitem("co2").value == 1250, "co2 %d once it's back", pitem("co2").value);
+  CHECK_MSG(pitem("co2").value == 1250, "co2 %d once it's back", pitem("co2").value);
 }
 
 static void master_only() {
@@ -1119,7 +1112,7 @@ static void master_only() {
   bool sent = false;
   for (auto &m : server->cmds)
     sent |= m.first == 0x00C && m.second == 215;
-  CHECK(sent, "setpoint not written to 0x00C");
+  CHECK_MSG(sent, "setpoint not written to 0x00C");
 }
 
 static void actions_and_notes() {
@@ -1130,14 +1123,14 @@ static void actions_and_notes() {
   run(3);
   int icon, level, fresh;
   const char *note = pn_note(&icon, &level, &fresh);
-  CHECK(!strcmp(note, "Filter change due in a week") && icon == ICN_FILTER && level == NOTE_WARNING && fresh,
-        "note '%s' icon %d level %d", note, icon, level);
+  CHECK_MSG(!strcmp(note, "Filter change due in a week") && icon == ICN_FILTER && level == NOTE_WARNING && fresh,
+            "note '%s' icon %d level %d", note, icon, level);
   printf("  note: '%s' icon %d level %d\n", note, icon, level);
   pn_action(A_RESET_FILTER);  // Filter > Reset on the panel
   run_until(settled, 100);
   run(5);
-  CHECK(panel_action.last == "reset_filter", "Filter > Reset on the panel is event '%s' in Home Assistant",
-        panel_action.last.c_str());
+  CHECK_MSG(panel_action.last == "reset_filter", "Filter > Reset on the panel is event '%s' in Home Assistant",
+            panel_action.last.c_str());
 }
 
 static void cx60_restarts() {
@@ -1146,12 +1139,12 @@ static void cx60_restarts() {
   panel_brightness.control(40);  // ESP -> panel
   pn_set(K_NIGHT, 1);            // panel -> ESP
   run(60);
-  CHECK(pn_get(K_BRIGHTNESS) != 40 && !panel_night.state, "something got through without a status broadcast");
+  CHECK_MSG(pn_get(K_BRIGHTNESS) != 40 && !panel_night.state, "something got through without a status broadcast");
   link_windows = true;
   run(20);
-  CHECK(pn_get(K_BRIGHTNESS) == 40, "brightness %d after the CX60 came back", pn_get(K_BRIGHTNESS));
-  CHECK(panel_night.state, "night mode not on after the CX60 came back");
-  CHECK(settled(), "something still waiting after the CX60 came back");
+  CHECK_MSG(pn_get(K_BRIGHTNESS) == 40, "brightness %d after the CX60 came back", pn_get(K_BRIGHTNESS));
+  CHECK_MSG(panel_night.state, "night mode not on after the CX60 came back");
+  CHECK_MSG(settled(), "something still waiting after the CX60 came back");
 }
 
 static void frames_lost() {
@@ -1161,56 +1154,57 @@ static void frames_lost() {
   pn_set(K_NIGHT, 0);
   panel_brightness.control(60);
   run(30);
-  CHECK(pn_get(K_BRIGHTNESS) == 60, "brightness %d after lost frames", pn_get(K_BRIGHTNESS));
-  CHECK(!panel_night.state, "night mode still on after lost answers");
-  CHECK(settled(), "something still waiting after lost frames");
+  CHECK_MSG(pn_get(K_BRIGHTNESS) == 60, "brightness %d after lost frames", pn_get(K_BRIGHTNESS));
+  CHECK_MSG(!panel_night.state, "night mode still on after lost answers");
+  CHECK_MSG(settled(), "something still waiting after lost frames");
 }
 
 static void link_refused() {
   step("the panel refuses the link while the CX60 comes back too soon, then lets it back in");
   link_quiet = 10000;  // the CX60 polls 10 ms after its status broadcast
   run(40);
-  CHECK(panel::link::tx.refused, "the ESP didn't take the refusal");
-  CHECK(logged("refuses the link"), "the refusal wasn't logged");
+  CHECK_MSG(panel::link::tx.refused, "the ESP didn't take the refusal");
+  CHECK_MSG(logged("refuses the link"), "the refusal wasn't logged");
   link_quiet = 14400;
   size_t from = log_all.size();
   int back = run_until([] { return !panel::link::tx.refused && panel::link::online(); }, 4000);
-  CHECK(back >= PBUS_REARM, "back after %d cycles, the panel wants %d clean ones", back, PBUS_REARM);
-  CHECK(back >= 0 && back < PBUS_REARM + 600, "the link didn't come back in time: %d cycles", back);
-  CHECK(logged("lets the link back in", from), "its return wasn't logged");
-  CHECK(!logged("refuses the link", from), "the refusal was logged again");
+  CHECK_MSG(back >= PBUS_REARM, "back after %d cycles, the panel wants %d clean ones", back, PBUS_REARM);
+  CHECK_MSG(back >= 0 && back < PBUS_REARM + 600, "the link didn't come back in time: %d cycles", back);
+  CHECK_MSG(logged("lets the link back in", from), "its return wasn't logged");
+  CHECK_MSG(!logged("refuses the link", from), "the refusal was logged again");
   printf("  back after %d cycles (%.0f s)\n", back, back * 0.11);
 }
 
 static void pictures() {
   step("pictures");
-  CHECK(panel_picture_status.state == "None", "picture status at the start: '%s'", panel_picture_status.state.c_str());
+  CHECK_MSG(panel_picture_status.state == "None", "picture status at the start: '%s'",
+            panel_picture_status.state.c_str());
   unsigned long frames_before = link_frames;
   pic::Source &dusk = pic::sources["dusk"];
   dusk.encoding = pic::PALETTE;  // 16 colours first, to test their patches
   draw_dusk(panel_picture_dusk, 250, false);
   panel_picture.control(1);  // the select: "dusk"
-  CHECK(picture("whole picture", 6000) >= 0, "picture not shown");
+  CHECK_MSG(picture("whole picture", 6000) >= 0, "picture not shown");
   int pw, ph;
-  CHECK(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "panel picture %dx%d", pw, ph);
+  CHECK_MSG(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "panel picture %dx%d", pw, ph);
   pn_shot(outdir, "esp_picture");
 
   draw_dusk(panel_picture_dusk, 225, false);  // the moon moved
   pic::show("dusk");
-  CHECK(picture("moon moved", 3000) >= 0, "patch not shown");
+  CHECK_MSG(picture("moon moved", 3000) >= 0, "patch not shown");
   pn_shot(outdir, "esp_picture_moon");
 
   draw_dusk(panel_picture_dusk, 240, false);
   pic::show("dusk");
   run(5);
   link_lost_answers = 3;  // the ESP misses three of the panel's answers
-  CHECK(picture("moved a bit, 3 answers lost", 3000) >= 0, "not shown after lost answers");
+  CHECK_MSG(picture("moved a bit, 3 answers lost", 3000) >= 0, "not shown after lost answers");
 
   draw_dusk(panel_picture_dusk, 230, false);
   pic::show("dusk");
   run(5);
   link_lost_frames = 3;  // the panel misses three of the ESP's frames
-  CHECK(picture("moved again, 3 frames lost", 3000) >= 0, "not shown after lost frames");
+  CHECK_MSG(picture("moved again, 3 frames lost", 3000) >= 0, "not shown after lost frames");
 
   // The moon and a box just below it go as one piece, the rows between along
   draw_dusk(panel_picture_dusk, 250, false);
@@ -1219,8 +1213,8 @@ static void pictures() {
       panel_picture_dusk.px[(size_t) y * 320 + x] = 0x5A3C28;
   size_t one = log_all.size();
   pic::show("dusk");
-  CHECK(picture("the moon and a box below it", 3000) >= 0 && logged("Picture dusk: 1 pieces", one),
-        "the moon and a box below it not sent as one piece");
+  CHECK_MSG(picture("the moon and a box below it", 3000) >= 0 && logged("Picture dusk: 1 pieces", one),
+            "the moon and a box below it not sent as one piece");
 
   // Two pieces, the box gone and a box lower down. Back to the picture before once the first is in.
   draw_dusk(panel_picture_dusk, 250, false);
@@ -1229,10 +1223,10 @@ static void pictures() {
       panel_picture_dusk.px[(size_t) y * 320 + x] = 0x5A3C28;
   pic::show("dusk");
   int half = run_until([&] { return pic::S.phase == pic::SEND && pic::S.jobs.size() == 1; }, 3000);
-  CHECK(half >= 0, "not sent as two pieces");
+  CHECK_MSG(half >= 0, "not sent as two pieces");
   draw_dusk(panel_picture_dusk, 230, false);
   pic::show("dusk");
-  CHECK(picture("changed back halfway through", 3000) >= 0, "not shown after a change while sending");
+  CHECK_MSG(picture("changed back halfway through", 3000) >= 0, "not shown after a change while sending");
 
   // Two pieces again, the second a long one. Another picture while it's on its way: the panel has the first and drops
   // the rest once another comes, so only rows go, no BEGIN.
@@ -1244,24 +1238,24 @@ static void pictures() {
   size_t two = log_all.size();
   pic::show("dusk");
   half = run_until([&] { return pic::S.jobs.size() == 1 && pic::S.t.head && !pic::S.t.ended; }, 3000);
-  CHECK(half >= 0 && logged("Picture dusk: 2 pieces", two), "not sent as two pieces");
+  CHECK_MSG(half >= 0 && logged("Picture dusk: 2 pieces", two), "not sent as two pieces");
   size_t rows_only = log_all.size();
   draw_dusk(panel_picture_dusk, 230, false);
   pic::show("dusk");
-  CHECK(picture("changed between pieces", 3000) >= 0, "not shown after a change between pieces");
-  CHECK(logged("Picture dusk: 1 pieces", rows_only), "a change between pieces sent it all");
+  CHECK_MSG(picture("changed between pieces", 3000) >= 0, "not shown after a change between pieces");
+  CHECK_MSG(logged("Picture dusk: 1 pieces", rows_only), "a change between pieces sent it all");
   auto planned = [&] { return run_until([&] { return pic::S.phase == pic::SEND && !pic::S.redo; }, 100) >= 0; };
 
   // A BEGIN on its way when it changes: the panel has dropped its picture for it, so all of it goes again
   panel_picture_dusk.h = 200;
   panel_picture_dusk.px.resize(320 * 200);
   pic::show("dusk");
-  CHECK(run_until([&] { return pic::S.phase == pic::SEND && pic::S.t.head; }, 100) >= 0 && pic::S.jobs.front().full,
-        "a picture of another size not sent whole");
+  CHECK_MSG(run_until([&] { return pic::S.phase == pic::SEND && pic::S.t.head; }, 100) >= 0 && pic::S.jobs.front().full,
+            "a picture of another size not sent whole");
   draw_dusk(panel_picture_dusk, 230, false);
   pic::show("dusk");
-  CHECK(planned() && pic::S.jobs.front().full, "a change during a BEGIN sends rows the panel doesn't have");
-  CHECK(picture("changed during a BEGIN", 3000) >= 0, "not shown after a change during a BEGIN");
+  CHECK_MSG(planned() && pic::S.jobs.front().full, "a change during a BEGIN sends rows the panel doesn't have");
+  CHECK_MSG(picture("changed during a BEGIN", 3000) >= 0, "not shown after a change during a BEGIN");
 
   // New colours in rows far apart, so the palette changes. The panel takes it at the piece's END, so they go as one
   // piece and it never draws a row in colours that aren't its own.
@@ -1272,17 +1266,17 @@ static void pictures() {
         if ((y >= 20 && y < 30) || (y >= 200 && y < 210))
           panel_picture_dusk.px[(size_t) y * 320 + x] = 0xE01020;
     pic::show("dusk");
-    CHECK(planned() && pic::S.jobs.size() == 1 && pic::S.jobs[0].pal && !pic::S.jobs[0].full &&
-              memcmp(was.pal, pic::S.made.pal, sizeof was.pal),
-          "new colours in rows far apart: %d pieces", (int) pic::S.jobs.size());
+    CHECK_MSG(planned() && pic::S.jobs.size() == 1 && pic::S.jobs[0].pal && !pic::S.jobs[0].full &&
+                  memcmp(was.pal, pic::S.made.pal, sizeof was.pal),
+              "new colours in rows far apart: %d pieces", (int) pic::S.jobs.size());
     pic::Pic made = pic::S.made;
     int off = 0;
     for (int c = 0; c < 100 && pic::S.phase == pic::SEND; c++) {
       run(1);
       off = std::max(off, rows_off(was, made));
     }
-    CHECK(!off, "new colours in rows far apart: the panel drew %d rows that are neither picture", off);
-    CHECK(picture("new colours in rows far apart", 3000) >= 0, "not shown");
+    CHECK_MSG(!off, "new colours in rows far apart: the panel drew %d rows that are neither picture", off);
+    CHECK_MSG(picture("new colours in rows far apart", 3000) >= 0, "not shown");
   }
 
   // A picture in 16 colours that aren't on the 4-bit grid shows them as they are
@@ -1292,11 +1286,11 @@ static void pictures() {
       for (int x = 0; x < 320; x++)
         panel_picture_dusk.px[(size_t) y * 320 + x] = COLOURS[(x / 80 + y / 60) % 4];
     pic::show("dusk");
-    CHECK(picture("4 colours off the grid", 3000) >= 0, "not shown");
+    CHECK_MSG(picture("4 colours off the grid", 3000) >= 0, "not shown");
     int exact = 0;
     for (uint32_t c : COLOURS)
       exact += std::count(pic::S.shown.pal, pic::S.shown.pal + 16, c) > 0;
-    CHECK(exact == 4 && pic::S.shown.err < 1e-6, "%d of the 4 colours exactly, error %g", exact, pic::S.shown.err);
+    CHECK_MSG(exact == 4 && pic::S.shown.err < 1e-6, "%d of the 4 colours exactly, error %g", exact, pic::S.shown.err);
   }
 
   draw_dusk(panel_picture_dusk, 200, false);
@@ -1305,11 +1299,11 @@ static void pictures() {
   link_windows = false;  // the CX60 restarts mid-picture
   run(60);
   link_windows = true;
-  CHECK(picture("the CX60 restarted mid-picture", 3000) >= 0, "not shown after the CX60 restarted");
+  CHECK_MSG(picture("the CX60 restarted mid-picture", 3000) >= 0, "not shown after the CX60 restarted");
 
   pn_restart();
-  CHECK(picture("panel restarted", 6000) >= 0, "picture not sent again after a panel restart");
-  CHECK(panel_pic() == 2, "no picture after the restart");
+  CHECK_MSG(picture("panel restarted", 6000) >= 0, "picture not sent again after a panel restart");
+  CHECK_MSG(panel_pic() == 2, "no picture after the restart");
   printf("  %lu frames for these pictures\n", link_frames - frames_before);
 }
 
@@ -1319,38 +1313,39 @@ static void pictures_jpeg() {
   pic::Source &dusk = pic::sources["dusk"];
   int pw, ph;
   auto as = [&](const char *name, int format) {
-    CHECK(picture(name, 8000) >= 0, "%s not shown", name);
-    CHECK(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "%s drawn at %dx%d", name, pw, ph);
-    CHECK(pn_pic_format() == format, "%s went as %s", name, pn_pic_format() == PIC_JPEG ? "a JPEG" : "16 colours");
-    CHECK(pic::S.shown.data.size() <= PIC_POOL, "%s: %u bytes sent", name, (unsigned) pic::S.shown.data.size());
-    CHECK(pic::S.shown.data.capacity() == pic::S.shown.data.size(), "%s: %u bytes kept for %u", name,
-          (unsigned) pic::S.shown.data.capacity(), (unsigned) pic::S.shown.data.size());
+    CHECK_MSG(picture(name, 8000) >= 0, "%s not shown", name);
+    CHECK_MSG(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "%s drawn at %dx%d", name, pw, ph);
+    CHECK_MSG(pn_pic_format() == format, "%s went as %s", name, pn_pic_format() == PIC_JPEG ? "a JPEG" : "16 colours");
+    CHECK_MSG(pic::S.shown.data.size() <= PIC_POOL, "%s: %u bytes sent", name, (unsigned) pic::S.shown.data.size());
+    CHECK_MSG(pic::S.shown.data.capacity() == pic::S.shown.data.size(), "%s: %u bytes kept for %u", name,
+              (unsigned) pic::S.shown.data.capacity(), (unsigned) pic::S.shown.data.size());
   };
   size_t warned = log_all.size();
   draw_dusk(panel_picture_dusk, 200, true);  // noise doesn't fit in 16 colours, so it's a JPEG anyway
   pic::show("dusk");
   as("noise, 16 colours asked for", PIC_JPEG);
-  CHECK(logged("too detailed for 16 colours", warned), "no warning about the JPEG");
+  CHECK_MSG(logged("too detailed for 16 colours", warned), "no warning about the JPEG");
   dusk.encoding = pic::AUTO;
   draw_photo(panel_picture_dusk, 320, 240);
   size_t tries = log_all.size();
   pic::show("dusk");
   as("a photo", PIC_JPEG);
   int best = pic::S.shown.quality;
-  CHECK(best > 30 && best < 95, "the photo's quality %d", best);
-  CHECK(jpeg_size(best) == pic::S.shown.data.size() && jpeg_size(best + 1) > PIC_POOL,
-        "quality %d isn't the best that fits: %u bytes, %u at %d", best, (unsigned) jpeg_size(best),
-        (unsigned) jpeg_size(best + 1), best + 1);
+  CHECK_MSG(best > 30 && best < 95, "the photo's quality %d", best);
+  CHECK_MSG(jpeg_size(best) == pic::S.shown.data.size() && jpeg_size(best + 1) > PIC_POOL,
+            "quality %d isn't the best that fits: %u bytes, %u at %d", best, (unsigned) jpeg_size(best),
+            (unsigned) jpeg_size(best + 1), best + 1);
   int encodes = 0;
   tries = log_all.find("as a JPEG at quality", tries);
-  CHECK(tries != std::string::npos && sscanf(log_all.c_str() + tries, "as a JPEG at quality %*d (%d", &encodes) == 1 &&
-            encodes <= 3,
-        "the photo took %d JPEGs to find its quality", encodes);
+  CHECK_MSG(tries != std::string::npos &&
+                sscanf(log_all.c_str() + tries, "as a JPEG at quality %*d (%d", &encodes) == 1 && encodes <= 3,
+            "the photo took %d JPEGs to find its quality", encodes);
   pn_shot(outdir, "esp_photo");
   draw_photo(panel_picture_dusk, 320, 180);  // 16:9, padded to whole MCUs: 4 rows above, 8 below
   pic::show("dusk");
-  CHECK(picture("a 16:9 photo", 8000) >= 0 && pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 192 && pic::S.search.oy == 4,
-        "a 16:9 photo drawn at %dx%d, %d rows down", pw, ph, pic::S.search.oy);
+  CHECK_MSG(
+      picture("a 16:9 photo", 8000) >= 0 && pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 192 && pic::S.search.oy == 4,
+      "a 16:9 photo drawn at %dx%d, %d rows down", pw, ph, pic::S.search.oy);
   draw_photo(panel_picture_dusk, 640, 480);  // averaged 2x2 for the JPEG
   pic::show("dusk");
   as("a 640x480 photo", PIC_JPEG);
@@ -1365,12 +1360,12 @@ static void pictures_jpeg() {
       }
       avg += pic::jpx(x, y) == ((sum[0] + 2) / 4 << 16 | (sum[1] + 2) / 4 << 8 | (sum[2] + 2) / 4);
     }
-  CHECK(avg == 35 * 64, "%d of %d pixels of a 640x480 photo the mean of the 4 they cover", avg, 35 * 64);
+  CHECK_MSG(avg == 35 * 64, "%d of %d pixels of a 640x480 photo the mean of the 4 they cover", avg, 35 * 64);
   draw_photo(panel_picture_dusk, 320, 240);
   dusk.quality = 30;  // no higher than 30
   pic::show("dusk");
   as("a photo, quality 30 at most", PIC_JPEG);
-  CHECK(pic::S.shown.quality == 30, "quality %d", pic::S.shown.quality);
+  CHECK_MSG(pic::S.shown.quality == 30, "quality %d", pic::S.shown.quality);
   dusk.quality = 0;
   draw_photo(panel_picture_dusk, 160, 120);  // a small one is blown up to fill the screen
   pic::show("dusk");
@@ -1384,7 +1379,7 @@ static void pictures_jpeg() {
   dusk.encoding = pic::AUTO;
   draw_dusk(panel_picture_dusk, 200, false);
   pic::show("dusk");
-  CHECK(picture("dusk, automatic", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk, automatic", 6000) >= 0, "dusk not shown");
   printf("  %lu frames for these pictures\n", link_frames - frames_before);
 }
 
@@ -1394,10 +1389,10 @@ static void animations() {
   panel_anim_ball.turn_on();  // the switch
   int ar = run_until(anim_shown, 2000);
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), ar);
-  CHECK(ar >= 0 && same_anim("ball", 0), "the panel's first frame isn't the ESP's");
+  CHECK_MSG(ar >= 0 && same_anim("ball", 0), "the panel's first frame isn't the ESP's");
   for (int f = 1; f <= 8; f++) {
     pn_anim_step(100);
-    CHECK(same_anim("ball", f % 8), "frame %d isn't the ESP's", f % 8);
+    CHECK_MSG(same_anim("ball", f % 8), "frame %d isn't the ESP's", f % 8);
   }
   pn_shot(outdir, "esp_animation");
 }
@@ -1406,7 +1401,7 @@ static void animations() {
 static void anim_moving() {
   step("animations moved and drifting");
   Look l = look(0);
-  CHECK(l.x == 250 && l.y == 20, "ball at %d,%d, not where the yaml put it", l.x, l.y);
+  CHECK_MSG(l.x == 250 && l.y == 20, "ball at %d,%d, not where the yaml put it", l.x, l.y);
   panel_move_animation.execute("ball", 0, 100, 40, 0, "none");
   int ar = run_until(
       [&] {
@@ -1414,28 +1409,28 @@ static void anim_moving() {
         return l.x == 100 && l.y == 40 && settled();
       },
       100);
-  CHECK(ar >= 0, "panel_move_animation didn't move it: at %d,%d", l.x, l.y);
-  CHECK(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(ar >= 0, "panel_move_animation didn't move it: at %d,%d", l.x, l.y);
+  CHECK_MSG(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
+            panel_animation_status.state.c_str());
   size_t clamped = log_all.size();
   panel_move_animation.execute("ball", 0, 100, 40, 70000, "none");  // ms only has 16 bits
   run(3);
-  CHECK(logged("over 70000 ms is out of range, it goes to 100,40 over 65535 ms", clamped),
-        "no warning about the glide time");
+  CHECK_MSG(logged("over 70000 ms is out of range, it goes to 100,40 over 65535 ms", clamped),
+            "no warning about the glide time");
   panel_drift_animation.execute("ball", 0, -20, 0);
   ar = until_anim_status("Shown: ball, drifting", 100);
   pn_anim_step(100);
   l = look(0);
-  CHECK(ar >= 0 && l.x == 98 && l.y == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
-        panel_animation_status.state.c_str(), l.x, l.y);
+  CHECK_MSG(ar >= 0 && l.x == 98 && l.y == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
+            panel_animation_status.state.c_str(), l.x, l.y);
   panel_drift_animation.execute("ball", 0, 0, 0);
   ar = until_anim_status("Shown: ball", 100);
   pn_anim_step(100);
   l = look(0);
-  CHECK(ar >= 0 && l.x == 98, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), l.x);
+  CHECK_MSG(ar >= 0 && l.x == 98, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), l.x);
   panel_move_animation.execute("ball", 1, 0, 0, 0, "none");  // no such copy
   run(3);
-  CHECK(logged("panel_move_animation: no copy 1 of animation 'ball' shown"), "no warning about the copy");
+  CHECK_MSG(logged("panel_move_animation: no copy 1 of animation 'ball' shown"), "no warning about the copy");
 }
 
 // More places: a copy in step, and one with a frame of its own two frames ahead
@@ -1444,29 +1439,30 @@ static void anim_copies() {
   panel_place_animation.execute("ball", 1, 10, 150, false, 0);
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
   int ar = until_anim_status("Shown: ball (3 copies)", 100);
-  CHECK(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
   Look a = look(1), b = look(2);
-  CHECK(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150, "copies at %d,%d and %d,%d", a.x, a.y, b.x, b.y);
+  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150, "copies at %d,%d and %d,%d", a.x, a.y, b.x, b.y);
   const anim::Anim *ball = anim::find("ball");
-  CHECK(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
-        "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
-        (unsigned) (ball->frame_bytes() * 2 + ball->data.size()));
+  CHECK_MSG(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+            (unsigned) (ball->frame_bytes() * 2 + ball->data.size()));
   // copy 1 shows what copy 0 shows, copy 2 started on frame 5 when it was placed, so it's out of step
   int apart = 0;
   for (int i = 0; i < 8; i++, pn_anim_step(100))
     for (int f = 0; f < 8; f++)
       if (same_anim("ball", f, 0)) {
-        CHECK(same_anim("ball", f, 1), "copy 1 isn't in step at frame %d", f);
+        CHECK_MSG(same_anim("ball", f, 1), "copy 1 isn't in step at frame %d", f);
         apart += !same_anim("ball", f, 2);
         break;
       }
-  CHECK(apart, "copy 2 is in step with copy 0");
+  CHECK_MSG(apart, "copy 2 is in step with copy 0");
   panel_drift_animation.execute("ball", 2, 0, 30);
   run(3);
   pn_anim_step(100);
   a = look(0);
   b = look(2);
-  CHECK(b.x == 200 && b.y == 153 && a.x == 98 && a.y == 40, "only copy 2 drifts: %d,%d and %d,%d", b.x, b.y, a.x, a.y);
+  CHECK_MSG(b.x == 200 && b.y == 153 && a.x == 98 && a.y == 40, "only copy 2 drifts: %d,%d and %d,%d", b.x, b.y, a.x,
+            a.y);
   pn_shot(outdir, "esp_animation_copies");
 }
 
@@ -1478,38 +1474,39 @@ static void anim_turning() {
   panel_flip_animation.execute("ball", 2, true, false);
   run(3);
   Look l = look(2), l0 = look(0);
-  CHECK(l.shown && l.deg == 90 && l.flip == ANIM_FLIP_X && l0.shown && !l0.deg && !l0.flip,
-        "turned and flipped: %d degrees, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.deg == 90 && l.flip == ANIM_FLIP_X && l0.shown && !l0.deg && !l0.flip,
+            "turned and flipped: %d degrees, flip %d", l.deg, l.flip);
   panel_glide_animation.execute("ball", 2, "turn", 0, 2000, "none");
   run(3);
   steps(1000);
   l = look(2);
-  CHECK(l.shown && l.deg > 30 && l.deg < 60, "halfway through a turn: %d degrees", l.deg);
+  CHECK_MSG(l.shown && l.deg > 30 && l.deg < 60, "halfway through a turn: %d degrees", l.deg);
   panel_flip_animation.execute("ball", 2, false, true);
   run(3);
   steps(2100);
   l = look(2);
-  CHECK(l.shown && l.deg == 0 && l.flip == ANIM_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.deg == 0 && l.flip == ANIM_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
+            l.flip);
   panel_spin_animation.execute("ball", 2, -180);
   run(3);
   steps(500);
   l = look(2);
-  CHECK(l.shown && l.deg > 180 && l.deg < 360, "spinning back: %d degrees", l.deg);
+  CHECK_MSG(l.shown && l.deg > 180 && l.deg < 360, "spinning back: %d degrees", l.deg);
   panel_spin_animation.execute("ball", 2, 0);
   run(3);
   int stopped = look(2).deg;
   steps(1000);
   l = look(2);
-  CHECK(l.shown && l.deg == stopped, "the spin didn't stop: %d then %d", stopped, l.deg);
+  CHECK_MSG(l.shown && l.deg == stopped, "the spin didn't stop: %d then %d", stopped, l.deg);
   panel_glide_animation.execute("ball", 2, "turn", 180, 0, "none");
   run(3);
   restart_panel();
   l = look(2);
-  CHECK(l.shown && l.deg == 180 && l.flip == ANIM_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
-  CHECK(l.shown && l.opa == 0, "placed again it fades in: opacity %d", l.opa);
+  CHECK_MSG(l.shown && l.deg == 180 && l.flip == ANIM_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.opa == 0, "placed again it fades in: opacity %d", l.opa);
   steps(400);
   l = look(2);
-  CHECK(l.shown && l.opa == 1000, "faded in to %d", l.opa);
+  CHECK_MSG(l.shown && l.opa == 1000, "faded in to %d", l.opa);
 }
 
 // Copy 2 sized, faded and wandering, and back as it was after a restart
@@ -1520,10 +1517,10 @@ static void anim_wandering() {
   run(3);
   steps(500);
   Look l = look(2);
-  CHECK(l.shown && l.size == 1500 && l.opa > 500 && l.opa < 1000, "size %d, opacity %d halfway", l.size, l.opa);
+  CHECK_MSG(l.shown && l.size == 1500 && l.opa > 500 && l.opa < 1000, "size %d, opacity %d halfway", l.size, l.opa);
   steps(600);
   l = look(2);
-  CHECK(l.shown && l.opa == 500, "opacity %d after the fade", l.opa);
+  CHECK_MSG(l.shown && l.opa == 500, "opacity %d after the fade", l.opa);
   panel_area_animation.execute("ball", 2, 100, 100, 300, 230, "bounce", "bounce");
   panel_wander_animation.execute("ball", 2, 20, 60, 0, 180, 300, 900, 0, 0);
   panel_face_animation.execute("ball", 2, 0, true, 0, 0, false);
@@ -1545,13 +1542,13 @@ static void anim_wandering() {
     }
     return inside && hi - lo > 40;
   };
-  CHECK(wanders(200) && at.shown && at.deg == 0 && ball->copies[2].doing == ", wandering",
-        "wandering in its area: at %d,%d, %d degrees", at.x, at.y, at.deg);
+  CHECK_MSG(wanders(200) && at.shown && at.deg == 0 && ball->copies[2].doing == ", wandering",
+            "wandering in its area: at %d,%d, %d degrees", at.x, at.y, at.deg);
   restart_panel();
   steps(400);
   l = look(2);
-  CHECK(l.shown && l.size == 1500 && l.opa == 500 && wanders(100), "after a panel restart: size %d, opacity %d", l.size,
-        l.opa);
+  CHECK_MSG(l.shown && l.size == 1500 && l.opa == 500 && wanders(100), "after a panel restart: size %d, opacity %d",
+            l.size, l.opa);
 }
 
 // Copy 1 waved, mapped and its frames paused, and all of it back after a panel restart
@@ -1569,15 +1566,15 @@ static void anim_waved() {
       f0 = f;
   steps(500);
   Look l = look(p1);
-  CHECK(l.shown && l.x == 15 && l.opa == 500 && f0 >= 0 && same_anim("ball", f0, p1),
-        "waved, mapped and paused: at %d, opacity %d, frame %d", l.x, l.opa, f0);
+  CHECK_MSG(l.shown && l.x == 15 && l.opa == 500 && f0 >= 0 && same_anim("ball", f0, p1),
+            "waved, mapped and paused: at %d, opacity %d, frame %d", l.x, l.opa, f0);
   restart_panel();
   steps(400);
   l = look(p1);
-  CHECK(l.shown && l.x == 15 && l.opa == 500 && same_anim("ball", 0, p1), "after a panel restart: at %d, opacity %d",
-        l.x, l.opa);
+  CHECK_MSG(l.shown && l.x == 15 && l.opa == 500 && same_anim("ball", 0, p1),
+            "after a panel restart: at %d, opacity %d", l.x, l.opa);
   steps(500);
-  CHECK(same_anim("ball", 0, p1), "the frames went on after a restart");
+  CHECK_MSG(same_anim("ball", 0, p1), "the frames went on after a restart");
 }
 
 static void anim_turned_down() {
@@ -1597,7 +1594,7 @@ static void anim_turned_down() {
   for (const char *w :
        {"'colour' isn't one of x, y, turn, size, opacity, speed", "size 500 over 0 ms, it takes 10..400",
         "x and y don't follow where it is", "the panel runs 12 waves at most"})
-    CHECK(logged(w, warned), "no warning '%s'", w);
+    CHECK_MSG(logged(w, warned), "no warning '%s'", w);
   for (int i = 0; i < ANIM_WAVES; i++) {
     int c = i % ANIM_CHANNELS;
     panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[c], anim::no_change(c), anim::no_change(c),
@@ -1608,11 +1605,11 @@ static void anim_turned_down() {
   run(3);
   steps(100);
   Look l = look(p1);
-  CHECK(l.shown && l.x == 10 && l.size == 1000 && l.opa == 1000, "back to no change: at %d, size %d, opacity %d", l.x,
-        l.size, l.opa);
+  CHECK_MSG(l.shown && l.x == 10 && l.size == 1000 && l.opa == 1000, "back to no change: at %d, size %d, opacity %d",
+            l.x, l.size, l.opa);
   l = look(ball->copies[0].place);
-  CHECK(l.shown && l.size == 1000 && l.opa == 1000 && l.deg == 0,
-        "copy 0 back to no change: size %d, opacity %d, %d degrees", l.size, l.opa, l.deg);
+  CHECK_MSG(l.shown && l.size == 1000 && l.opa == 1000 && l.deg == 0,
+            "copy 0 back to no change: size %d, opacity %d, %d degrees", l.size, l.opa, l.deg);
 }
 
 // Copy 3 plays one round from its first frame and goes, and the ESP hears so
@@ -1621,11 +1618,11 @@ static void anim_one_round() {
   panel_place_animation.execute("ball", 3, 20, 20, true, 0);
   panel_rounds_animation.execute("ball", 3, 1);
   run(3);
-  CHECK(look(3).shown && panel_animation_status.state == "Shown: ball (4 copies)", "copy 3: '%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(look(3).shown && panel_animation_status.state == "Shown: ball (4 copies)", "copy 3: '%s'",
+            panel_animation_status.state.c_str());
   steps(3000);
   run(5);
-  CHECK(
+  CHECK_MSG(
       !look(3).shown && !anim::find("ball")->copies[3].used && panel_animation_status.state == "Shown: ball (3 copies)",
       "after its round: '%s'", panel_animation_status.state.c_str());
   panel_glide_animation.execute("ball", 2, "size", 100, 0, "none");
@@ -1644,56 +1641,57 @@ static void anim_two() {
   size_t big_at = log_all.size();
   anim::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball (3 copies), big");
-  CHECK(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
-  CHECK(anim::find("big")->half && !logged("making it at half size", big_at),
-        "big: half %d, tried at full size first: %d", anim::find("big") && anim::find("big")->half,
-        logged("making it at half size", big_at));
+  CHECK_MSG(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(anim::find("big")->half && !logged("making it at half size", big_at),
+            "big: half %d, tried at full size first: %d", anim::find("big") && anim::find("big")->half,
+            logged("making it at half size", big_at));
   unsigned used = pn_anim_used();
-  CHECK(used == anim::used_by_others(nullptr) && used <= ANIM_POOL,
-        "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(used == anim::used_by_others(nullptr) && used <= ANIM_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) anim::used_by_others(nullptr));
   panel_remove_animation.execute("ball", 2);
   run(3);
-  CHECK(!look(2).shown && pn_anim_used() == used - anim::find("ball")->frame_bytes() &&
-            panel_animation_status.state == "Shown: ball (2 copies), big",
-        "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_anim_used());
+  CHECK_MSG(!look(2).shown && pn_anim_used() == used - anim::find("ball")->frame_bytes() &&
+                panel_animation_status.state == "Shown: ball (2 copies), big",
+            "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_anim_used());
   panel_clear_animation.execute("big");
   run(3);
-  CHECK(
+  CHECK_MSG(
       !anim::find("big") && look(0).shown && !look(3).shown && panel_animation_status.state == "Shown: ball (2 copies)",
       "clearing one animation: '%s'", panel_animation_status.state.c_str());
   anim::clear("");
   run(3);
-  CHECK(!anim_ready() && !pn_anim_used() && !panel_anim_ball.state, "the animations are still there after clearing");
+  CHECK_MSG(!anim_ready() && !pn_anim_used() && !panel_anim_ball.state,
+            "the animations are still there after clearing");
 }
 
 static void anim_half_size() {
   step("an animation at half size");
   panel_anim_noise.turn_on();
   int ar = run_until(anim_shown, 3000);
-  CHECK(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
-        "noise not shown at half size: %s", panel_animation_status.state.c_str());
+  CHECK_MSG(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
+            "noise not shown at half size: %s", panel_animation_status.state.c_str());
   // its drift_x from the yaml, 10 px/s left: half a pixel a step
   pn_anim_step(100);
   Look l = look(0);
-  CHECK(panel_animation_status.state == "Shown: noise, drifting" && l.x == 15 && l.y == 16,
-        "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), l.x, l.y);
-  CHECK(anim::find("noise")->data.capacity() == anim::find("noise")->data.size(), "%u bytes kept for %u",
-        (unsigned) anim::find("noise")->data.capacity(), (unsigned) anim::find("noise")->data.size());
+  CHECK_MSG(panel_animation_status.state == "Shown: noise, drifting" && l.x == 15 && l.y == 16,
+            "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), l.x, l.y);
+  CHECK_MSG(anim::find("noise")->data.capacity() == anim::find("noise")->data.size(), "%u bytes kept for %u",
+            (unsigned) anim::find("noise")->data.capacity(), (unsigned) anim::find("noise")->data.size());
   pn_restart();
   ar = run_until([] { return anim_ready() && anim_shown(); }, 3000);
-  CHECK(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
+  CHECK_MSG(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
   l = look(0);
   pn_anim_step(100);
-  CHECK(l.x == 16 && l.y == 16 && panel_animation_status.state == "Shown: noise, drifting",
-        "after the restart: at %d,%d, status '%s'", l.x, l.y, panel_animation_status.state.c_str());
+  CHECK_MSG(l.x == 16 && l.y == 16 && panel_animation_status.state == "Shown: noise, drifting",
+            "after the restart: at %d,%d, status '%s'", l.x, l.y, panel_animation_status.state.c_str());
   l = look(0);
-  CHECK(l.x == 15, "the drift wasn't sent again after a panel restart: at %d", l.x);
+  CHECK_MSG(l.x == 15, "the drift wasn't sent again after a panel restart: at %d", l.x);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
   panel_anim_noise.turn_off();
   anim::show("big");  // no yaml, no switch
   ar = until_anim_status("Shown: big");
-  CHECK(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
-        panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
+  CHECK_MSG(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
+            panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
 }
 
 static void anim_not_fitting() {
@@ -1704,32 +1702,32 @@ static void anim_not_fitting() {
   anim::show("edge");
   int ar = until_anim_status("Shown: edge");
   Look l = look(0);
-  CHECK(ar >= 0 && anim::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
-        "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, l.x, l.y);
+  CHECK_MSG(ar >= 0 && anim::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
+            "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, l.x, l.y);
   // the panel draws 2x at most, so scale 2 can't go to half size
   anim::add("noise2", {64, 64, 4, 100, 16, 16, 2, noise_px});
   anim::clear("edge");
   anim::show("noise2");
   ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
-  CHECK(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
-            anim::find("noise2")->scale == 2,
-        "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
+  CHECK_MSG(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
+                anim::find("noise2")->scale == 2,
+            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
   anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
   anim::clear("noise2");
   anim::show("scale3");
   run(1);
-  CHECK(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
+            panel_animation_status.state.c_str());
   anim::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
   anim::clear("scale3");
   anim::show("left");
   run(1);
-  CHECK(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
+            panel_animation_status.state.c_str());
   size_t slow_at = log_all.size();
   anim::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
-  CHECK(anim::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
-        "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
+  CHECK_MSG(anim::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
+            "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
 }
 
 // Clearing it while it's being made frees its buffers
@@ -1742,10 +1740,11 @@ static void anim_cleared_while_made() {
   while (anim::W.phase == anim::COUNT)
     anim::count();
   anim::make();
-  CHECK(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
+  CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
   anim::clear("");
-  CHECK(!anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
-        "clearing kept the buffers");
+  CHECK_MSG(
+      !anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
+      "clearing kept the buffers");
 }
 
 // No room next to the others: ball and three big ones, the last one has to go at half size and is refused
@@ -1754,23 +1753,24 @@ static void anim_no_room() {
   anim::show("ball");
   anim::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball, big", 6000);
-  CHECK(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
   anim::add("big2", anim::sources["big"]);
   anim::add("big3", anim::sources["big"]);
   anim::place("big2", 0, 16, 16, false, 0);
   anim::place("big3", 0, 16, 16, false, 0);
   ar = run_until([] { return anim::find("big3") && anim::find("big3")->state != anim::WANT && settled(); }, 9000);
-  CHECK(
+  CHECK_MSG(
       ar >= 0 && anim::find("big2")->state == anim::SENT && anim::find("big3")->state == anim::FAILED &&
           panel_animation_status.state.rfind("Shown: ball, big, big2; big3: too big even at half size (over ", 0) == 0,
       "four animations: '%s'", panel_animation_status.state.c_str());
-  CHECK(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
-        "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+            (unsigned) anim::used_by_others(nullptr));
   anim::add("big4", anim::sources["big"]);
   anim::place("big4", 0, 16, 16, false, 0);  // no fifth slot
   run(1);
-  CHECK(!anim::find("big4") && logged("No room for animation big4: the panel holds 4 at a time"),
-        "a fifth animation: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(!anim::find("big4") && logged("No room for animation big4: the panel holds 4 at a time"),
+            "a fifth animation: '%s'", panel_animation_status.state.c_str());
   anim::clear("");
   run(3);
 }
@@ -1784,11 +1784,11 @@ static void anim_repeats() {
   anim::show("cycle");
   anim::show("held");
   int ar = until_anim_status("Shown: cycle, held");
-  CHECK(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
-            anim_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
-        "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) anim_delays("cycle").size());
-  CHECK(ar >= 0 && anim_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
-        "held: %u records", (unsigned) anim_delays("held").size());
+  CHECK_MSG(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
+                anim_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
+            "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) anim_delays("cycle").size());
+  CHECK_MSG(ar >= 0 && anim_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
+            "held: %u records", (unsigned) anim_delays("held").size());
   anim::clear("");
   run(3);
 }
@@ -1813,9 +1813,9 @@ static void anim_esp_restart() {
   panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);
   anim::show("a2");
   int r = run_until(anims_sent, 3000);
-  CHECK(r >= 0 && places() == "[0 100,10]" && same_pool(),
-        "after an ESP restart the panel shows %s in %u bytes, the ESP has a2 at 100,10 in %u", places().c_str(),
-        pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(r >= 0 && places() == "[0 100,10]" && same_pool(),
+            "after an ESP restart the panel shows %s in %u bytes, the ESP has a2 at 100,10 in %u", places().c_str(),
+            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
   anim::clear("");
 }
 
@@ -1844,13 +1844,13 @@ static void anim_hello_while_made() {
     }
   }
   micros_step = 0;
-  CHECK(anim::W.f == 2 && most == 4 * anim::ROWS_PX && !moved && six->data.capacity() == anim::data_max(),
-        "%d pixels read in a loop, the records moved %d, %u bytes for them", most, moved,
-        (unsigned) six->data.capacity());
+  CHECK_MSG(anim::W.f == 2 && most == 4 * anim::ROWS_PX && !moved && six->data.capacity() == anim::data_max(),
+            "%d pixels read in a loop, the records moved %d, %u bytes for them", most, moved,
+            (unsigned) six->data.capacity());
   pn_restart();  // its hello comes before the next loop
   int r = run_until([&] { return six->state == anim::SENT && settled(); }, 3000);
-  CHECK(r >= 0 && anim_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
-        (unsigned) anim_delays("six").size());
+  CHECK_MSG(r >= 0 && anim_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
+            (unsigned) anim_delays("six").size());
   anim::clear("");
 }
 
@@ -1873,10 +1873,10 @@ static void anim_long_frame() {
   while ((past = a.data.size()) + a.frame_bytes() <= ANIM_POOL)
     anim::record(nullptr, anim::W.frame, 100);
   bool ok = anim::record(&anim::W.prev, anim::W.frame, 20000);  // 8 records of 2.55 s
-  CHECK(anim::W.phase == anim::MAKE && room == anim::data_max() && ok && a.data.data() == at &&
-            a.data.capacity() == room && a.data.size() == past,
-        "a long frame past the pool: the records moved %d, %u bytes of %u", a.data.data() != at,
-        (unsigned) a.data.size(), (unsigned) a.data.capacity());
+  CHECK_MSG(anim::W.phase == anim::MAKE && room == anim::data_max() && ok && a.data.data() == at &&
+                a.data.capacity() == room && a.data.size() == past,
+            "a long frame past the pool: the records moved %d, %u bytes of %u", a.data.data() != at,
+            (unsigned) a.data.size(), (unsigned) a.data.capacity());
   anim::clear("");
 }
 
@@ -1886,13 +1886,13 @@ static void anim_off_screen() {
   size_t warned = log_all.size();
   anim::place("ball", 8, 10, 10, false, 0);
   run(5);
-  CHECK(!anim::find("ball") && !anim_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
-        "copy 8: ball %d, the panel shows %s", anim::find("ball") != nullptr, places().c_str());
+  CHECK_MSG(!anim::find("ball") && !anim_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
+            "copy 8: ball %d, the panel shows %s", anim::find("ball") != nullptr, places().c_str());
   anim::place("ball", 1, -40, 300, false, 0);
   bool sent =
       run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::SENT && settled(); }, 3000) >= 0;
   Look l = sent ? look(anim::find("ball")->copies[1].place) : Look{};
-  CHECK(sent && l.shown && l.x == -40 && l.y == 300, "a copy off the screen: the panel shows %s", places().c_str());
+  CHECK_MSG(sent && l.shown && l.x == -40 && l.y == 300, "a copy off the screen: the panel shows %s", places().c_str());
   anim::clear("");
   run(5);
 }
@@ -1911,20 +1911,20 @@ static void anim_shown_again() {
   run_until(anims_sent, 3000);
   panel_remove_animation.execute("noise", 0);
   run(3);
-  CHECK(!anim_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'", places().c_str(),
-        panel_animation_status.state.c_str());
+  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
+            places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
-  CHECK(back(), "shown again: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
+  CHECK_MSG(back(), "shown again: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
   panel_rounds_animation.execute("noise", 0, 1);
   run(3);
   steps(2000);
   run(5);
-  CHECK(!anim_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'", places().c_str(),
-        panel_animation_status.state.c_str());
+  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
+            places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
-  CHECK(back(), "shown again after its round: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
+  CHECK_MSG(back(), "shown again after its round: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
   anim::clear("");
 }
 
@@ -1942,8 +1942,8 @@ static void anim_timing() {
     if (seen.empty() || seen.back() != f)
       seen += f;
   }
-  CHECK(anim_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
-        "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) anim_delays("aba").size());
+  CHECK_MSG(anim_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
+            "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) anim_delays("aba").size());
   anim::clear("");
 
   // Each frame its own time, past a record's 2550 ms in empty records after it: F0 4 s, F1 0.1 s, F2 3 s. In a
@@ -1964,9 +1964,9 @@ static void anim_timing() {
   int want[3] = {4000, 100, 3000}, timed = 0;  // how long each frame shows, every time it's seen whole
   for (size_t i = 0; i + 1 < turns.size(); i++)
     timed += abs(turns[i + 1].first - turns[i].first - want[turns[i].second]) <= 60 ? 1 : -100;
-  CHECK(anim_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
-        "frames of 4 s, 0.1 s and 3 s: %u records, %u changes, %d timed right", (unsigned) anim_delays("slow").size(),
-        (unsigned) turns.size(), timed);
+  CHECK_MSG(anim_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
+            "frames of 4 s, 0.1 s and 3 s: %u records, %u changes, %d timed right",
+            (unsigned) anim_delays("slow").size(), (unsigned) turns.size(), timed);
   anim::clear("");
 }
 
@@ -1978,20 +1978,20 @@ static void anim_without_ram() {
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
   run_until(anims_sent, 3000);
-  CHECK(anim::find("ball")->half && same_anim("ball", 0) &&
-            logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
-        "ball without the RAM for full size: half %d", anim::find("ball")->half);
+  CHECK_MSG(anim::find("ball")->half && same_anim("ball", 0) &&
+                logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
+            "ball without the RAM for full size: half %d", anim::find("ball")->half);
   anim::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
   ram_free = 30 * 1024;
   anim::show("ball2x");
   run(3);
-  CHECK(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
+            panel_animation_status.state.c_str());
   ram_free = 200 * 1024;
   pn_restart();
   int r = run_until(anims_sent, 3000);
-  CHECK(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x", "not made after a hello: '%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x", "not made after a hello: '%s'",
+            panel_animation_status.state.c_str());
   // panel_place_animation tries a failed one again too
   ram_free = 30 * 1024;
   anim::clear("ball2x");
@@ -2000,8 +2000,8 @@ static void anim_without_ram() {
   ram_free = 200 * 1024;
   anim::place("ball2x", 1, 200, 100, false, 0);
   r = run_until(anims_sent, 3000);
-  CHECK(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x (2 copies)", "placed after it failed: '%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x (2 copies)", "placed after it failed: '%s'",
+            panel_animation_status.state.c_str());
   anim::clear("");
   // one that would only fail again isn't made again after a hello, until it's shown again
   static int making;
@@ -2009,10 +2009,11 @@ static void anim_without_ram() {
   anim::show("noise2");
   run(3);
   restart_panel();
-  CHECK(making == 1 && anim::find("noise2")->state == anim::FAILED, "noise2 made %d times, through a hello", making);
+  CHECK_MSG(making == 1 && anim::find("noise2")->state == anim::FAILED, "noise2 made %d times, through a hello",
+            making);
   anim::show("noise2");
   run(3);
-  CHECK(making == 2, "noise2 not tried again when shown");
+  CHECK_MSG(making == 2, "noise2 not tried again when shown");
   anim::clear("");
 }
 
@@ -2025,26 +2026,26 @@ static void anim_past_pool() {
     anim::place("ball", i, 50 * i, 150, true, 0);
   run_until(anims_sent, 3000);
   anim::Anim *ball = anim::find("ball");
-  CHECK(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() &&
-            !look(4).shown,
-        "four copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
-        panel_animation_status.state.c_str(), pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() &&
+                !look(4).shown,
+            "four copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
+            panel_animation_status.state.c_str(), pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
   size_t warned = log_all.size();
   anim::place("ball", 4, 150, 150, true, 0);
   anim::place("ball", 2, 100, 50, true, 0);
   run(3);
   Look l = look(ball->copies[2].place);
-  CHECK(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() && l.shown &&
-            l.x == 100 && l.y == 50 &&
-            logged("no room in the panel's 6144 bytes for a copy with a frame of its own", warned),
-        "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
+  CHECK_MSG(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() &&
+                l.shown && l.x == 100 && l.y == 50 &&
+                logged("no room in the panel's 6144 bytes for a copy with a frame of its own", warned),
+            "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
   // all eight places taken: no slot for another
   for (int i = 4; i < ANIM_PLACES; i++)
     anim::place("ball", i, 20 * i, 10, false, 0);
   warned = log_all.size();
   anim::show("noise");
-  CHECK(!anim::find("noise") && logged("the panel shows 8 copies at most", warned),
-        "a slot taken with no place for it");
+  CHECK_MSG(!anim::find("noise") && logged("the panel shows 8 copies at most", warned),
+            "a slot taken with no place for it");
   anim::clear("");
 }
 
@@ -2067,9 +2068,9 @@ static void anim_waves_settling() {
   run(3);
   steps(100);
   int x = look(anim::find("ball")->copies[2].place).x;
-  CHECK(x == 130 && !logged("waves at most", warned), "a wave in place of one stopped: copy 2 at %d", x);
+  CHECK_MSG(x == 130 && !logged("waves at most", warned), "a wave in place of one stopped: copy 2 at %d", x);
   panel_wave_animation.execute("ball", 2, "y", 5, 5, 0, 0, 0, 0, 0, false, "none");
-  CHECK(logged("the panel runs 12 waves at most", warned), "a 13th wave");
+  CHECK_MSG(logged("the panel runs 12 waves at most", warned), "a 13th wave");
 }
 
 // Taking a copy off or clearing another while one is on its way: it goes on, and the panel has what the ESP thinks
@@ -2078,20 +2079,20 @@ static void anim_on_its_way() {
   anim::add("mid", {32, 32, 6, 100, 200, 100, 1, noise_px});
   anim::show("mid");
   run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
-  CHECK(anim::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u", pn_anim_used(),
-        (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(anim::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u", pn_anim_used(),
+            (unsigned) anim::used_by_others(nullptr));
   size_t warned = log_all.size();
   anim::remove("ball", 1);
   int r = run_until(anims_sent, 3000);
-  CHECK(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, anim::find("mid")->copies[0].place),
-        "mid sent again after a copy of ball went");
+  CHECK_MSG(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, anim::find("mid")->copies[0].place),
+            "mid sent again after a copy of ball went");
   anim::clear("mid");
   anim::show("mid");
   run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
   anim::clear("mid");
   run(5);
-  CHECK(same_pool() && !anim::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
-        pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(same_pool() && !anim::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
+            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
   anim::clear("");
   run(3);
 }
@@ -2102,11 +2103,12 @@ static void met_requests() {
   flexit_panel_time.t.timestamp = 1792409400;  // 2026-10-19 11:30 UTC, half an hour into the first forecast hour
   tz_offset_s = 7200;                          // Oslo in summer time
   // met.yaml's on_boot set it up and asked, its request waits in its task
-  CHECK(!strcmp(met::url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
-            met::timeout_ms == 4500 && met::modified.empty() && met::due() && met::fetching && tasks.size() == 1,
-        "first request: %s, If-Modified-Since '%s', %d requests", met::url, met::modified.c_str(), (int) tasks.size());
+  CHECK_MSG(!strcmp(met::url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
+                met::timeout_ms == 4500 && met::modified.empty() && met::due() && met::fetching && tasks.size() == 1,
+            "first request: %s, If-Modified-Since '%s', %d requests", met::url, met::modified.c_str(),
+            (int) tasks.size());
   network::up = false;
-  CHECK(!met::due(), "asks MET Norway while offline");
+  CHECK_MSG(!met::due(), "asks MET Norway while offline");
   network::up = true;
   // its scene and aurora options are met_scene.h's names, in their order
   bool same = panel_weather_scene.options.size() == std::size(met::GROUNDS) &&
@@ -2121,13 +2123,13 @@ static void met_requests() {
   }
   panel_weather_scene.control(0);
   panel_weather_aurora.control(0);
-  CHECK(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
-        "met.yaml's options aren't met_scene.h's names");
+  CHECK_MSG(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
+            "met.yaml's options aren't met_scene.h's names");
   met::unreachable();  // right after boot the network may not be up: try again at the next check
-  CHECK(met::backoff_s == 0 && met::due(), "backed off before MET Norway ever answered");
+  CHECK_MSG(met::backoff_s == 0 && met::due(), "backed off before MET Norway ever answered");
   for (int i = 0; i < 3; i++)
     met::unreachable();
-  CHECK(met::backoff_s == 600 && !met::due(), "kept trying without backing off");
+  CHECK_MSG(met::backoff_s == 600 && !met::due(), "kept trying without backing off");
   // the request, in a task of its own: no answer, then the forecast in 512-byte reads, then without the RAM
   auto ask = [] {
     panel_weather_fetch.execute();  // met.yaml's, every update_interval
@@ -2138,8 +2140,8 @@ static void met_requests() {
   panel_http.down = true;
   met::not_before = 0;
   ask();
-  CHECK(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
-        met_status.c_str(), (unsigned) met::backoff_s);
+  CHECK_MSG(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
+            met_status.c_str(), (unsigned) met::backoff_s);
   panel_http.down = false;
   panel_http.body = met_sample();
   panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
@@ -2148,49 +2150,51 @@ static void met_requests() {
   met::fetch();
   met::fetch();  // still running, it waits for that one
   met::poll();   // nothing yet
-  CHECK(tasks.size() == 1 && met::fetching && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
+  CHECK_MSG(tasks.size() == 1 && met::fetching && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
   run_task();
   met::poll();
-  CHECK(!met::fetching && met::weather.ok, "the answer wasn't taken from the request's task");
-  CHECK(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
-  CHECK(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
+  CHECK_MSG(!met::fetching && met::weather.ok, "the answer wasn't taken from the request's task");
+  CHECK_MSG(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
+  CHECK_MSG(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
   for (size_t block : {sizeof(met::Fetch) - 1, sizeof(met::Fetch) + 100}) {  // the request, then its task's stack
     met::not_before = 0;
     ram_block = block;
     met::fetch();
-    CHECK(met_status == "No RAM for the forecast" && met::not_before == 1792410000 && !met::fetching && tasks.empty(),
-          "without %u bytes of RAM: %s, next at %u", (unsigned) block, met_status.c_str(), (unsigned) met::not_before);
+    CHECK_MSG(
+        met_status == "No RAM for the forecast" && met::not_before == 1792410000 && !met::fetching && tasks.empty(),
+        "without %u bytes of RAM: %s, next at %u", (unsigned) block, met_status.c_str(), (unsigned) met::not_before);
   }
   ram_block = 100 * 1024;
   met::not_before = 0;
   ask();
-  CHECK(panel_http.sent.size() == 1 && panel_http.sent[0].name == "If-Modified-Since" &&
-            panel_http.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
-        "If-Modified-Since not sent with the Last-Modified we have");
-  CHECK(met::weather.ok && !strcmp(met::weather.symbol, "partlycloudy_day") && fabsf(met::weather.temp - 6.6f) < 0.01f,
-        "forecast read as %s, %.1f", met::weather.symbol, met::weather.temp);
-  CHECK(met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", met::modified.c_str());
-  CHECK(met::weather.hours == 12 && met::weather.hour[2].time == met::weather.hour[0].time + 7200, "forecast hours: %d",
-        met::weather.hours);
-  CHECK(met_status.find("partlycloudy_day") == 0, "status: %s", met_status.c_str());
+  CHECK_MSG(panel_http.sent.size() == 1 && panel_http.sent[0].name == "If-Modified-Since" &&
+                panel_http.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
+            "If-Modified-Since not sent with the Last-Modified we have");
+  CHECK_MSG(
+      met::weather.ok && !strcmp(met::weather.symbol, "partlycloudy_day") && fabsf(met::weather.temp - 6.6f) < 0.01f,
+      "forecast read as %s, %.1f", met::weather.symbol, met::weather.temp);
+  CHECK_MSG(met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", met::modified.c_str());
+  CHECK_MSG(met::weather.hours == 12 && met::weather.hour[2].time == met::weather.hour[0].time + 7200,
+            "forecast hours: %d", met::weather.hours);
+  CHECK_MSG(met_status.find("partlycloudy_day") == 0, "status: %s", met_status.c_str());
   panel_http.status = 304;  // not modified, through the task too
   met::not_before = 0;
   ask();
-  CHECK(met::weather.ok && met_status.find("partlycloudy_day") == 0 && met::not_before == 1792411200,
-        "a 304: %s, next at %u", met_status.c_str(), (unsigned) met::not_before);
+  CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && met::not_before == 1792411200,
+            "a 304: %s, next at %u", met_status.c_str(), (unsigned) met::not_before);
   panel_http.status = 200;
   // a 301 is followed, three times at most
   panel_http.location = std::string(met::url) + "&moved=1";
   panel_http.moves = 1;
   met::not_before = 0;
   ask();
-  CHECK(panel_http.url == panel_http.location && met::weather.ok && met::backoff_s == 0,
-        "after a 301: asked for %s, %s", panel_http.url.c_str(), met_status.c_str());
+  CHECK_MSG(panel_http.url == panel_http.location && met::weather.ok && met::backoff_s == 0,
+            "after a 301: asked for %s, %s", panel_http.url.c_str(), met_status.c_str());
   panel_http.moves = 9;
   met::not_before = 0;
   ask();
-  CHECK(panel_http.moves == 5 && met_status == "No forecast (HTTP 301)", "moved on and on: %d requests, '%s'",
-        9 - panel_http.moves, met_status.c_str());
+  CHECK_MSG(panel_http.moves == 5 && met_status == "No forecast (HTTP 301)", "moved on and on: %d requests, '%s'",
+            9 - panel_http.moves, met_status.c_str());
   panel_http.moves = 0;
   // A cut-off answer counts as none, wherever it's cut: the forecast and its Last-Modified stay, and it's asked
   // again in minutes
@@ -2202,10 +2206,10 @@ static void met_requests() {
       met::backoff_s = 0;
       met::not_before = 0;
       ask();
-      CHECK(met_status == "Couldn't reach MET Norway" && met::backoff_s == 600 && met::weather.hours == 12 &&
-                met::modified == "Mon, 19 Oct 2026 11:34:38 GMT",
-            "cut off after %u bytes, read() %d: '%s', back-off %u, %d hours, Last-Modified '%s'", (unsigned) cut, with,
-            met_status.c_str(), (unsigned) met::backoff_s, met::weather.hours, met::modified.c_str());
+      CHECK_MSG(met_status == "Couldn't reach MET Norway" && met::backoff_s == 600 && met::weather.hours == 12 &&
+                    met::modified == "Mon, 19 Oct 2026 11:34:38 GMT",
+                "cut off after %u bytes, read() %d: '%s', back-off %u, %d hours, Last-Modified '%s'", (unsigned) cut,
+                with, met_status.c_str(), (unsigned) met::backoff_s, met::weather.hours, met::modified.c_str());
     }
   // but the reader can have all it needs before the cut
   std::string b = met_sample();
@@ -2216,14 +2220,14 @@ static void met_requests() {
   panel_http.cut = panel_http.body.size() - 100;
   met::not_before = 0;
   ask();
-  CHECK(met::weather.hours == met::HOURS && met::modified == "Tue, 20 Oct 2026 08:00:00 GMT",
-        "cut off once it had %d hours: %d taken, '%s'", met::HOURS, met::weather.hours, met_status.c_str());
+  CHECK_MSG(met::weather.hours == met::HOURS && met::modified == "Tue, 20 Oct 2026 08:00:00 GMT",
+            "cut off once it had %d hours: %d taken, '%s'", met::HOURS, met::weather.hours, met_status.c_str());
   panel_http.cut = SIZE_MAX;
   panel_http.body = b;
   panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
   met::not_before = 0;
   ask();
-  CHECK(met::weather.hours == 12 && met::backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
+  CHECK_MSG(met::weather.hours == 12 && met::backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
 }
 
 // The reader with the answer cut anywhere, more hours than it needs, and an hour too big for its buffer
@@ -2232,18 +2236,19 @@ static void met_reading() {
   std::string b = met_sample();
   bool stopped;
   met::Weather w1 = read_met(b, 1, &stopped);
-  CHECK(!stopped && w1.hours == met::weather.hours && w1.temp == met::weather.temp && w1.cloud == met::weather.cloud &&
-            !strcmp(w1.symbol, met::weather.symbol) && w1.hour[5].time == met::weather.hour[5].time,
-        "a byte at a time: %d hours, %s", w1.hours, w1.symbol);
+  CHECK_MSG(!stopped && w1.hours == met::weather.hours && w1.temp == met::weather.temp &&
+                w1.cloud == met::weather.cloud && !strcmp(w1.symbol, met::weather.symbol) &&
+                w1.hour[5].time == met::weather.hour[5].time,
+            "a byte at a time: %d hours, %s", w1.hours, w1.symbol);
   size_t e = b.find("{\"time\""), f = b.find("{\"time\"", e + 1);
   std::string many = b.substr(0, f);
   for (int i = 0; i < 30; i++)
     many += b.substr(e, f - e);
   met::Weather w2 = read_met(many, 512, &stopped);
-  CHECK(stopped && w2.ok && w2.hours == met::HOURS, "30 hours: %d read, stopped %d", w2.hours, stopped);
+  CHECK_MSG(stopped && w2.ok && w2.hours == met::HOURS, "30 hours: %d read, stopped %d", w2.hours, stopped);
   std::string big = b.substr(0, f) + "{\"time\":\"" + std::string(5000, 'x') + "\"}," + b.substr(e, f - e);
   met::Weather w3 = read_met(big, 512, &stopped);
-  CHECK(stopped && w3.ok && w3.hours == 1, "an hour over 4 KB: %d hours, stopped %d", w3.hours, stopped);
+  CHECK_MSG(stopped && w3.ok && w3.hours == 1, "an hour over 4 KB: %d hours, stopped %d", w3.hours, stopped);
   // MET's longest symbols, and one longer still, which is cut short
   auto symbols = [&](const char *day, const char *night) {
     std::string s = b;
@@ -2263,52 +2268,54 @@ static void met_reading() {
     thunder += w4.hour[i].icon == met::I_THUNDER;
     partly += w1.hour[i].icon == met::I_PARTLY_SUN || w1.hour[i].icon == met::I_PARTLY_MOON;
   }
-  CHECK(!strcmp(w4.symbol, "lightssleetshowersandthunder_polartwilight") && thunder == partly && partly > 6 &&
-            n.thunder && n.snow && n.rain,
-        "MET's longest symbols: '%s', %d of %d hours with thunder, thunder %d snow %d rain %d", w4.symbol, thunder,
-        partly, n.thunder, n.snow, n.rain);
+  CHECK_MSG(!strcmp(w4.symbol, "lightssleetshowersandthunder_polartwilight") && thunder == partly && partly > 6 &&
+                n.thunder && n.snow && n.rain,
+            "MET's longest symbols: '%s', %d of %d hours with thunder, thunder %d snow %d rain %d", w4.symbol, thunder,
+            partly, n.thunder, n.snow, n.rain);
   met::Weather w5 = symbols("lightssleetshowersandthunder_polartwilight_and_then_some", "fog");
-  CHECK(strlen(w5.symbol) == met::SYMBOL - 1 && !strncmp(w5.symbol, "lightssleetshowersandthunder", 28) &&
-            w5.hour[0].icon == met::I_THUNDER,
-        "a symbol too long: '%s', icon %d", w5.symbol, w5.hour[0].icon);
+  CHECK_MSG(strlen(w5.symbol) == met::SYMBOL - 1 && !strncmp(w5.symbol, "lightssleetshowersandthunder", 28) &&
+                w5.hour[0].icon == met::I_THUNDER,
+            "a symbol too long: '%s', icon %d", w5.symbol, w5.hour[0].icon);
 }
 
 static void met_picture() {
   step("the weather picture");
   pic::show("weather");
-  CHECK(picture("weather", 6000) >= 0, "weather picture not shown");
+  CHECK_MSG(picture("weather", 6000) >= 0, "weather picture not shown");
   int pw, ph;
-  CHECK(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "weather picture %dx%d", pw, ph);
-  CHECK(!met::drawing && met::land, "the scene kept its RAM once the picture was made, or not the land");
-  CHECK(!memcmp(pic::S.shown.pal, met::pal, sizeof met::pal), "the picture isn't in the scene's own colours");
+  CHECK_MSG(pn_pic(&pw, &ph) == 2 && pw == 320 && ph == 240, "weather picture %dx%d", pw, ph);
+  CHECK_MSG(!met::drawing && met::land, "the scene kept its RAM once the picture was made, or not the land");
+  CHECK_MSG(!memcmp(pic::S.shown.pal, met::pal, sizeof met::pal), "the picture isn't in the scene's own colours");
   run(10);
   PanelItem wx = pitem("weather");
-  CHECK(wx.value == 66 && wx.icon == ICN_SUN && !strcmp(wx.label, "Fair") && !(wx.flags & (ITEMF_VIEW | ITEMF_MENU)),
-        "the weather now for a tile: %d, icon %d, '%s', flags 0x%02X (want 66, sun, Fair)", wx.value, wx.icon, wx.label,
-        wx.flags);
+  CHECK_MSG(
+      wx.value == 66 && wx.icon == ICN_SUN && !strcmp(wx.label, "Fair") && !(wx.flags & (ITEMF_VIEW | ITEMF_MENU)),
+      "the weather now for a tile: %d, icon %d, '%s', flags 0x%02X (want 66, sun, Fair)", wx.value, wx.icon, wx.label,
+      wx.flags);
   pn_shot(outdir, "esp_weather");
   size_t changed = log_all.size();
   uint32_t was_pal[16];
   memcpy(was_pal, met::pal, sizeof was_pal);
   flexit_panel_time.t.timestamp += 600;  // ten minutes later, the sun and the clouds have moved
   met::redraw();
-  CHECK(picture("weather, ten minutes on", 3000) >= 0, "weather picture not shown again");
-  CHECK(logged("Picture weather:", changed) && logged("pieces", changed), "not sent as changed rows");
+  CHECK_MSG(picture("weather, ten minutes on", 3000) >= 0, "weather picture not shown again");
+  CHECK_MSG(logged("Picture weather:", changed) && logged("pieces", changed), "not sent as changed rows");
   for (int k = 0; k < 16; k++)  // the colours both have kept their places
     for (int j = 0; j < 16; j++)
-      CHECK(met::pal[j] != was_pal[k] || met::pal[k] == was_pal[k] || std::count(was_pal, was_pal + 16, was_pal[k]) > 1,
-            "colour %06X moved from %d to %d", (unsigned) was_pal[k], k, j);
+      CHECK_MSG(
+          met::pal[j] != was_pal[k] || met::pal[k] == was_pal[k] || std::count(was_pal, was_pal + 16, was_pal[k]) > 1,
+          "colour %06X moved from %d to %d", (unsigned) was_pal[k], k, j);
   panel_weather_forecast.turn_on();
-  CHECK(picture("weather with the forecast", 3000) >= 0, "weather picture with the forecast not shown");
+  CHECK_MSG(picture("weather with the forecast", 3000) >= 0, "weather picture with the forecast not shown");
   pn_shot(outdir, "esp_weather_forecast");
   panel_weather_forecast.turn_off();
   ram_block = sizeof(met::Drawing) - 1;  // the scene's biggest piece
   met::redraw();
   run(20);
-  CHECK(!met::drawing && panel_picture_status.state == "weather: no RAM to draw it", "without the RAM to draw it: '%s'",
-        panel_picture_status.state.c_str());
+  CHECK_MSG(!met::drawing && panel_picture_status.state == "weather: no RAM to draw it",
+            "without the RAM to draw it: '%s'", panel_picture_status.state.c_str());
   ram_block = 100 * 1024;
-  CHECK(picture("weather, with the RAM back", 3000) >= 0 && !met::drawing, "not drawn with the RAM back");
+  CHECK_MSG(picture("weather, with the RAM back", 3000) >= 0 && !met::drawing, "not drawn with the RAM back");
 }
 
 // Refusals back off an hour, then twice as long, and an answer starts over. No answer at all is ten minutes and twice
@@ -2324,38 +2331,38 @@ static void met_answers() {
     met::fetched(f);
   };
   fetched(304, {}, "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
-  CHECK(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
-  CHECK(met::not_before == 1792414800, "the 304's Expires not kept");
+  CHECK_MSG(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
+  CHECK_MSG(met::not_before == 1792414800, "the 304's Expires not kept");
   fetched(500, {}, "");
-  CHECK(met::weather.ok && met_status.find("HTTP 500") != std::string::npos, "an error lost the forecast: %s",
-        met_status.c_str());
+  CHECK_MSG(met::weather.ok && met_status.find("HTTP 500") != std::string::npos, "an error lost the forecast: %s",
+            met_status.c_str());
   uint32_t now = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK(met::not_before == now + 3600, "no back-off after an error");
+  CHECK_MSG(met::not_before == now + 3600, "no back-off after an error");
   fetched(429, {}, "");
-  CHECK(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
+  CHECK_MSG(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
   met::unreachable();
-  CHECK(met::backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(met::backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) met::backoff_s);
   flexit_panel_time.t.timestamp += 7200;
-  CHECK(met::due(), "not due after the back-off");
+  CHECK_MSG(met::due(), "not due after the back-off");
   fetched(304, {}, "");  // without Expires, an hour
-  CHECK(met::backoff_s == 0 && met::not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
+  CHECK_MSG(met::backoff_s == 0 && met::not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
   for (uint32_t want : {600, 1200, 2400, 3600, 3600}) {
     met::unreachable();  // a short drop costs minutes, not hours
-    CHECK(met::backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
-          (unsigned) met::backoff_s, (unsigned) want);
+    CHECK_MSG(met::backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
+              (unsigned) met::backoff_s, (unsigned) want);
   }
   fetched(403, {}, "");
-  CHECK(met::backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(met::backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) met::backoff_s);
   met::weather.ok = false;
   fetched(203, sample, "");  // a deprecated product, its data is still good
-  CHECK(met::weather.ok && met::backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
+  CHECK_MSG(met::weather.ok && met::backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
   static const struct {
     const char *date;
     uint32_t t;
   } DATES[] = {{"Fri, 31 Dec 1999 23:59:59 GMT", 946684799}, {"soon", 0}, {"Mon, 19 Foo 2026 11:34:38 GMT", 0}};
   for (auto d : DATES)
-    CHECK(met::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date, (unsigned) met::http_date(d.date),
-          (unsigned) d.t);
+    CHECK_MSG(met::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date,
+              (unsigned) met::http_date(d.date), (unsigned) d.t);
 }
 
 // Through 304s and refusals the tile follows the forecast's hours, and the forecast is dropped once it runs out
@@ -2366,13 +2373,13 @@ static void met_forecast_hours() {
   time_t then = flexit_panel_time.t.timestamp;
   flexit_panel_time.t.timestamp = met::weather.hour[4].time + 1200;
   met::redraw();
-  CHECK(tile.value_ == lroundf(met::weather.hour[4].temp * 10) && met::weather.ok,
-        "4 hours on the tile shows %d, the hour has %.1f", (int) tile.value_, met::weather.hour[4].temp);
+  CHECK_MSG(tile.value_ == lroundf(met::weather.hour[4].temp * 10) && met::weather.ok,
+            "4 hours on the tile shows %d, the hour has %.1f", (int) tile.value_, met::weather.hour[4].temp);
   flexit_panel_time.t.timestamp = met::ends(met::weather);
   met::redraw();
-  CHECK(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::modified.empty() &&
-            met_status == "The forecast has run out",
-        "a forecast that ran out: ok %d, tile %d, '%s'", met::weather.ok, (int) tile.value_, met_status.c_str());
+  CHECK_MSG(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::modified.empty() &&
+                met_status == "The forecast has run out",
+            "a forecast that ran out: ok %d, tile %d, '%s'", met::weather.ok, (int) tile.value_, met_status.c_str());
   run(3);
   met::weather = was;
   flexit_panel_time.t.timestamp = then;
@@ -2386,7 +2393,7 @@ static void met_date_line() {
   flexit_panel_time.t.timestamp = 1780228800;  // 2026-05-31 12:00 UTC
   tz_offset_s = 13 * 3600;
   met::redraw();
-  CHECK(met::draw(), "the scene not drawn");
+  CHECK_MSG(met::draw(), "the scene not drawn");
   static SceneBuf want(false);
   met::build(
       want.s, met::weather, met::lat, met::lon, 1780228800, false, [](uint32_t) { return 13 * 3600; }, met::options);
@@ -2400,12 +2407,12 @@ static void met_date_line() {
     for (int x = 0; x < met::W; x++)
       same = same && want.s.pal[r1[x]] == met::drawing->scene.pal[r2[x]];
   }
-  CHECK(same, "UTC+13 drawn for the day before");
+  CHECK_MSG(same, "UTC+13 drawn for the day before");
   flexit_panel_time.t = was;
   tz_offset_s = 7200;
   met::redraw();
-  CHECK(picture("weather, back in Oslo", 3000) >= 0 && !met::drawing, "weather picture not shown again");
-  CHECK(!logged("refused a piece"), "the panel refused a piece");
+  CHECK_MSG(picture("weather, back in Oslo", 3000) >= 0 && !met::drawing, "weather picture not shown again");
+  CHECK_MSG(!logged("refused a piece"), "the panel refused a piece");
   tz_offset_s = 0;
 }
 
@@ -2445,8 +2452,8 @@ static void weather_scene() {
     for (int x = 0; x < met::W; x++)
       under_16 = under_16 && r[x] < 16;
   }
-  CHECK(s.folded && in_pal && under_16, "a flag day on the coast: %d folded, sprites' colours kept %d", s.folded,
-        in_pal);
+  CHECK_MSG(s.folded && in_pal && under_16, "a flag day on the coast: %d folded, sprites' colours kept %d", s.folded,
+            in_pal);
   // the wind blows things downwind. The picture faces south, so a wind from the east goes to the right.
   for (float from : {90.0f, 270.0f}) {
     met::Weather w = wx("lightrain", 90, 5, 8, from);
@@ -2456,8 +2463,8 @@ static void weather_scene() {
     draw(w, utc(2026, 5, 17, 10), o);
     int dir = from < 180 ? 1 : -1, flag = s.sprite[s.nsprites - 1].x - s.pole_x,
         smoke = s.sprite[0].x + s.sprite[0].w / 2 - (s.cabin_x + 9);
-    CHECK(s.slant * dir > 0 && flag * dir > 0 && smoke * dir > 0, "wind from %.0f: rain %d, flag %d, smoke %d", from,
-          s.slant, flag, smoke);
+    CHECK_MSG(s.slant * dir > 0 && flag * dir > 0 && smoke * dir > 0, "wind from %.0f: rain %d, flag %d, smoke %d",
+              from, s.slant, flag, smoke);
   }
   // the coast's trees stay put in any weather, with or without the boat
   draw(wx("fair_day", 10, 18, 3, 200), utc(2026, 7, 10, 12), {met::G_COAST});
@@ -2469,7 +2476,7 @@ static void weather_scene() {
   };
   std::vector<int16_t> trees = tree_xs();
   draw(wx("rain", 90, 12, 3, 200), utc(2026, 7, 10, 12), {met::G_COAST});
-  CHECK(trees == tree_xs(), "the coast's trees moved with the weather");
+  CHECK_MSG(trees == tree_xs(), "the coast's trees moved with the weather");
   // the flag goes up at 9 in December even before the sun is, and down at sunset. Up north it's 10 to 15.
   met::Options o{};
   met::Weather clear = wx("clearsky_day", 0, -2, 2, 200);
@@ -2478,8 +2485,8 @@ static void weather_scene() {
                  std::make_tuple(69.65, 18.96, utc(2027, 1, 21, 9, 30), 3600, true),
                  std::make_tuple(69.65, 18.96, utc(2027, 1, 21, 14, 30), 3600, false)}) {
     met::Now n(clear, o, std::get<0>(f), std::get<1>(f), std::get<2>(f), std::get<3>(f));
-    CHECK(n.flag_up == std::get<4>(f), "the flag at %.2f N at %02d local with the sun at %.1f: up %d", std::get<0>(f),
-          n.hour, n.sun.el, n.flag_up);
+    CHECK_MSG(n.flag_up == std::get<4>(f), "the flag at %.2f N at %02d local with the sun at %.1f: up %d",
+              std::get<0>(f), n.hour, n.sun.el, n.flag_up);
   }
   // the forecast's hours are labelled in the local time of each, across the end of summer time
   met::Weather w = wx("cloudy", 50, 8, 3, 200);
@@ -2487,8 +2494,8 @@ static void weather_scene() {
   for (int i = 0; i < met::HOURS; i++)
     w.hour[w.hours++] = {w.time + i * 3600u, 8, met::I_CLOUD};
   int at[4], n = met::marks(w, w.time + 1800, oslo_offset, at);
-  CHECK(n == 4 && at[0] == 2 && met::local_hour(w.hour[at[0]].time, oslo_offset) == 3 && at[1] == 5,
-        "forecast marks after the change: %d of them, the first hour %d", n, at[0]);
+  CHECK_MSG(n == 4 && at[0] == 2 && met::local_hour(w.hour[at[0]].time, oslo_offset) == 3 && at[1] == 5,
+            "forecast marks after the change: %d of them, the first hour %d", n, at[0]);
   // the lighthouse blinks every other redraw, whatever the redraw interval
   int lamps[2];
   for (uint32_t frame : {0, 1}) {
@@ -2497,15 +2504,15 @@ static void weather_scene() {
     draw(wx("clearsky_night", 0, 8, 2, 200), utc(2026, 9, 10, 21, 30), c);
     lamps[frame] = s.nsprites;
   }
-  CHECK(lamps[0] == lamps[1] + 1, "the lamp doesn't blink: %d and %d sprites", lamps[0], lamps[1]);
+  CHECK_MSG(lamps[0] == lamps[1] + 1, "the lamp doesn't blink: %d and %d sprites", lamps[0], lamps[1]);
   // the moon wraps around the edges like the sun
   draw(wx("clearsky_night", 0, 2, 2, 200), utc(2026, 10, 26, 21), {});
-  CHECK(s.moon, "no moon to wrap");
+  CHECK_MSG(s.moon, "no moon to wrap");
   s.moon_x = 2;
   s.moon_phase = 0.5f;
   uint8_t r[met::W];
   met::row(s, s.moon_y, r);
-  CHECK(r[met::W - 4] == s.ix[met::C_MOON], "the moon isn't drawn on the other edge");
+  CHECK_MSG(r[met::W - 4] == s.ix[met::C_MOON], "the moon isn't drawn on the other edge");
   // the middle clouds' end lobes are there in a narrow cloud
   int smallest = 99;
   for (int k = 0; k < 200; k++) {
@@ -2517,7 +2524,7 @@ static void weather_scene() {
         smallest = std::min<int>(smallest, s.cloud[i].e[j].rx);
     }
   }
-  CHECK(smallest >= 4, "a cloud lobe %d wide", smallest);
+  CHECK_MSG(smallest >= 4, "a cloud lobe %d wide", smallest);
   // the Christmas tree has lights on both sides
   draw(wx("cloudy", 95, -3, 2, 200), utc(2026, 12, 24, 16), {});
   int left = 0, right = 0, tree = -1;
@@ -2529,25 +2536,25 @@ static void weather_scene() {
     if (s.sprite[i].w == 2 && s.sprite[i].h == 2)
       (s.sprite[i].x < s.tree[tree].x ? left : right)++;
   printf("  Christmas lights: %d on the left, %d on the right\n", left, right);
-  CHECK(left >= 5 && right >= 5, "Christmas lights: %d on the left, %d on the right", left, right);
+  CHECK_MSG(left >= 5 && right >= 5, "Christmas lights: %d on the left, %d on the right", left, right);
 }
 
 static void picture_cleared_mid_anim() {
   step("clearing the picture while an animation is on its way");
   draw_dusk(panel_picture_dusk, 200, false);
   panel_picture.control(1);
-  CHECK(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
   panel_anim_noise.turn_on();  // big enough to take a while
   int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
-  CHECK(r >= 0, "the animation never went out");
+  CHECK_MSG(r >= 0, "the animation never went out");
   panel_picture.control(0);
   r = run_until(anim_shown, 3000);
   run(3);
-  CHECK(r >= 0 && anim_ready() && panel_pic() == 0,
-        "after clearing the picture on the animation's way: '%s', animation %d, picture %d",
-        panel_animation_status.state.c_str(), anim_ready(), panel_pic());
+  CHECK_MSG(r >= 0 && anim_ready() && panel_pic() == 0,
+            "after clearing the picture on the animation's way: '%s', animation %d, picture %d",
+            panel_animation_status.state.c_str(), anim_ready(), panel_pic());
   panel_picture.control(1);
-  CHECK(picture("dusk again", 3000) >= 0, "the picture is stuck behind the animation");
+  CHECK_MSG(picture("dusk again", 3000) >= 0, "the picture is stuck behind the animation");
 }
 
 static void end_lost() {
@@ -2564,26 +2571,26 @@ static void end_lost() {
   lose = 1;
   draw_dusk(panel_picture_dusk, 210, false);
   pic::show("dusk");
-  CHECK(picture("its answer lost", 3000) >= 0 && !lose, "the picture not sent again");
-  CHECK(pic::S.t.tries == 0, "%d tries left over for the next transfer", pic::S.t.tries);
+  CHECK_MSG(picture("its answer lost", 3000) >= 0 && !lose, "the picture not sent again");
+  CHECK_MSG(pic::S.t.tries == 0, "%d tries left over for the next transfer", pic::S.t.tries);
   lose = 1;
   panel_anim_noise.turn_off();
   panel_anim_ball.turn_on();
   int r = until_anim_status("Shown: ball");
-  CHECK(r >= 0 && !lose && same_anim("ball", 0), "the animation not sent again: %s",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && !lose && same_anim("ball", 0), "the animation not sent again: %s",
+            panel_animation_status.state.c_str());
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), r);
   lose = 3;  // gives up after three tries, tries again after a panel restart
   panel_anim_ball.turn_off();
   run(3);
   panel_anim_ball.turn_on();
   r = run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::FAILED; }, 3000);
-  CHECK(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
+            panel_animation_status.state.c_str());
   pn_restart();
   r = until_anim_status("Shown: ball");
-  CHECK(r >= 0 && anim_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && anim_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
+            panel_animation_status.state.c_str());
   h = real;
 }
 
@@ -2609,8 +2616,8 @@ static void refused() {
   turn = 1;
   draw_photo(panel_picture_dusk, 320, 240);
   pic::show("dusk");
-  CHECK(picture("a JPEG with a bad CRC", 8000) >= 0 && !turn && went() == 2 && pn_pic_format() == PIC_JPEG,
-        "a JPEG with a bad CRC: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
+  CHECK_MSG(picture("a JPEG with a bad CRC", 8000) >= 0 && !turn && went() == 2 && pn_pic_format() == PIC_JPEG,
+            "a JPEG with a bad CRC: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
   st = PIC_BAD;
   turn = 1;
   draw_photo(panel_picture_dusk, 300, 240);
@@ -2619,17 +2626,17 @@ static void refused() {
   want = "dusk: the panel didn't take it (" + bad + ")";
   run_until([&] { return panel_picture_status.state == want; }, 8000);
   run(50);
-  CHECK(!turn && went() == 1 && panel_picture_status.state == want && pic::S.phase == pic::IDLE,
-        "a JPEG the panel can't draw: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
+  CHECK_MSG(!turn && went() == 1 && panel_picture_status.state == want && pic::S.phase == pic::IDLE,
+            "a JPEG the panel can't draw: %d transfers, '%s'", went(), panel_picture_status.state.c_str());
   draw_dusk(panel_picture_dusk, 200, false);
   pic::show("dusk");
-  CHECK(picture("16 colours after a refused JPEG", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("16 colours after a refused JPEG", 6000) >= 0, "dusk not shown");
   turn = 1;
   draw_dusk(panel_picture_dusk, 215, false);
   ids = panel::transfer_ids;
   pic::show("dusk");
-  CHECK(picture("a patch the panel can't take", 6000) >= 0 && !turn && went() == 2 && pic::S.jobs.empty(),
-        "a refused patch: %d transfers", went());
+  CHECK_MSG(picture("a patch the panel can't take", 6000) >= 0 && !turn && went() == 2 && pic::S.jobs.empty(),
+            "a refused patch: %d transfers", went());
   panel_anim_ball.turn_off();
   run(3);
   turn = 1;
@@ -2638,15 +2645,15 @@ static void refused() {
   want = "ball: the panel didn't take it (" + bad + ")";
   int r = until_anim_status(want.c_str());
   run(50);
-  CHECK(r >= 0 && !turn && went() == 1 && anim::find("ball")->state == anim::FAILED,
-        "an animation the panel can't take: %d transfers, '%s'", went(), panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && !turn && went() == 1 && anim::find("ball")->state == anim::FAILED,
+            "an animation the panel can't take: %d transfers, '%s'", went(), panel_animation_status.state.c_str());
   st = PIC_BAD_CRC;
   turn = 1;
   ids = panel::transfer_ids;
   anim::show("ball");  // tried again
   r = until_anim_status("Shown: ball");
-  CHECK(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
-        went(), panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
+            went(), panel_animation_status.state.c_str());
   h = real;
 }
 
@@ -2662,13 +2669,13 @@ static void anim_while_away() {
   server->updating_ = true;  // update.cpp has the bus
   for (int k = 0; k < 20; k++)
     panel::loop();
-  CHECK(r >= 0 && !panel::link::connected && anim::W.t.pos == pos && panel::link::waiting() == queued,
-        "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (anim::W.t.pos - pos),
-        panel::link::waiting() - queued);
+  CHECK_MSG(r >= 0 && !panel::link::connected && anim::W.t.pos == pos && panel::link::waiting() == queued,
+            "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (anim::W.t.pos - pos),
+            panel::link::waiting() - queued);
   server->updating_ = false;
   r = until_anim_status("Shown: noise, drifting");
-  CHECK(r >= 0 && same_anim("noise", 0), "noise not shown once the panel was back: '%s'",
-        panel_animation_status.state.c_str());
+  CHECK_MSG(r >= 0 && same_anim("noise", 0), "noise not shown once the panel was back: '%s'",
+            panel_animation_status.state.c_str());
   panel_anim_noise.turn_off();
   panel_anim_ball.turn_on();
   until_anim_status("Shown: ball");
@@ -2679,33 +2686,33 @@ static void unknown_names() {
   pic::show("nope");
   anim::show("nope");
   run(10);
-  CHECK(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
-  CHECK(panel_picture.state == "dusk" && panel_picture_status.state.rfind("Shown: dusk", 0) == 0 && panel_pic() == 2 &&
-            panel_anim_ball.state && anim_ready(),
-        "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
-        panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
+  CHECK_MSG(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
+  CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state.rfind("Shown: dusk", 0) == 0 &&
+                panel_pic() == 2 && panel_anim_ball.state && anim_ready(),
+            "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
+            panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
   anim::clear("");  // panel_clear_animation without a name
   pic::show("");
   run(20);
-  CHECK(panel_picture.state == "None" && panel_picture_status.state == "None" && panel_pic() == 0,
-        "picture '%s' '%s' after no name", panel_picture.state.c_str(), panel_picture_status.state.c_str());
-  CHECK(!panel_anim_ball.state && panel_animation_status.state == "None" && !anim_ready(),
-        "animation %d '%s' after no name", panel_anim_ball.state, panel_animation_status.state.c_str());
+  CHECK_MSG(panel_picture.state == "None" && panel_picture_status.state == "None" && panel_pic() == 0,
+            "picture '%s' '%s' after no name", panel_picture.state.c_str(), panel_picture_status.state.c_str());
+  CHECK_MSG(!panel_anim_ball.state && panel_animation_status.state == "None" && !anim_ready(),
+            "animation %d '%s' after no name", panel_anim_ball.state, panel_animation_status.state.c_str());
   panel_picture.control(1);
-  CHECK(picture("dusk", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
   panel_picture.control(0);  // None
   run(20);
-  CHECK(panel_pic() == 0, "picture still there after clearing");
+  CHECK_MSG(panel_pic() == 0, "picture still there after clearing");
 }
 
 static void cleared_and_shown() {
   step("the same picture cleared and shown again before the loop runs");
   panel_picture.control(1);
-  CHECK(picture("dusk", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
   pic::clear();
   pic::show("dusk");
-  CHECK(picture("dusk after clear and show", 3000) >= 0, "the panel has no picture after clear and show: '%s'",
-        panel_picture_status.state.c_str());
+  CHECK_MSG(picture("dusk after clear and show", 3000) >= 0, "the panel has no picture after clear and show: '%s'",
+            panel_picture_status.state.c_str());
 }
 
 // Like online_picture.yaml's source: size() is false while a download runs or after one failed, and the pixels are
@@ -2739,13 +2746,13 @@ static void online_again() {
     asked = 0;
     pic::show("flaky");
     run(30);
-    CHECK(panel_picture_status.state.rfind("flaky:", 0) == 0 && asked > 0,
-          "while the download %s: '%s', asked for it %d times", failing ? "failed" : "ran",
-          panel_picture_status.state.c_str(), asked);
+    CHECK_MSG(panel_picture_status.state.rfind("flaky:", 0) == 0 && asked > 0,
+              "while the download %s: '%s', asked for it %d times", failing ? "failed" : "ran",
+              panel_picture_status.state.c_str(), asked);
     downloading = false;  // the download came
     pic::changed("flaky");
-    CHECK(picture(failing ? "flaky, downloaded again after a failure" : "flaky, downloaded again", 3000) >= 0,
-          "not shown after the download came");
+    CHECK_MSG(picture(failing ? "flaky, downloaded again after a failure" : "flaky, downloaded again", 3000) >= 0,
+              "not shown after the download came");
   }
 }
 
@@ -2768,8 +2775,8 @@ static void online_grew() {
   };
   pic::online["flaky"] = o;
   run(30);
-  CHECK(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state.rfind("flaky: too big", 0) == 0,
-        "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
+  CHECK_MSG(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state.rfind("flaky: too big", 0) == 0,
+            "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
   pic::online.erase("flaky");
 }
 
@@ -2779,23 +2786,23 @@ static void online_too_big() {
   panel_http.type = "image/jpeg";
   pic::show("radar");
   run(10);
-  CHECK(!panel_picture_radar.updates && panel_picture_status.state.rfind("radar: too big for the ESP", 0) == 0,
-        "a download too big for the ESP: %d tries, '%s'", panel_picture_radar.updates,
-        panel_picture_status.state.c_str());
+  CHECK_MSG(!panel_picture_radar.updates && panel_picture_status.state.rfind("radar: too big for the ESP", 0) == 0,
+            "a download too big for the ESP: %d tries, '%s'", panel_picture_radar.updates,
+            panel_picture_status.state.c_str());
   ram_free = 400 * 1024;
   ram_block = 200 * 1024;
   run(300);  // retried after 30 s
-  CHECK(panel_picture_radar.updates == 1, "%d downloads once it fits", panel_picture_radar.updates);
+  CHECK_MSG(panel_picture_radar.updates == 1, "%d downloads once it fits", panel_picture_radar.updates);
   draw_dusk(panel_picture_radar, 180, false);
   panel_picture_radar.decoding = false;
   panel_picture_radar.on_download_finished();
-  CHECK(picture("radar", 6000) >= 0, "radar not shown after its download");
+  CHECK_MSG(picture("radar", 6000) >= 0, "radar not shown after its download");
   ram_free = 200 * 1024;
   ram_block = 100 * 1024;
   ha_front_door_token.publish_state("t0k3n");
-  CHECK(panel_picture_front_door.url ==
-            "http://homeassistant.local:8123/api/camera_proxy/camera.front_door?width=320&token=t0k3n",
-        "the camera's URL with its token: %s", panel_picture_front_door.url.c_str());
+  CHECK_MSG(panel_picture_front_door.url ==
+                "http://homeassistant.local:8123/api/camera_proxy/camera.front_door?width=320&token=t0k3n",
+            "the camera's URL with its token: %s", panel_picture_front_door.url.c_str());
   panel_picture.control(0);
   run(20);
 }
@@ -2804,47 +2811,47 @@ static void online_downloads() {
   step("an online picture's downloads and refreshes");
   pic::add_online_image("webcam", webcam, cam_server, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto");
   pic::Online &o = *pic::online["webcam"];
-  CHECK(o.every == 600000 && o.pixels == 160 * 120 * 2 && o.format == "AUTO", "webcam: every %u, %u bytes, %s",
-        (unsigned) o.every, (unsigned) o.pixels, o.format.c_str());
+  CHECK_MSG(o.every == 600000 && o.pixels == 160 * 120 * 2 && o.format == "AUTO", "webcam: every %u, %u bytes, %s",
+            (unsigned) o.every, (unsigned) o.pixels, o.format.c_str());
   static const struct {
     const char *every;
     uint32_t ms;
   } EVERY[] = {{"1d", 86400000}, {"1.5h", 5400000}, {"2 min", 120000}, {"500ms", 500},
                {"30s", 30000},   {"never", 0},      {"5", 0},          {"5 parsecs", 0}};
   for (auto e : EVERY)
-    CHECK(pic::interval_ms(e.every) == e.ms, "update_interval '%s' read as %u ms, not %u", e.every,
-          (unsigned) pic::interval_ms(e.every), (unsigned) e.ms);
+    CHECK_MSG(pic::interval_ms(e.every) == e.ms, "update_interval '%s' read as %u ms, not %u", e.every,
+              (unsigned) pic::interval_ms(e.every), (unsigned) e.ms);
   auto shown = [](int max) {
     run(3);
     return run_until([] { return panel_picture_status.state.rfind("Shown: webcam", 0) == 0 && settled(); }, max);
   };
   pic::show("webcam");
   run(3);
-  CHECK(cam_server.heads == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
-        "not downloaded when shown: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
-        panel_picture_status.state.c_str());
+  CHECK_MSG(cam_server.heads == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
+            "not downloaded when shown: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+            panel_picture_status.state.c_str());
   draw_photo(webcam, 160, 120);  // the download came
   webcam.decoding = false;
   pic::changed("webcam");
-  CHECK(shown(3000) >= 0 && pn_pic_format() == PIC_JPEG, "webcam not shown as a JPEG: '%s'",
-        panel_picture_status.state.c_str());
-  CHECK(o.kept.buffer == 30000 && o.kept.decoder == 'J' && !webcam.w,
-        "download buffer %u, decoder %c, pixels %dx%d kept", (unsigned) o.kept.buffer, o.kept.decoder, webcam.w,
-        webcam.h);
+  CHECK_MSG(shown(3000) >= 0 && pn_pic_format() == PIC_JPEG, "webcam not shown as a JPEG: '%s'",
+            panel_picture_status.state.c_str());
+  CHECK_MSG(o.kept.buffer == 30000 && o.kept.decoder == 'J' && !webcam.w,
+            "download buffer %u, decoder %c, pixels %dx%d kept", (unsigned) o.kept.buffer, o.kept.decoder, webcam.w,
+            webcam.h);
 
   // the same picture downloaded again: made again, nothing sent
   size_t mark = log_all.size();
   uint8_t ids = panel::transfer_ids;
   o.fetched = millis() - o.every;
   run(1);
-  CHECK(cam_server.heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
+  CHECK_MSG(cam_server.heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
   draw_photo(webcam, 160, 120);
   webcam.decoding = false;
   pic::changed("webcam");
   bool ok = shown(3000) >= 0;
   int made = times_logged("Picture webcam: 320x240 as a JPEG", mark);
-  CHECK(ok && made == 1 && panel::transfer_ids == ids, "the same JPEG: made %d times, %d transfers", made,
-        (uint8_t) (panel::transfer_ids - ids));
+  CHECK_MSG(ok && made == 1 && panel::transfer_ids == ids, "the same JPEG: made %d times, %d transfers", made,
+            (uint8_t) (panel::transfer_ids - ids));
 
   // a failed refresh: the panel keeps the picture until the next one
   o.fetched = millis() - o.every;
@@ -2852,23 +2859,23 @@ static void online_downloads() {
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK(cam_server.heads == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
-            panel_pic() == 2,
-        "after a failed refresh: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
-        panel_picture_status.state.c_str());
+  CHECK_MSG(cam_server.heads == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
+                panel_pic() == 2,
+            "after a failed refresh: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+            panel_picture_status.state.c_str());
 
   // a failed first download: the reason stays, the next try waits
   pic::show("dusk");
-  CHECK(picture("dusk", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
   o.at = millis();
   pic::show("webcam");
   run(3);
-  CHECK(webcam.updates == 4, "webcam not downloaded");
+  CHECK_MSG(webcam.updates == 4, "webcam not downloaded");
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK(webcam.updates == 4 && panel_picture_status.state == "webcam: couldn't download it, trying again later",
-        "after a failed download: %d downloads, '%s'", webcam.updates, panel_picture_status.state.c_str());
+  CHECK_MSG(webcam.updates == 4 && panel_picture_status.state == "webcam: couldn't download it, trying again later",
+            "after a failed download: %d downloads, '%s'", webcam.updates, panel_picture_status.state.c_str());
 }
 
 // What the server says before a download
@@ -2882,44 +2889,44 @@ static void online_fits() {
     return pic::fits("webcam", o);
   };
   ram_free = 100 * 1024;
-  CHECK(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
-  CHECK(!fits(200, 40000, "image/jpeg") && pic::S.waiting.find("too big") == 0, "a bigger JPEG: '%s'",
-        pic::S.waiting.c_str());
+  CHECK_MSG(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
+  CHECK_MSG(!fits(200, 40000, "image/jpeg") && pic::S.waiting.find("too big") == 0, "a bigger JPEG: '%s'",
+            pic::S.waiting.c_str());
   ram_free = 200 * 1024;
-  CHECK(fits(200, 150000, "image/png"), "a PNG bigger than the RAM refused, it's read 4 KB at a time");
-  CHECK(!fits(200, 150000, "image/jpeg"), "a JPEG bigger than the RAM taken");
-  CHECK(!fits(200, 0, "image/jpeg") && pic::S.waiting.find("doesn't say how big") != std::string::npos,
-        "a JPEG without a size: '%s'", pic::S.waiting.c_str());
-  CHECK(fits(200, 0, "image/png"), "a PNG without a size refused");
-  CHECK(!fits(0, 0, "") && pic::S.waiting.find("couldn't reach") == 0, "no answer: '%s'", pic::S.waiting.c_str());
-  CHECK(!fits(404, 100, "text/html") && pic::S.waiting.find("404") != std::string::npos, "a 404: '%s'",
-        pic::S.waiting.c_str());
+  CHECK_MSG(fits(200, 150000, "image/png"), "a PNG bigger than the RAM refused, it's read 4 KB at a time");
+  CHECK_MSG(!fits(200, 150000, "image/jpeg"), "a JPEG bigger than the RAM taken");
+  CHECK_MSG(!fits(200, 0, "image/jpeg") && pic::S.waiting.find("doesn't say how big") != std::string::npos,
+            "a JPEG without a size: '%s'", pic::S.waiting.c_str());
+  CHECK_MSG(fits(200, 0, "image/png"), "a PNG without a size refused");
+  CHECK_MSG(!fits(0, 0, "") && pic::S.waiting.find("couldn't reach") == 0, "no answer: '%s'", pic::S.waiting.c_str());
+  CHECK_MSG(!fits(404, 100, "text/html") && pic::S.waiting.find("404") != std::string::npos, "a 404: '%s'",
+            pic::S.waiting.c_str());
   o.format = "PNG";
-  CHECK(fits(200, 150000, "image/jpeg"), "format PNG taken as a JPEG");
+  CHECK_MSG(fits(200, 150000, "image/jpeg"), "format PNG taken as a JPEG");
   o.format = "AUTO";
   // a download that doesn't start doesn't grow the buffer
   webcam.fail = true;
   cam_server.size = 40000;
   pic::download("webcam", o);
   webcam.fail = false;
-  CHECK(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
+  CHECK_MSG(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
   pic::download("webcam", o);
   int updates = webcam.updates, asked = cam_server.heads;
   cam_server.size = 50000;
   pic::download("webcam", o);  // while that one still runs
   webcam.decoding = false;
-  CHECK(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
-        "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
-        webcam.updates - updates + 1, cam_server.heads - asked + 1);
+  CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
+            "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
+            webcam.updates - updates + 1, cam_server.heads - asked + 1);
   // the first PNG needs room for its decoder too
   ram_free = 120 * 1024;
-  CHECK(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
+  CHECK_MSG(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
   ram_free = 200 * 1024;
   cam_server.type = "image/png";
   pic::download("webcam", o);
   webcam.decoding = false;
   ram_free = 120 * 1024;
-  CHECK(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
+  CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
   ram_free = 200 * 1024;
   cam_server.code = 200;
   cam_server.size = 30000;
@@ -2932,8 +2939,8 @@ static void online_picked() {
   draw_flat(webcam);
   pic::show("webcam");
   online_pick_after = 1000;
-  CHECK(picture("dusk, picked while webcam was being made", 6000) >= 0 && !webcam.w && !online_pick_after,
-        "webcam's pixels kept: %dx%d", webcam.w, webcam.h);
+  CHECK_MSG(picture("dusk, picked while webcam was being made", 6000) >= 0 && !webcam.w && !online_pick_after,
+            "webcam's pixels kept: %dx%d", webcam.w, webcam.h);
 }
 
 static void picture_no_ram() {
@@ -2947,7 +2954,7 @@ static void picture_no_ram() {
   ram_free = 30 * 1024;  // not even for counting its colours
   draw_dusk(panel_picture_dusk, 215, false);
   pic::show("dusk");
-  CHECK(no_ram(), "too little RAM to count: '%s', phase %d", panel_picture_status.state.c_str(), pic::S.phase);
+  CHECK_MSG(no_ram(), "too little RAM to count: '%s', phase %d", panel_picture_status.state.c_str(), pic::S.phase);
   // Enough to count its colours, then the ESP has less: for 16 colours, not a JPEG
   ram_free = 40 * 1024;
   auto pixel = dusk.pixel;
@@ -2962,33 +2969,34 @@ static void picture_no_ram() {
       panel_picture_dusk.px[(size_t) y * 320 + x] = (uint32_t) (x / 20 * 17) << 16;
   size_t no_jpeg = log_all.size();
   pic::show("dusk");
-  CHECK(picture("dusk without the RAM for a JPEG", 6000) >= 0 && pn_pic_format() == PIC_PALETTE &&
-            logged("no RAM for a JPEG", no_jpeg),
-        "dusk not shown as 16 colours");
+  CHECK_MSG(picture("dusk without the RAM for a JPEG", 6000) >= 0 && pn_pic_format() == PIC_PALETTE &&
+                logged("no RAM for a JPEG", no_jpeg),
+            "dusk not shown as 16 colours");
   ram_free = 40 * 1024;
   reads = 0;
   draw_photo(panel_picture_dusk, 320, 240);  // too detailed for 16 colours
   pic::show("dusk");
-  CHECK(no_ram(), "a photo without the RAM for a JPEG: '%s', phase %d", panel_picture_status.state.c_str(),
-        pic::S.phase);
+  CHECK_MSG(no_ram(), "a photo without the RAM for a JPEG: '%s', phase %d", panel_picture_status.state.c_str(),
+            pic::S.phase);
   dusk.pixel = pixel;
   ram_free = 200 * 1024;
   draw_dusk(panel_picture_dusk, 215, false);
   pic::show("dusk");
-  CHECK(picture("dusk with the RAM back", 6000) >= 0, "dusk not shown");
+  CHECK_MSG(picture("dusk with the RAM back", 6000) >= 0, "dusk not shown");
 }
 
 static void actions_kept() {
   step("the actions are kept for after a restart, like the selects");
   pic::clear();
   run(3);
-  CHECK(panel_picture.saved == "None", "clear: '%s' kept", panel_picture.saved.c_str());
+  CHECK_MSG(panel_picture.saved == "None", "clear: '%s' kept", panel_picture.saved.c_str());
   pic::show("dusk");
-  CHECK(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept", panel_picture.saved.c_str());
+  CHECK_MSG(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept",
+            panel_picture.saved.c_str());
   anim::show("ball");
-  CHECK(panel_anim_ball.state, "animation: the switch isn't on");
+  CHECK_MSG(panel_anim_ball.state, "animation: the switch isn't on");
   panel_clear_animation.execute("");
-  CHECK(!panel_anim_ball.state, "animation cleared: the switch is still on");
+  CHECK_MSG(!panel_anim_ball.state, "animation cleared: the switch is still on");
   run(10);
 }
 
@@ -2999,11 +3007,12 @@ static void number_late() {
   temperature.set_action = [](float v) { set_to = v; };
   pn_set(value_key("temperature"), 230);
   run(20);  // 2.2 s, nothing from the entity yet
-  CHECK(set_to == 23.0f && pitem("temperature").value == 230, "the panel shows %d after setting 23.0, entity got %g",
-        pitem("temperature").value, set_to);
+  CHECK_MSG(set_to == 23.0f && pitem("temperature").value == 230,
+            "the panel shows %d after setting 23.0, entity got %g", pitem("temperature").value, set_to);
   temperature.publish_state(23.0f);
   run(40);
-  CHECK(pitem("temperature").value == 230, "the panel shows %d once the entity answered", pitem("temperature").value);
+  CHECK_MSG(pitem("temperature").value == 230, "the panel shows %d once the entity answered",
+            pitem("temperature").value);
   temperature.optimistic = true;
   temperature.set_action = nullptr;
 }
@@ -3022,22 +3031,22 @@ static void esp_restart_newer_setting() {
     run(1);
     english += !strcmp(pitem("fireplace").label, "Fireplace");
   }
-  CHECK(!english && !strcmp(pitem("fireplace").label, "Peis"), "in English for %d cycles after the hello, then '%s'",
-        english, pitem("fireplace").label);
-  CHECK(pn_reg(0x00D) == 160, "the ESP's hello put its old supply min %d on the panel", pn_reg(0x00D));
+  CHECK_MSG(!english && !strcmp(pitem("fireplace").label, "Peis"),
+            "in English for %d cycles after the hello, then '%s'", english, pitem("fireplace").label);
+  CHECK_MSG(pn_reg(0x00D) == 160, "the ESP's hello put its old supply min %d on the panel", pn_reg(0x00D));
   int c = restart_panel();  // the panel asks, and keeps its copy over the ESP's flash one
   run(15);
-  CHECK(c >= 0 && pn_reg(0x00D) == 160, "the panel restarted and took the ESP's old supply min %d", pn_reg(0x00D));
+  CHECK_MSG(c >= 0 && pn_reg(0x00D) == 160, "the panel restarted and took the ESP's old supply min %d", pn_reg(0x00D));
   int supply_max = pn_reg(0x00E) + 10;
   server->setting(0x00E, (uint16_t) supply_max);  // changed on another panel while this one restarts
   c = restart_panel();
   run(15);
-  CHECK(c >= 0 && pn_reg(0x00E) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
-        pn_reg(0x00E), supply_max);
+  CHECK_MSG(c >= 0 && pn_reg(0x00E) == supply_max, "the panel restarted and has supply max %d, the ESP saw %d",
+            pn_reg(0x00E), supply_max);
   server->setting(0x0B5, 75);  // a regulator value, which has no link key: only the register goes
   c = restart_panel();
   run(15);
-  CHECK(c >= 0 && pn_reg(0x0B5) == 75, "the panel restarted and has heating K %d, the ESP saw 75", pn_reg(0x0B5));
+  CHECK_MSG(c >= 0 && pn_reg(0x0B5) == 75, "the panel restarted and has heating K %d, the ESP saw 75", pn_reg(0x0B5));
 }
 
 static void notes_while_away() {
@@ -3046,29 +3055,30 @@ static void notes_while_away() {
   pn_note(&icon, &level, &fresh);
   link_lost_frames = 1000;  // gone
   run(300);
-  CHECK(!panel::link::connected, "the panel's still connected");
+  CHECK_MSG(!panel::link::connected, "the panel's still connected");
   panel::notify("Door open", "door", "warning");
   run(10);
-  CHECK(!panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
+  CHECK_MSG(!panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
   // nothing made for it meanwhile
   anim::clear("");
   pic::show("weather");
   panel_anim_ball.turn_on();
   run(50);
-  CHECK(pic::S.phase == pic::START && !met::drawing && anim::W.phase == anim::IDLE &&
-            panel_picture_status.state == "weather: waiting for the panel",
-        "made for a panel that's away: '%s', '%s'", panel_picture_status.state.c_str(),
-        panel_animation_status.state.c_str());
+  CHECK_MSG(pic::S.phase == pic::START && !met::drawing && anim::W.phase == anim::IDLE &&
+                panel_picture_status.state == "weather: waiting for the panel",
+            "made for a panel that's away: '%s', '%s'", panel_picture_status.state.c_str(),
+            panel_animation_status.state.c_str());
   link_lost_frames = 0;
   restart_panel();
   const char *away = pn_note(&icon, &level, &fresh);
-  CHECK(fresh && !strcmp(away, "Door open") && panel::note.empty(), "note while away: '%s', fresh %d", away, fresh);
-  CHECK(picture("weather, the panel back", 6000) >= 0 && anim::find("ball") && anim::find("ball")->state == anim::SENT,
-        "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(fresh && !strcmp(away, "Door open") && panel::note.empty(), "note while away: '%s', fresh %d", away, fresh);
+  CHECK_MSG(
+      picture("weather, the panel back", 6000) >= 0 && anim::find("ball") && anim::find("ball")->state == anim::SENT,
+      "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
   panel::notify("Washer done", "washer", "info");
   restart_panel();  // before it went out
   const char *restart = pn_note(&icon, &level, &fresh);
-  CHECK(fresh && !strcmp(restart, "Washer done"), "note during a restart: '%s', fresh %d", restart, fresh);
+  CHECK_MSG(fresh && !strcmp(restart, "Washer done"), "note during a restart: '%s', fresh %d", restart, fresh);
 }
 
 static void bootloader_away() {
@@ -3085,16 +3095,16 @@ static void bootloader_away() {
   bool making = anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE;
   server->updating_ = true;  // update.h has the bus
   panel::loop();
-  CHECK(making && !panel::link::connected && anim::W.phase == anim::IDLE && anim::find("slow")->state == anim::WANT &&
-            anim::find("slow")->data.empty(),
-        "still made for a panel in its bootloader: making %d, connected %d, phase %d", making, panel::link::connected,
-        anim::W.phase);
+  CHECK_MSG(making && !panel::link::connected && anim::W.phase == anim::IDLE &&
+                anim::find("slow")->state == anim::WANT && anim::find("slow")->data.empty(),
+            "still made for a panel in its bootloader: making %d, connected %d, phase %d", making,
+            panel::link::connected, anim::W.phase);
   run(50);
-  CHECK(anim::W.phase == anim::IDLE, "made again while in its bootloader: phase %d", anim::W.phase);
+  CHECK_MSG(anim::W.phase == anim::IDLE, "made again while in its bootloader: phase %d", anim::W.phase);
   server->updating_ = false;
   restart_panel();  // the new firmware
-  CHECK(run_until([] { return anim::find("slow")->state == anim::SENT && settled(); }, 3000) >= 0,
-        "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(run_until([] { return anim::find("slow")->state == anim::SENT && settled(); }, 3000) >= 0,
+            "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
 }
 
 static void settings_flash() {
@@ -3104,22 +3114,22 @@ static void settings_flash() {
   run_until(settled, 300);
   panel::settings::save();  // update.h, before it flashes
   int r = run_until([] { return panel::settings::saved() && settled(); }, 300);
-  CHECK(r >= 0 && panel::settings::all && panel::settings::records.size() > 20 && logged("Saved the panel's"),
-        "the panel's settings: %d records after %d cycles", (int) panel::settings::records.size(), r);
+  CHECK_MSG(r >= 0 && panel::settings::all && panel::settings::records.size() > 20 && logged("Saved the panel's"),
+            "the panel's settings: %d records after %d cycles", (int) panel::settings::records.size(), r);
   panel::settings::flashed();
   size_t sent = log_all.size();
   pn_reboot(1);  // the flash erased them
-  CHECK(pn_get(K_THEME) == 0, "theme %d after the flash", pn_get(K_THEME));
+  CHECK_MSG(pn_get(K_THEME) == 0, "theme %d after the flash", pn_get(K_THEME));
   r = run_until([] { return pn_get(K_THEME) == 2 && pn_get(K_SCREENSAVER) == 3 && settled(); }, 300);
-  CHECK(r >= 0 && logged("started without settings, sending its", sent),
-        "not back after the flash: theme %d, screensaver %d", pn_get(K_THEME), pn_get(K_SCREENSAVER));
+  CHECK_MSG(r >= 0 && logged("started without settings, sending its", sent),
+            "not back after the flash: theme %d, screensaver %d", pn_get(K_THEME), pn_get(K_SCREENSAVER));
   pn_reboot(0);  // the restart it does to take them, saved
   run_until([] { return pn_online() && settled(); }, 300);
-  CHECK(!panel::settings::restore && panel::settings::records.empty() && logged("back with its settings", sent),
-        "the ESP kept the panel's settings once it had them");
+  CHECK_MSG(!panel::settings::restore && panel::settings::records.empty() && logged("back with its settings", sent),
+            "the ESP kept the panel's settings once it had them");
   pn_reboot(1);  // erased without our flash, nothing to send
   run_until([] { return pn_online() && settled(); }, 300);
-  CHECK(pn_get(K_THEME) == 0, "theme %d from nowhere", pn_get(K_THEME));
+  CHECK_MSG(pn_get(K_THEME) == 0, "theme %d from nowhere", pn_get(K_THEME));
   pn_reboot(0);
   run_until([] { return pn_online() && settled(); }, 300);
 }
@@ -3131,10 +3141,10 @@ static void item_icon_typo() {
   panel::Item("typo", ITEM_SENSOR).view(false).menu(false).icon("nope").add();
   run(3);
   restart_panel();
-  CHECK(pitem("typo").icon == ICN_CIRCLE && times_logged("No icon called 'nope'", at) == 1 &&
-            panel::icon("Fire") == ICN_FIRE,
-        "an icon called 'nope': %d on the panel, warned %d times", pitem("typo").icon,
-        times_logged("No icon called 'nope'", at));
+  CHECK_MSG(pitem("typo").icon == ICN_CIRCLE && times_logged("No icon called 'nope'", at) == 1 &&
+                panel::icon("Fire") == ICN_FIRE,
+            "an icon called 'nope': %d on the panel, warned %d times", pitem("typo").icon,
+            times_logged("No icon called 'nope'", at));
 }
 
 int main(int argc, char **argv) {
@@ -3224,6 +3234,6 @@ int main(int argc, char **argv) {
   bootloader_away();
   settings_flash();
   item_icon_typo();
-  printf("\n%d checks, %d failed\n", checks, fails);
-  return fails ? 1 : 0;
+  printf("\n%d checks, %d failed\n", check_count, check_fails);
+  return check_fails ? 1 : 0;
 }

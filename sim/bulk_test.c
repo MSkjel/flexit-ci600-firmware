@@ -1,11 +1,14 @@
 // The ESP link on a simulated bus, with the CX60's schedule as its firmware runs it. Fails if a link frame
-// ever overlaps the CX60, the CX60 gets more than 256 bytes at once, or a picture arrives damaged.
-//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2]
+// ever overlaps the CX60, the CX60 gets more than 256 bytes at once, a picture arrives damaged, or the panel
+// refuses the link and refused isn't 1.
+//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2] [refused]
 #include "bus.h"
 #include "link.h"
 #include "mbserver.h"
 #include "pbulk.h"
 #include "plink.h"
+#include "check.h"
+#include "cx60.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -525,6 +528,10 @@ static struct {
   ns_t link_end;             // when its last link frame was out
 } E;
 static pbus_gaps_t EG;  // the gaps, as the ESP sees them
+// how long after the panel refuses the link or the gaps the ESP asks again, like panel_link.h
+#define ASK_AGAIN (60 * 1000 * MS)
+static ns_t refused_at;
+static long retries;
 
 static void esp_rx(uint8_t c) {
   int id = (int) (E.next % NB);
@@ -621,7 +628,10 @@ static void esp_frame(const uint8_t *f, int n) {
   }
   E.status_last = false;
   if (n >= 3 && f[0] == PBULK_ADDR && f[1] == PBULK_FC_ANSWER) {
+    bool refused = ETX.refused, no_gaps = ETX.no_gaps;
     pbulk_esp_answer(&ETX, f, n, esp_got, NULL);
+    if ((ETX.refused && !refused) || (ETX.no_gaps && !no_gaps))
+      refused_at = now;
     return;
   }
   if (n == 8 && f[0] == 1 && (f[1] == 1 || f[1] == 3)) {
@@ -710,6 +720,10 @@ static void esp(void) {
     E.replied = true;
   } else if (E.status_new && E.status_last && !E.replied_before) {  // the status window, in the component's loop()
     E.windows++;
+    if ((ETX.refused || ETX.no_gaps) && now - refused_at > ASK_AGAIN) {
+      pbulk_esp_retry(&ETX);
+      retries++;
+    }
     // panel_link.h's window(), run right after the end of the status frame was read. One frame every cycle,
     // with messages or as a poll.
     ns_t wait = pbus_wait_us(0) * US;
@@ -823,10 +837,8 @@ int main(int argc, char **argv) {
   rnd_state = argc > 3 ? (uint32_t) atoi(argv[3]) : 1;
   esp_threshold = argc > 4 ? atoi(argv[4]) : 1;
   PRESENT[2] = argc > 5 ? atoi(argv[5]) : 0;
-  memcpy(STATUS, PBUS_STATUS_HEAD, sizeof PBUS_STATUS_HEAD);
-  for (int i = sizeof PBUS_STATUS_HEAD; i < PBUS_STATUS_LEN - 2; i++)
-    STATUS[i] = (uint8_t) i;
-  pbus_put_crc(STATUS, PBUS_STATUS_LEN - 2);
+  bool refused_ok = argc > 6 && atoi(argv[6]);
+  cx60_status(STATUS);
 
   C.io_c = 10;
   C.ctl_c = 1000;
@@ -861,8 +873,11 @@ int main(int argc, char **argv) {
   printf("  CX60: %ld status broadcasts, longest burst it was handed %ld bytes, %ld overflows\n", C.status_n, C.longest,
          C.overflows);
   printf("  CX60 quiet after a status frame, shortest the panel saw: %.1f ms\n", PBUS.quiet_min_us / 1000.0);
-  printf("  ESP: %ld windows, %u frames with messages, %u polls, %u answered, %u missed, %u too short%s\n", E.windows,
-         ETX.frames, ETX.polls, ETX.answered, ETX.missed, ETX.short_windows, ETX.refused ? ", refused" : "");
+  printf("  ESP: %ld windows, %u frames with messages, %u polls, %u answered, %u missed, %u too short", E.windows,
+         ETX.frames, ETX.polls, ETX.answered, ETX.missed, ETX.short_windows);
+  if (retries)
+    printf(", asked again %ld times", retries);
+  printf("%s\n", ETX.refused ? ", refused" : "");
   printf("  panel: %u frames, %u busy, %u late, %u refused; it said %u, the ESP heard %u (%u wrong)\n", PRX.frames,
          PRX.busy, PRX.late, PRX.refused, panel_said, esp_heard, esp_heard_wrong);
   printf("  gaps after polls: the ESP saw %u (the panel %u) and sent %ld frames in them, the panel answered %ld%s%s\n",
@@ -880,12 +895,23 @@ int main(int argc, char **argv) {
   printf("  collisions: %ld of the link with the CX60, %ld answers lost to the ESP's driver staying on,\n"
          "              %ld without the link (the ESP answering the CX60 after it gave up)\n",
          BUS.cx60_hit, BUS.answers_hit, BUS.collisions - BUS.cx60_hit - BUS.answers_hit);
+  CHECK_MSG(!BUS.cx60_hit, "the link ran into the CX60 %ld times", BUS.cx60_hit);
+  CHECK_MSG(!C.overflows, "the CX60 was handed more than 256 bytes %ld times", C.overflows);
+  CHECK_MSG(!PW.overruns, "the panel lost %ld bytes while busy with a status frame", PW.overruns);
+  CHECK_MSG(worst_end <= PBUS_END_MAX_US * US, "the link was still on the bus %.2f ms after the status frame",
+            worst_end / 1e6);
   // The gaps go off when the CX60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
   // busy that long at a step. So they only have to stay on with control_tick <= 2.5 ms.
-  bool ok = !BUS.cx60_hit && !C.overflows && !PW.overruns && worst_end <= PBUS_END_MAX_US * US &&
-            (ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off)) && !pics_bad && !esp_heard_wrong &&
-            panel_said - esp_heard < 20 && (ETX.refused || pics_ok > 0) && refused_long &&
-            (ETX.refused || help_wait < HELP_WAIT_MAX);
-  printf("%s\n", ok ? "OK" : "FAILED");
-  return ok ? 0 : 1;
+  CHECK_MSG(ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off), "the gaps after polls went off");
+  CHECK_MSG(!pics_bad, "%ld pictures damaged", pics_bad);
+  CHECK_MSG(!esp_heard_wrong, "the ESP heard %u of the panel's messages wrong", esp_heard_wrong);
+  CHECK_MSG(panel_said - esp_heard < 20, "the panel said %u, the ESP heard %u", panel_said, esp_heard);
+  CHECK_MSG(refused_long, "a help text one byte too long was taken");
+  // Where the panel may refuse the link and does, nothing has to get through
+  CHECK_MSG(refused_ok || !PRX.refused, "the panel refused %u frames", PRX.refused);
+  bool excused = refused_ok && PRX.refused;
+  CHECK_MSG(excused || pics_ok > 0, "no picture arrived");
+  CHECK_MSG(excused || help_wait < HELP_WAIT_MAX, "a help text waited %.1f s", help_wait / 1e9);
+  printf("%s\n", check_fails ? "FAILED" : "OK");
+  return check_fails != 0;
 }

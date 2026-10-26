@@ -15,11 +15,11 @@ static void live_days() {
   show({"Christmas Eve", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_MOUNTAINS, 0, 50, 1, 78.22,
         15.65},
        "svalbard", true);
-  CHECK(!live::R.flag, "Christmas Eve on Svalbard: the flag animated");
+  CHECK_MSG(!live::R.flag, "Christmas Eve on Svalbard: the flag animated");
   show({"Christmas Eve in town", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_CITY, 0, 50, 1,
         78.22, 15.65},
        "svalbard", true);
-  CHECK(live::R.flag, "Christmas Eve in town on Svalbard: no flag, though there's room");
+  CHECK_MSG(live::R.flag, "Christmas Eve in town on Svalbard: no flag, though there's room");
   show({"Christmas Eve in town", "clearsky_night", 0, 0, 0, 0, 2, -4, 0, utc(2025, 12, 24, 17), met::G_CITY, 0, 60, 4},
        "city", true);
   // New Year's Eve: now and then in the evening, a rocket every few seconds at midnight
@@ -41,14 +41,14 @@ static void live_days() {
        true);
   show({"Easter", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 3, 11), met::G_CITY, 0, 40, 2}, "city", true);
   show({"Easter", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 5, 12), met::G_HILLS, 0, 60, 6}, "hills", true);
-  CHECK(live::R.flag, "Easter Sunday without the flag");
+  CHECK_MSG(live::R.flag, "Easter Sunday without the flag");
   // 17 May, with the flag: the parade and a balloon
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_COAST, 0, 40, 2}, "coast", true);
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_CITY, 0, 40, 2}, "city", true);
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_MOUNTAINS, 0, 40, 2}, "mountains",
        true);
   show({"17 May", "clearsky_day", 0, 0, 0, 0, 3, 16, 0, utc(2026, 5, 17, 12), met::G_HILLS, 0, 70, 6}, "hills", true);
-  CHECK(live::R.flag, "17 May without the flag");
+  CHECK_MSG(live::R.flag, "17 May without the flag");
   // Sankthans, the evening of 23 June
   show({"Sankthans", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 6, 23, 20, 30), met::G_COAST, 0, 30, 1}, "coast");
   show({"Sankthans", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 6, 23, 20, 30), met::G_CITY, 0, 30, 1}, "city");
