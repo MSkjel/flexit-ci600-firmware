@@ -5,7 +5,7 @@
 
 DUMP is a stock CI600 flash dump (default $FLEXIT_STOCK). Without FXUP the stream is built from BIN
 (default hw/build/ci600.bin). --echo acts like an adapter that hears its own frames. Exits 0 if the flash matches
-and 1 on any failure. Without a dump the test is skipped and exits 0, unless --require is given.
+and 1 on any failure.
 """
 
 import argparse
@@ -22,7 +22,7 @@ import mkupdate
 try:
     from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_MCLASS, UC_MODE_THUMB, Uc
     from unicorn import arm_const as arm
-except ImportError:  # main() complains, but only once there's a dump to run
+except ImportError:  # main() says so
     Uc = None
 
 FLASH, FLASH_SZ = layout.BASE, layout.SIZE
@@ -126,7 +126,7 @@ class Boot:
         self.ctx = self._save()  # CPU state at LOOP_TOP, each frame resumes from here
         return self.state()
 
-    def deliver(self, frame, run_cap=60_000_000, trace=False):
+    def deliver(self, frame, trace=False):
         """Feed one frame through the loader's IRQ handler, run the main loop until the state settles, and
         return the loader's reply bytes."""
         uc = self.uc
@@ -174,7 +174,7 @@ class Boot:
                 uc.emu_stop()
 
         h = uc.hook_add(UC_HOOK_CODE, hook, begin=LOOP_TOP, end=LOOP_TOP)
-        uc.emu_start(uc.reg_read(arm.UC_ARM_REG_PC) | 1, 0, count=run_cap)
+        uc.emu_start(uc.reg_read(arm.UC_ARM_REG_PC) | 1, 0, count=60_000_000)
         uc.hook_del(h)
         self.ctx = self._save()
         return reply
@@ -202,11 +202,8 @@ class EmuBus:
         self.reply = (f if self.echoes else b"") + reply
 
     def read_reply(self, timeout=0.5):
-        rest = fx.skip_echo(self, self.reply)
-        f = fx.find_reply(rest) if rest is not None else None
+        f = fx.reply_in(self, self.reply)
         self.reply = b""
-        if f and self.verbose:
-            print("  < " + f.hex())
         return f
 
     def pause(self, seconds):
@@ -218,22 +215,15 @@ def main(argv):
     ap.add_argument("fxup", nargs="?", help="the update stream (default: built from --app)")
     ap.add_argument("--stock", default=os.environ.get("FLEXIT_STOCK"), help="stock CI600 dump ($FLEXIT_STOCK)")
     ap.add_argument("--app", type=Path, default=layout.ROOT / "hw" / "build" / "ci600.bin", help="application image")
-    ap.add_argument("--require", action="store_true", help="fail instead of skipping when there is no dump")
     ap.add_argument("--echo", action="store_true", help="the adapter hears its own frames, as some do")
     ap.add_argument("-v", "--verbose", action="store_true", help="log frames and the first piece's dispatch")
     a = ap.parse_args(argv)
 
     if not a.stock:
-        if a.require:
-            sys.exit("no stock dump: give --stock or set FLEXIT_STOCK")
-        print("skipped: no stock dump (give --stock or set FLEXIT_STOCK)")
-        return 0
+        ap.error("no stock dump: give --stock or set FLEXIT_STOCK")
     if not Path(a.stock).is_file():
         sys.exit("no such file: %s" % a.stock)
-    img = Path(a.stock).read_bytes()
-    key = img[mkupdate.KEY_AT : mkupdate.KEY_AT + 32]
-    if not mkupdate.is_key(key):
-        sys.exit("%s is not a stock CI600 dump (no update key at 0x%x)" % (a.stock, mkupdate.KEY_AT))
+    key = mkupdate.key_from(a.stock)
     if Uc is None or importlib.util.find_spec("cryptography") is None:
         sys.exit("needs unicorn and cryptography: uv run --with unicorn --with cryptography tools/blemu.py ...")
     if a.fxup:
@@ -244,7 +234,7 @@ def main(argv):
         except (OSError, ValueError) as e:
             sys.exit("can't build a stream from %s: %s" % (a.app, e))
 
-    boot = Boot(img)
+    boot = Boot(Path(a.stock).read_bytes())
     print("booted: state %d" % boot.boot_to_loop())
     try:
         fx.flash(EmuBus(boot, a.verbose, a.echo), stream)
@@ -253,8 +243,7 @@ def main(argv):
         return 1
 
     try:
-        name, guard, blob = mkupdate.parse(stream)
-        image = mkupdate.decrypt(key, blob, name, guard)
+        image = mkupdate.decrypt(key, stream)
     except Exception as e:  # the loader accepted a stream we can't decrypt, also a failure
         print("FAILED: can't decrypt the stream to compare (%r)" % e)
         return 1

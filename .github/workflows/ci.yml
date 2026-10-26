@@ -1,8 +1,18 @@
 name: CI
 on:
   push:
+    branches: [main, dev]  # not tags, release.yml runs this for those. Other branches get it from their pull request.
   pull_request:
   workflow_call:
+
+permissions:
+  contents: read
+
+# A new push cancels the older run on its branch or pull request, never a tag's. Under release.yml github.workflow
+# is "release", so those runs have a group of their own.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   ESP_REF: panel  # the esphome-flexit-modbus-server branch the link is tested against
@@ -16,15 +26,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: pip install clang-format==23.1.3 ruff==0.17.1
-      - run: clang-format --dry-run --Werror $(git ls-files '*.c' '*.h' '*.cpp')
-      - run: ruff format --check
-      - run: ruff check
+      - run: make format-check
 
+  # Its ci600.bin and ci600.fxup are what release.yml publishes
   firmware:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
+      HAS_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY != '' }}  # pull requests from forks don't get the secret
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,17 +46,33 @@ jobs:
         with:
           key: firmware
       - run: make -C hw
+      - if: env.HAS_FXUP_KEY == 'true'
+        run: pip install cryptography==50.0.2 cffi==2.1.1 pycparser==3.0
+      # Only this step gets the key
       - name: The update stream, built and read back
-        if: env.CI600_FXUP_KEY != ''  # pull requests from forks don't get the secret
+        if: env.HAS_FXUP_KEY == 'true'
+        env:
+          CI600_FXUP_KEY: ${{ secrets.CI600_FXUP_KEY }}  # the bootloader's key, see tools/mkupdate.py
         run: |
-          pip install cryptography
           python3 tools/mkupdate.py hw/build/ci600.bin hw/build/ci600.fxup
           python3 tools/mkupdate.py --verify hw/build/ci600.fxup hw/build/ci600.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci600-firmware
+          path: |
+            hw/build/ci600.bin
+            hw/build/ci600.fxup
       - run: ccache --show-stats
 
+  # make check, and again with ASan and UBSan. The plain run makes the gallery for the screens job.
   test:
+    name: ${{ matrix.san && 'sanitizers' || 'test' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        san: ["", "1"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,40 +86,18 @@ jobs:
       - uses: ./.github/actions/apt
         with:
           packages: gcc-multilib g++-multilib ccache
-      - run: pip install pyyaml pillow
+      - run: pip install pyyaml==6.0.3 pillow==13.0.0
       - uses: ./.github/actions/ccache
         with:
-          key: test
-      - run: make -C sim check ESP_REPO=$GITHUB_WORKSPACE/esp
-      - run: make -C sim gallery ESP_REPO=$GITHUB_WORKSPACE/esp
-      - uses: actions/upload-artifact@v7
+          key: ${{ matrix.san && 'sanitizers' || 'test' }}
+      - run: make -C sim check SAN=${{ matrix.san }} ESP_REPO=$GITHUB_WORKSPACE/esp
+      - if: matrix.san == ''
+        run: make -C sim gallery ESP_REPO=$GITHUB_WORKSPACE/esp
+      - if: matrix.san == ''
+        uses: actions/upload-artifact@v7
         with:
           name: screens
           path: sim/build/out/gallery
-      - run: ccache --show-stats
-
-  # The same checks with ASan and UBSan, alongside test
-  sanitizers:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # the tags, for the version
-      - run: git submodule update --init --depth 1
-      - uses: actions/checkout@v7
-        with:
-          repository: MSkjel/esphome-flexit-modbus-server
-          ref: ${{ env.ESP_REF }}
-          path: esp
-      - uses: ./.github/actions/apt
-        with:
-          packages: gcc-multilib g++-multilib ccache
-      - run: pip install pyyaml pillow
-      - uses: ./.github/actions/ccache
-        with:
-          key: sanitizers
-      - run: make -C sim check SAN=1 ESP_REPO=$GITHUB_WORKSPACE/esp
       - run: ccache --show-stats
 
   # Pushes the test job's gallery as the only commit on the screens branch, where the README gets its screens

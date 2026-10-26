@@ -10,9 +10,8 @@ import os
 import subprocess
 import sys
 
-from fontTools.ttLib import TTFont
+from layout import ROOT
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONV = "lv_font_conv@1.5.3"
 NOTO = os.environ.get("NOTO_DIR", "/usr/share/fonts/noto") + "/NotoSans-%s.ttf"
 
@@ -161,6 +160,8 @@ def nerd_font():
 
 def icon_map(nerd):
     """(C name, glyph name, code point) for each icon."""
+    from fontTools.ttLib import TTFont  # here, so mkauthors.py can import TEXT_RANGE without it
+
     by_name = {}
     for cp, g in TTFont(nerd).getBestCmap().items():
         by_name.setdefault(g, cp)

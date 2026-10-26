@@ -59,17 +59,6 @@ def frame(addr, sub, payload=b""):
     return body + crc16(body)
 
 
-def skip_echo(bus, buf):
-    """What's in buf after our own frame, which some adapters hear first. Our status poll coming back means the
-    adapter echoes. None until the whole echo is in."""
-    at = buf.find(bus.sent)
-    if at >= 0 and bus.sent[2] == SUB_STATUS:
-        bus.echo = True
-    if not bus.echo:
-        return buf
-    return buf[at + len(bus.sent) :] if at >= 0 else None
-
-
 def find_reply(buf):
     """The first bootloader reply in buf, [01 64 sub len data crc] or [01 e4 code crc], or None. The CX60's polls
     to address 1 and the bootloader's exceptions to those have other function codes."""
@@ -86,6 +75,22 @@ def find_reply(buf):
         if len(f) == n and crc16(f[:-2]) == f[-2:]:
             return f
     return None
+
+
+def reply_in(bus, buf):
+    """The bootloader's reply in what came back on the bus, or None. Some adapters hear our own frame first, which
+    our status poll coming back shows. Then only what comes after it counts."""
+    at = buf.find(bus.sent)
+    if at >= 0 and bus.sent[2] == SUB_STATUS:
+        bus.echo = True
+    if bus.echo:
+        if at < 0:
+            return None  # not all of the echo yet
+        buf = buf[at + len(bus.sent) :]
+    f = find_reply(buf)
+    if f and bus.verbose:
+        print("  < " + f.hex())
+    return f
 
 
 class Bus:
@@ -113,11 +118,8 @@ class Bus:
             chunk = self.s.read(64)
             if chunk:
                 buf += chunk
-                rest = skip_echo(self, buf)
-                f = find_reply(rest) if rest is not None else None
+                f = reply_in(self, buf)
                 if f:
-                    if self.verbose:
-                        print("  < " + f.hex())
                     return f
         return None
 
@@ -163,9 +165,13 @@ def status(bus, tries=4):
     return f[4], f[5]
 
 
+def detail(d):
+    return DETAILS.get(d, "error %d" % d)
+
+
 def state_text(st):
     s = "state %d (%s)" % (st[0], STATES.get(st[0], "?"))
-    return s + ": " + DETAILS.get(st[1], "error %d" % st[1]) if st[0] == 5 else s
+    return s + ": " + detail(st[1]) if st[0] == 5 else s
 
 
 def refused(what, f, e):
@@ -182,7 +188,7 @@ def wait_state(bus, want, timeout=90.0):
             if st[0] in want:
                 return st
             if st[0] == 5:
-                raise Failed("the panel reports failure: %s" % DETAILS.get(st[1], "error %d" % st[1]))
+                raise Failed("the panel reports failure: " + detail(st[1]))
         bus.pause(0.02)
     raise Failed("the panel stopped answering (waited for state %s)" % sorted(want))
 
@@ -197,7 +203,7 @@ def piece_taken(bus):
         if st is None:
             unanswered = True
         elif st[0] == 5:
-            raise Failed("the panel reports failure: %s" % DETAILS.get(st[1], "error %d" % st[1]))
+            raise Failed("the panel reports failure: " + detail(st[1]))
         elif st[0] in (3, 4, 6):
             return True
         elif st[0] == 2:
