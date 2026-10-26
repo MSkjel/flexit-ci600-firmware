@@ -1,19 +1,26 @@
 # Included by hw/ and sim/, which set ROOT, BUILD, OBJ_DIR and COMPILE first
+# The objects depend on that Makefile and this file, which set their flags. Taken before the .d files join
+# MAKEFILE_LIST.
+BUILD_MK := $(MAKEFILE_LIST)
 LVGL     := $(ROOT)/lib/lvgl
 INCLUDES := -I$(ROOT)/app -I$(ROOT)/ui -I$(ROOT)/proto -I$(LVGL) -I$(ROOT)/lib
 DEFS     := -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DCI600_LV_MEM_KB=16  # LVGL heap size on the panel
 WARN     := -Wall -Wextra -Werror
 # The newest vX.Y.Z tag, the next patch level on a later commit so the ESP can tell them apart, 0.0.0 without one.
-# $(BUILD)/version holds it and the objects depend on it, so a new tag rebuilds them. tools/mkupdate.py names the
-# stream from hw/build/version.
+# $(BUILD)/version holds it and only changes with it, tools/mkupdate.py names the stream from hw/build/version.
+# $(VERSION_H) splits it into FW_MAJOR, FW_MINOR and FW_PATCH, so a new tag only rebuilds what includes it.
 VERSION  := $(shell git -C $(ROOT) describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' 2>/dev/null \
               | awk -F'[v.-]' '{print $$2 "." $$3 "." $$4 + (NF > 4)}')
 VERSION  := $(if $(VERSION),$(VERSION),0.0.0)
 VER_PART  = $(or $(word $(1),$(subst ., ,$(VERSION))),0)
-DEFS     += -DFW_MAJOR=$(call VER_PART,1) -DFW_MINOR=$(call VER_PART,2) -DFW_PATCH=$(call VER_PART,3)
 FW_STAMP := $(BUILD)/version
 $(FW_STAMP): FORCE
 	@mkdir -p $(BUILD) && { echo $(VERSION) | cmp -s - $@ || echo $(VERSION) > $@; }
+VERSION_H := $(BUILD)/gen/version.h
+$(VERSION_H): $(FW_STAMP)
+	@mkdir -p $(dir $@)
+	@printf '#define FW_MAJOR %s\n#define FW_MINOR %s\n#define FW_PATCH %s\n' \
+	  $(call VER_PART,1) $(call VER_PART,2) $(call VER_PART,3) > $@
 # The authors for the About pages, from git the same way: $(AUTHORS_H) only changes with the list, which is empty
 # without python3. The simulator sets AUTHORS so its screens don't change with the history.
 AUTHORS_H := $(BUILD)/gen/authors.h
@@ -42,11 +49,12 @@ $(LVGL_PATCHED): $(LV_PATCH) $(addprefix $(LVGL)/,$(LV_CHANGED))  # the original
 $(LV_COPY_SRC): $(LVGL_PATCHED)
 
 # The objects, the same rules for both. COMPILE is the compiler with its flags, OBJ_DIR where the objects go.
+# $(VERSION_H) is there before anything compiles, the .d files then know which objects include it.
 APP_OBJ := $(patsubst $(ROOT)/%.c,$(OBJ_DIR)/%.o,$(APP_SRC) $(LV_SRC)) $(LV_COPY_SRC:.c=.o)
-$(OBJ_DIR)/%.o: $(ROOT)/%.c $(ROOT)/config.mk $(FW_STAMP) | $(LVGL_PATCHED)
+$(OBJ_DIR)/%.o: $(ROOT)/%.c $(BUILD_MK) | $(LVGL_PATCHED) $(VERSION_H)
 	@mkdir -p $(dir $@)
 	$(COMPILE) -c -o $@ $<
 $(OBJ_DIR)/ui/ui_info.o: $(AUTHORS_H)
 # the patched copies find their relative includes next to the originals
-$(LV_COPY)/%.o: $(LV_COPY)/%.c $(ROOT)/config.mk $(FW_STAMP)
+$(LV_COPY)/%.o: $(LV_COPY)/%.c $(BUILD_MK)
 	$(COMPILE) -I$(LVGL)/$(dir $*) -c -o $@ $<

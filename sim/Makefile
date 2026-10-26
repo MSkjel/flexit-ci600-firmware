@@ -66,7 +66,7 @@ $(OBJ_DIR)/sim/met_render.o: CPPFLAGS += -I$(ESP_MET)
 $(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
-$(OBJ_DIR)/%.o: $(ROOT)/%.cpp $(ROOT)/config.mk $(FW_STAMP)
+$(OBJ_DIR)/%.o: $(ROOT)/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 # LVGL's warnings aren't ours
