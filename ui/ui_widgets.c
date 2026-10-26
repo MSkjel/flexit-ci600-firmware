@@ -311,11 +311,11 @@ char *item_text(char *buf, size_t n, const item_t *it, bool unit) {
   if (it->type == ITEM_BUTTON)
     return copy_text(buf, n, _(S_PRESS));
   if (it->type == ITEM_TEXT)
-    return copy_text(buf, n, it->text[0] ? it->text : NO_VALUE);
+    return copy_text(buf, n, it->u.text[0] ? it->u.text : NO_VALUE);
   if (it->value == ITEM_UNKNOWN)
     return copy_text(buf, n, NO_VALUE);  // like an unknown temperature
   if (it->type == ITEM_TOGGLE)
-    return copy_text(buf, n, item_on(it) ? (it->on[0] ? it->on : _(S_ON)) : (it->off[0] ? it->off : _(S_OFF)));
+    return copy_text(buf, n, item_on(it) ? (it->u.on[0] ? it->u.on : _(S_ON)) : (it->u.off[0] ? it->u.off : _(S_OFF)));
   fmt_dec(buf, n, it->value, it->dec);
   return unit ? add_unit(buf, n, it->unit) : buf;
 }

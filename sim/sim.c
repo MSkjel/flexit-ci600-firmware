@@ -526,13 +526,13 @@ static void esp_link(void) {
   run(100);
   item_t *washer = (item_t *) item_by_id(plink_item_id("washer"));
   char text[ITEM_TEXT_LEN];
-  strcpy(text, washer->text);
+  strcpy(text, washer->u.text);
   check(shows(lv_scr_act(), text), "the text item isn't shown on the smart view");
-  washer->text[0] = 0;
+  washer->u.text[0] = 0;
   ui_value_changed(V_NONE);
   run(100);
   check(!shows(lv_scr_act(), text) && shows(lv_scr_act(), "\xE2\x80\x93"), "an empty text isn't a dash");
-  strcpy(washer->text, text);
+  strcpy(washer->u.text, text);
   M.tiles[3] = tile;
   ui_go_home();
   key(KEY_OK);

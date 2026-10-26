@@ -57,8 +57,8 @@ bool night_active(void) {
 uint8_t theme_now(void) { return night_active() && M.night_theme ? M.night_theme - 1 : M.theme; }
 
 uint16_t idle_seconds(void) {
-  static const uint16_t S[IDLE_STEPS] = {15, 30, 60, 120, 300, 600, 1800, 0};
-  return S[M.idle_after];
+  static const uint16_t SECONDS[IDLE_STEPS] = {15, 30, 60, 120, 300, 600, 1800, 0};
+  return SECONDS[M.idle_after];
 }
 
 int16_t indoor_temp(void) {
@@ -105,7 +105,7 @@ int alarm_new_pops(void) {
   return pop;
 }
 
-void panel_leds(bool out[3], uint32_t ms) {
+void panel_leds(bool out[N_LIGHTS], uint32_t ms) {
   bool filter = false, other = false;
   for (int i = 0; i < M.n_alarms; i++) {
     if (M.alarms[i].code == ALARM_FILTER || M.alarms[i].code == ALARM_FILTER_GUARD)
@@ -114,8 +114,9 @@ void panel_leds(bool out[3], uint32_t ms) {
       other = true;
   }
   bool ok = !other && !filter && (M.led_ok == LED_OK_ALWAYS || (M.led_ok == LED_OK_NOT_NIGHT && !night_active()));
-  bool want[3] = {other && M.led_alarm, filter && M.led_filter, ok};
-  for (int i = 0; i < 3; i++) {
+  bool want[N_LIGHTS] = {
+      [LIGHT_ALARM] = other && M.led_alarm, [LIGHT_FILTER] = filter && M.led_filter, [LIGHT_OK] = ok};
+  for (int i = 0; i < N_LIGHTS; i++) {
     switch ((M.leds >> (2 * i)) & 3) {  // the ESP's LED_*
       case LED_OFF:
         want[i] = false;
@@ -131,5 +132,5 @@ void panel_leds(bool out[3], uint32_t ms) {
   }
   int screen = ui_ok_led(ms);
   if (screen >= 0)
-    out[2] = screen;
+    out[LIGHT_OK] = screen;
 }

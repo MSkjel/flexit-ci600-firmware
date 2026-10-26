@@ -95,7 +95,7 @@ void sim_item(int i, item_t *it) {
   sim_text(it->label, sizeof it->label, d->label);
   sim_text(it->unit, sizeof it->unit, d->unit);
   if (d->text)
-    sim_text(it->text, sizeof it->text, d->text);
+    sim_text(it->u.text, sizeof it->u.text, d->text);
 }
 
 void sim_model_init(void) {

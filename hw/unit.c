@@ -106,7 +106,7 @@ static bool is_master(void) {
 
 static void stamp(alarm_t *a, uint32_t t) {
   uint16_t yy;
-  unix_split(t, &yy, &a->mo, &a->dd, &a->hh, &a->mi);
+  clock_split(t, &yy, &a->mo, &a->dd, &a->hh, &a->mi);
 }
 
 static void read_alarms(void) {

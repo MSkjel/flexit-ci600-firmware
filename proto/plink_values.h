@@ -23,6 +23,7 @@
 #define VF_BY_HAND 0x100   // unit.c follows it on the bus itself, val_by_cx60() leaves it out
 #define VF_LAYOUT 0x200    // the screen is rebuilt when it changes
 #define VF_CLOCK 0x400     // the panel's clock, kept by the RTC
+#define VF_ENUM 0x800      // one of a list of options, kept to min..max even from the CX60
 #define VF_LINK_RW (VF_LINK_R | VF_LINK_W)
 #define VF_PANEL (VF_SAVED | VF_LINK_RW)  // a panel setting shared with the ESP
 

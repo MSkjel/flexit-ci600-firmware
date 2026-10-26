@@ -35,7 +35,7 @@
     X(BOOST_MINUTES,   0,     M.boost_minutes,      0, 360,  VF_CX60, 0x091) \
     X(SUPPLY_MIN,      0,     M.supply_min,        50, 250,  VF_CX60, 0x00D) \
     X(SUPPLY_MAX,      0,     M.supply_max,       150, 450,  VF_CX60, 0x00E) \
-    X(REGULATION,      0,     M.regulation,         0, REG_COUNT - 1, VF_CX60, 0x114) \
+    X(REGULATION,      0,     M.regulation,         0, REG_COUNT - 1, VF_CX60 | VF_ENUM, 0x114) \
     X(HEATER,          0,     M.heater_enabled,     0, 1,    VF_CX60 | VF_PER_PANEL, 0x13F) \
     X(COOLING,         0,     M.cooling_enabled,    0, 1,    VF_CX60, 0x115) \
     X(FAN_MIN_SUP,     0,     M.fan_pct[0][0],     20, 100,  VF_CX60, 0x002) \
@@ -45,7 +45,7 @@
     X(FILTER_INTERVAL, 0,     M.filter_days,       30, 360,  VF_CX60, 0x016) /* days */ \
     X(WEEK_PROGRAM,    0,     M.week_program,       0, 1,    VF_CX60, 0x117) \
     /* the installer's settings, kept in the CX60. The ranges are stock's */ \
-    X(BOOST_SPEED,     0,     M.adv.boost_speed,    1, 3,    VF_CX60, 0x090) /* AC fans */ \
+    X(BOOST_SPEED,     0,     M.adv.boost_speed,    1, 3,    VF_CX60 | VF_ENUM, 0x090) /* AC fans */ \
     X(NEUTRAL_COOL,    0,     M.adv.neutral_cool,   0, 50,   VF_CX60, 0x011) \
     X(NEUTRAL_HEAT,    0,     M.adv.neutral_heat,   0, 50,   VF_CX60, 0x012) \
     X(PI_HEAT_SUP_K,   0,     M.adv.pi[0],          0, 32767, VF_CX60, 0x0B5) \
@@ -61,11 +61,11 @@
     X(PI_COOL_EXT_K,   0,     M.adv.pi[10],         0, 32767, VF_CX60, 0x0B3) \
     X(PI_COOL_EXT_I,   0,     M.adv.pi[11],         0, 32767, VF_CX60, 0x0B4) \
     X(COOL_MIN_OUTDOOR, 0,    M.adv.cool_min_outdoor, 50, 250, VF_CX60, 0x013) \
-    X(COOL_MIN_SPEED,  0,     M.adv.cool_min_speed, 2, 3,    VF_CX60, 0x015) \
+    X(COOL_MIN_SPEED,  0,     M.adv.cool_min_speed, 2, 3,    VF_CX60 | VF_ENUM, 0x015) \
     X(COOL_DELAY,      0,     M.adv.cool_delay,     0, 300,  VF_CX60, 0x014) \
     X(COOL_RECOVERY,   0,     M.adv.cool_recovery,  0, 1,    VF_CX60 | VF_LAYOUT, 0x139) \
     X(RECOVERY_DIFF,   0,     M.adv.recovery_diff,  0, 50,   VF_CX60, 0x092) \
-    X(ROTOR_ALARM,     0,     M.adv.rotor_alarm,    0, 1,    VF_CX60, 0x14B) \
+    X(ROTOR_ALARM,     0,     M.adv.rotor_alarm,    0, 1,    VF_CX60 | VF_ENUM, 0x14B) \
     X(DEICE,           0,     M.adv.deice,          0, 1,    VF_CX60 | VF_LAYOUT, 0x158) \
     X(DEICE_TEMP,      0,     M.adv.deice_temp,  -450, -50,  VF_CX60, 0x159) \
     X(DEICE_ROTOR,     0,     M.adv.deice_rotor,   15, 180,  VF_CX60, 0x15B) \
@@ -82,14 +82,14 @@
     X(CAL_WATER,       0,     M.adv.cal[3],       -50, 50,   VF_CX60, 0x08F) \
     X(EXTRACT_SENSOR,  0,     M.adv.extract_sensor, 0, 1,    VF_CX60, 0x136) \
     X(OUTDOOR_SENSOR,  0,     M.adv.outdoor_sensor, 0, 1,    VF_CX60, 0x137) \
-    X(FIRE_MODE,       0,     M.adv.fire_mode,      1, 4,    VF_CX60, 0x00B) \
+    X(FIRE_MODE,       0,     M.adv.fire_mode,      1, 4,    VF_CX60 | VF_ENUM, 0x00B) \
     X(FILTER_GUARD,    0,     M.adv.filter_guard,   0, 1,    VF_CX60, 0x113) \
     X(EXT_SETPOINT,    0,     M.adv.ext_setpoint,   0, 1,    VF_CX60, 0x134) \
-    X(AWAY_SPEED,      0,     M.adv.away_speed,     1, 3,    VF_CX60, 0x0A6) \
+    X(AWAY_SPEED,      0,     M.adv.away_speed,     1, 3,    VF_CX60 | VF_ENUM, 0x0A6) \
     X(AWAY_SETPOINT,   0,     M.adv.away_setpoint, 100, 400, VF_CX60, 0x0A7) \
     X(AWAY_HOLD,       0,     M.adv.away_hold,      0, 120,  VF_CX60, 0x0A5) \
-    X(FIREPLACE_SUP,   0,     M.adv.fireplace_sup,  1, 3,    VF_CX60, 0x005) /* AC fans */ \
-    X(FIREPLACE_EXT,   0,     M.adv.fireplace_ext,  1, 3,    VF_CX60, 0x00A) \
+    X(FIREPLACE_SUP,   0,     M.adv.fireplace_sup,  1, 3,    VF_CX60 | VF_ENUM, 0x005) /* AC fans */ \
+    X(FIREPLACE_EXT,   0,     M.adv.fireplace_ext,  1, 3,    VF_CX60 | VF_ENUM, 0x00A) \
     X(START_DELAY1,    0,     M.adv.start_delay[0], 0, 60,   VF_CX60, 0x017) \
     X(START_DELAY2,    0,     M.adv.start_delay[1], 0, 60,   VF_CX60, 0x018) \
     X(START_DELAY3,    0,     M.adv.start_delay[2], 0, 60,   VF_CX60, 0x019) \

@@ -9,10 +9,12 @@
 #define LEN(a) (sizeof(a) / sizeof((a)[0]))
 #define T_NONE INT16_MIN      // no sensor / unknown
 #define TREND_NONE INT16_MAX  // no sample yet (LVGL's LV_CHART_POINT_NONE)
-#define TREND_LEN 96          // 24 h at 15 min
+#define TREND_LEN 96          // points a trend keeps
+#define TREND_STEP_S 900      // seconds between them
 #define N_TRENDS 4            // ESP sensors the panel can keep a 24 h trend of
 #define PERIODS_PER_DAY 4     // the CX60's week program slots a day
 #define NOTE_LEN (PLINK_TEXT_MAX + 1)
+_Static_assert(24 * 3600 == TREND_LEN * TREND_STEP_S, "a trend is 24 h");
 
 enum { TR_OUTDOOR, TR_SUPPLY, TR_EXTRACT, TR_ROOM, TR_COUNT };    // temperature trend series, M.trend[]
 enum { DT_INDOOR, DT_OUTDOOR, DT_SUPPLY, DT_EXTRACT, DT_COUNT };  // which temperature the dashboard shows big
@@ -57,7 +59,7 @@ typedef struct item {
       char on[ITEM_STATE_LEN], off[ITEM_STATE_LEN];  // an ITEM_TOGGLE's words for on and off, "" for On and Off
     };
     char text[ITEM_TEXT_LEN];  // an ITEM_TEXT's value, "" for none
-  };
+  } u;
 } item_t;
 
 // 24 h of one ITEMF_TREND sensor. Kept by item id so it carries on when the ESP renumbers its items.

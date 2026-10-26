@@ -31,6 +31,7 @@ static struct {
   int8_t of;  // item, -1 = free
   char text[PLINK_HELP_MAX + 1];
 } helps[HELP_SLOTS];
+_Static_assert(N_ITEMS <= INT8_MAX, "an item in help_asked and of");
 
 bool link_compatible(void) { return M.esp_version == PLINK_VERSION; }
 
@@ -114,20 +115,21 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
 static void item_def(item_t *it, const uint8_t *b, int n) {
   if (n != ITEM_DEF_LEN)
     return;
-  uint8_t type = b[0] <= ITEM_TEXT ? b[0] : ITEM_NONE;
+  uint8_t type = b[ITEM_DEF_TYPE] <= ITEM_TEXT ? b[ITEM_DEF_TYPE] : ITEM_NONE;
   if (type != it->type)
-    memset(it->text, 0, sizeof it->on + sizeof it->off);  // the toggle's words and the text share their room
+    memset(&it->u, 0, sizeof it->u);  // the toggle's words and the text share their room
   it->type = type;
-  it->flags = it->type == ITEM_TEXT ? b[1] & ~ITEMF_TREND : b[1];  // nothing to chart in a text
-  it->icon = b[2];
-  it->dec = b[3] & 3;
-  it->step = plink_get16(b + 4);
+  uint8_t flags = b[ITEM_DEF_FLAGS];
+  it->flags = it->type == ITEM_TEXT ? flags & ~ITEMF_TREND : flags;  // nothing to chart in a text
+  it->icon = b[ITEM_DEF_ICON];
+  it->dec = b[ITEM_DEF_DEC] & 3;
+  it->step = plink_get16(b + ITEM_DEF_STEP);
   it->step = it->step ? it->step : 1;
-  it->id = plink_get16(b + 6) & ITEM_ID_MASK;
-  it->min = (int32_t) plink_number(b + 8, 4);
-  it->max = (int32_t) plink_number(b + 12, 4);
+  it->id = plink_get16(b + ITEM_DEF_ID) & ITEM_ID_MASK;
+  it->min = (int32_t) plink_number(b + ITEM_DEF_MIN, 4);
+  it->max = (int32_t) plink_number(b + ITEM_DEF_MAX, 4);
   for (int i = 0; i < 4; i++)
-    it->level[i] = plink_i16(b + 16 + 2 * i);
+    it->level[i] = plink_i16(b + ITEM_DEF_LEVELS + 2 * i);
   if (it->flags & ITEMF_TREND)
     trend_keep(it->id);
   ui_layout_changed();
@@ -249,11 +251,11 @@ static void item_msg(uint16_t kind, int i, const uint8_t *b, int n) {
     case K_ITEM_OFF:
       if (it->type != ITEM_TOGGLE)
         return;
-      copy_text(kind == K_ITEM_ON ? it->on : it->off, ITEM_STATE_LEN, b, n);
+      copy_text(kind == K_ITEM_ON ? it->u.on : it->u.off, ITEM_STATE_LEN, b, n);
       break;
     case K_ITEM_TEXT:
       if (it->type == ITEM_TEXT) {
-        copy_text(it->text, ITEM_TEXT_LEN, b, n);
+        copy_text(it->u.text, ITEM_TEXT_LEN, b, n);
         ui_value_changed((val_t) (V_ITEM_FIRST + i));
       }
       return;

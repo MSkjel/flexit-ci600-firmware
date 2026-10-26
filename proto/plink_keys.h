@@ -225,6 +225,18 @@ enum { ANIM_ROUNDS_COUNT = 1, ANIM_ROUNDS_FADE = 3, ANIM_ROUNDS_TAG = 5, ANIM_RO
 // DEF: type, flags, icon, decimals, step (2), id (2), min (4), max (4), then four levels (2 each) for
 // ITEMF_LEVELS. Bad below the first, good from the second to the third, bad above the fourth, fair in between.
 // id is a 14-bit hash of the item's name, never 0. Dashboard tiles and trends remember the item by it.
+enum {
+  ITEM_DEF_TYPE,
+  ITEM_DEF_FLAGS,
+  ITEM_DEF_ICON,
+  ITEM_DEF_DEC,
+  ITEM_DEF_STEP,
+  ITEM_DEF_ID = 6,
+  ITEM_DEF_MIN = 8,
+  ITEM_DEF_MAX = 12,
+  ITEM_DEF_LEVELS = 16,
+  ITEM_DEF_LEN = 24,
+};
 #define ITEM_ID_MASK 0x3FFF
 #define K_ITEM_DEF 0x200    // + item: DEF bytes
 #define K_ITEM_VALUE 0x240  // + item: the value. Goes both ways, the panel sends it when the user changes it
@@ -240,7 +252,6 @@ enum { ANIM_ROUNDS_COUNT = 1, ANIM_ROUNDS_FADE = 3, ANIM_ROUNDS_TAG = 5, ANIM_RO
 #define K_ITEM_KIND(key) ((key) & ~0x3F)
 #define K_ITEM_INDEX(key) ((key) & 0x3F)
 #define N_ITEMS 24              // up to 0x40, a kind's keys
-#define ITEM_DEF_LEN 24         // DEF length in bytes
 #define ITEM_TEXT_LEN 16        // the panel's room for an ITEM_TEXT value, with the 0
 #define ITEM_LABEL_LEN 20       // and for a label
 #define ITEM_UNIT_LEN 8         // a unit

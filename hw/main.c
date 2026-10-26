@@ -210,9 +210,9 @@ int main(void) {
       }
       input_tick(t);
       draw();
-      bool leds[3];
+      bool leds[N_LIGHTS];
       panel_leds(leds, t);
-      board_leds(leds[0], leds[1], leds[2]);
+      board_leds(leds[LIGHT_ALARM], leds[LIGHT_FILTER], leds[LIGHT_OK]);
       board_backlight(input_backlight());
       settings_poll();
     }

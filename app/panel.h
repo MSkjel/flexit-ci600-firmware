@@ -14,4 +14,6 @@ int filter_days_left(void);   // until the filters are due, 0 when they are
 int filter_life(void);        // % of the filter interval left
 bool alarm_pops(int code);    // alarms with this code pop up
 int alarm_new_pops(void);     // a new popup alarm's code since the last call, else 0. It wakes the screen
-void panel_leds(bool out[3], uint32_t ms);  // alarm, filter and OK lights now
+// The panel's lights, in the order M.leds has them
+enum { LIGHT_ALARM, LIGHT_FILTER, LIGHT_OK, N_LIGHTS };
+void panel_leds(bool out[N_LIGHTS], uint32_t ms);  // the lights as they are now

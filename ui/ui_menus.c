@@ -324,7 +324,7 @@ MENU(m_time, S_DATE_AND_TIME,
      TOG(IC_SUN, S_SUMMER_TIME, V_AUTO_DST, S_SUMMER_TIME_HELP, .without = FBIT(FEAT_ESP)));
 
 // one toggle per FEATURES() entry
-#define FEAT_ITEM(id, ic, t, h) TOG(ic, S_##t, V_FEAT_FIRST + FEAT_##id, S_##h),
+#define FEAT_ITEM(id, ic, t, h, ...) TOG(ic, S_##t, V_FEAT_FIRST + FEAT_##id, S_##h),
 MENU(m_equipment, S_EQUIPMENT, FEATURES(FEAT_ITEM));
 #undef FEAT_ITEM
 

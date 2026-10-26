@@ -1834,9 +1834,9 @@ static void test_items(void) {
   char b[24];
   CHECK(!strcmp(item_text(b, sizeof b, button, true), _(S_PRESS)));
   item_t *washer = &M.items[6];
-  *washer = (item_t) {.type = ITEM_TEXT, .flags = ITEMF_VIEW, .id = 80, .value = ITEM_UNKNOWN, .text = "Washing"};
+  *washer = (item_t) {.type = ITEM_TEXT, .flags = ITEMF_VIEW, .id = 80, .value = ITEM_UNKNOWN, .u.text = "Washing"};
   CHECK(!strcmp(item_text(b, sizeof b, washer, true), "Washing") && (val_def(v + 4).flags & VF_RO));
-  washer->text[0] = 0;
+  washer->u.text[0] = 0;
   CHECK(!strcmp(item_text(b, sizeof b, washer, true), "\xE2\x80\x93"));
 
   trend_keep(77);
@@ -2353,11 +2353,12 @@ static void test_leds(void) {
 }
 
 // ---------------------------------------------------------------- the week program
-static int layout_changes, saver_builds;  // see --wrap in the Makefile
+static int layout_changes, saver_builds, value_changes;  // see --wrap in the Makefile
 void __wrap_ui_layout_changed(void) { layout_changes++; }
 void __real_ui_value_changed(val_t v);
 void __wrap_ui_value_changed(val_t v) {
   saver_builds += v == V_SCREENSAVER;
+  value_changes++;
   __real_ui_value_changed(v);
 }
 
@@ -2620,6 +2621,36 @@ static void test_advanced(void) {
   CHECK(!MB.hold[0x148]);
 }
 
+// The CX60's limits are wider than the editors', so what it sends is taken as long as the field holds it. A list of
+// options is kept to them.
+static void test_bus_values(void) {
+  model_defaults();
+  unit_init();
+  cx60(R_SUPPLY_MAX, 500);
+  cx60(R_FAN_MIN_SUP, 300);
+  cx60(R_DEICE_TEMP, (uint16_t) -500);
+  unit_poll();
+  CHECK(M.supply_max == 500 && M.adv.deice_temp == -500);  // past the editors' 450 and -450
+  CHECK(M.fan_pct[0][0] == 255);                           // not 300 cut to 8 bits, 44
+  cx60(R_BOOST_SPEED, 9);
+  cx60(R_FIRE_MODE, 0);
+  cx60(R_COOLING, 2);
+  unit_poll();
+  CHECK(M.adv.boost_speed == MODE_MAX && M.adv.fire_mode == 1 && M.cooling_enabled);
+  // From the ESP's copy of the registers too
+  plat_cx60_reg(R_AWAY_SPEED, -3);
+  unit_poll();
+  CHECK(M.adv.away_speed == MODE_MIN);
+  // The same value again is no change, even one that didn't fit
+  int was = value_changes;
+  val_update(V_FAN_MIN_SUP, 300);
+  val_update(V_BOOST_SPEED, 9);
+  val_update(V_SUPPLY_MAX, 500);
+  CHECK(value_changes == was);
+  val_update(V_FAN_MIN_SUP, 60);
+  CHECK(value_changes == was + 1 && M.fan_pct[0][0] == 60);
+}
+
 // ---------------------------------------------------------------- the CX60's registers, in and out of the model
 static void test_unit(void) {
   model_defaults();
@@ -2852,15 +2883,15 @@ static void test_link(void) {
   from_esp(K_ITEM_DEF + 1, def, sizeof def, false);
   from_esp(K_ITEM_ON + 1, (const uint8_t *) "Open", 4, false);
   from_esp(K_ITEM_TEXT + 1, (const uint8_t *) "Washing", 7, false);
-  CHECK(!strcmp(it->on, "Open") && !it->off[0]);
+  CHECK(!strcmp(it->u.on, "Open") && !it->u.off[0]);
   def[0] = ITEM_TEXT;
   from_esp(K_ITEM_DEF + 1, def, sizeof def, false);
-  CHECK(!it->text[0]);
+  CHECK(!it->u.text[0]);
   from_esp(K_ITEM_ON + 1, (const uint8_t *) "Open", 4, false);
   from_esp(K_ITEM_TEXT + 1, (const uint8_t *) "Washing", 7, false);
-  CHECK(!strcmp(it->text, "Washing"));
+  CHECK(!strcmp(it->u.text, "Washing"));
   from_esp(K_ITEM_DEF + 1, def, sizeof def, false);  // the same type again keeps it
-  CHECK(!strcmp(it->text, "Washing"));
+  CHECK(!strcmp(it->u.text, "Washing"));
   // the setpoint goes to the ESP, but not while it's offline
   M.esp_online = false;
   val_set(V_SETPOINT, 230);
@@ -2983,6 +3014,7 @@ int main(void) {
   test_input();
   test_unit();
   test_advanced();
+  test_bus_values();
   test_link();
   test_link_picture();
   char why[96] = "";

@@ -295,7 +295,7 @@ static void item(int i) {
   send_text(K_ITEM_LABEL + i, it.label);
   send_text(K_ITEM_UNIT + i, it.unit);
   if (it.type == ITEM_TEXT)
-    send_text(K_ITEM_TEXT + i, it.text);
+    send_text(K_ITEM_TEXT + i, it.u.text);
   else
     send_number(K_ITEM_VALUE + i, (uint32_t) it.value);
 }

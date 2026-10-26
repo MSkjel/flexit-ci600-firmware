@@ -1,5 +1,6 @@
-// Values. Every change goes through apply(), wherever it comes from. It clamps to the range and the VF_* flags
-// decide if it's saved, written to the bus or sent to the ESP.
+// Values. Changes from the user, the ESP, the bus and flash go through apply(). It clamps to the range and the VF_*
+// flags decide if it's saved, written to the bus or sent to the ESP. The clock, ROOM_TEMP, SETPOINT, FW_VERSION and
+// PERIOD_* are written directly.
 #include "model.h"
 #include "clock.h"
 #include "link.h"
@@ -41,6 +42,13 @@
 _Static_assert(0 PLINK_FIELDS(ONE) == 0 PLINK_VALUES(ONE), "a field for each PLINK_VALUES row");
 #undef ONE
 
+// The ESP writes the CX60's values on the bus itself, so it can't set one here too. apply() relies on that.
+#define LINK_W_CX60(id, k, lo, hi, fl, reg) || ((fl) & (VF_CX60 | VF_LINK_W)) == (VF_CX60 | VF_LINK_W)
+#define LINK_W_CX60_FIELD(id, k, field, ...) LINK_W_CX60(id, k, __VA_ARGS__)
+_Static_assert(!(0 PLINK_VALUES(LINK_W_CX60) PANEL_VALUES(LINK_W_CX60_FIELD)), "no value both VF_CX60 and VF_LINK_W");
+#undef LINK_W_CX60_FIELD
+#undef LINK_W_CX60
+
 // the VALUES() table, by value id
 static const val_def_t DEFS[V_FEAT_FIRST] = {
 #define X(id, k, lo, hi, fl, reg) [V_##id] = {.min = lo, .max = hi, .key = k, .flags = fl, .cx60 = reg},
@@ -49,6 +57,11 @@ static const val_def_t DEFS[V_FEAT_FIRST] = {
 #undef X_FIELD
 #undef X
 };
+
+// FBIT()s of the equipment the unit's DIP switches decide, see equipment.h
+#define DIP_BIT(id, icon, title, help, dip) | ((dip) ? FBIT(FEAT_##id) : 0u)
+static const uint32_t FROM_DIP = 0u FEATURES(DIP_BIT);
+#undef DIP_BIT
 
 val_def_t val_def(val_t v) {
   if (v == V_DAY) {  // the days in the month, so setting the day doesn't roll into the next month
@@ -64,8 +77,7 @@ val_def_t val_def(val_t v) {
   if (v > V_NONE && v < V_FEAT_FIRST)
     return DEFS[v];
   if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST) {
-    // the unit's DIP switches say which fans and heater it has, see unit.c
-    bool dip = v == V_FEAT_FIRST + FEAT_EC_FANS || v == V_FEAT_FIRST + FEAT_WATER_HEATER;
+    bool dip = FROM_DIP >> (v - V_FEAT_FIRST) & 1;
     uint16_t fl = VF_PANEL | VF_LAYOUT | (dip ? VF_RO : 0);
     return (val_def_t) {.max = 1, .key = K_FEATURE + (v - V_FEAT_FIRST), .flags = fl};
   }
@@ -178,6 +190,33 @@ static void store(val_t v, int32_t x) {
   }
 }
 
+static int32_t clamp(int32_t x, int32_t lo, int32_t hi) { return x < lo ? lo : x > hi ? hi : x; }
+
+// Each value's field type, for fit(). A field of another type doesn't compile.
+enum { FIELD_I32, FIELD_BOOL, FIELD_U8, FIELD_I16, FIELD_U16, FIELD_U32, FIELD_TYPES };
+#define FIELD_TYPE(field) \
+  _Generic((field), bool: FIELD_BOOL, uint8_t: FIELD_U8, int16_t: FIELD_I16, uint16_t: FIELD_U16, uint32_t: FIELD_U32)
+static const uint8_t TYPES[V_FEAT_FIRST] = {
+#define F(id, field) [V_##id] = FIELD_TYPE(field),
+#define X(id, key, field, ...) F(id, field)
+    PLINK_FIELDS(F) PANEL_VALUES(X)
+#undef X
+#undef F
+};
+
+// x from the CX60 as v's field holds it, so storing it doesn't wrap. Anything but 0 is on for a bool, as the CX60
+// takes it. The rest clamp to the type's range.
+static int32_t fit(val_t v, int32_t x) {
+  static const int32_t LO[FIELD_TYPES] = {[FIELD_I32] = INT32_MIN, [FIELD_I16] = INT16_MIN};
+  static const int32_t HI[FIELD_TYPES] = {[FIELD_I32] = INT32_MAX,
+                                          [FIELD_U8] = UINT8_MAX,
+                                          [FIELD_I16] = INT16_MAX,
+                                          [FIELD_U16] = UINT16_MAX,
+                                          [FIELD_U32] = INT32_MAX};
+  int t = v < V_FEAT_FIRST ? TYPES[v] : FIELD_I32;  // an equipment bit is 0 or 1 already
+  return t == FIELD_BOOL ? x != 0 : clamp(x, LO[t], HI[t]);
+}
+
 typedef enum { FROM_USER, FROM_ESP, FROM_BUS, FROM_FLASH } source_t;
 
 static void apply(val_t v, int32_t x, source_t from) {
@@ -188,9 +227,12 @@ static void apply(val_t v, int32_t x, source_t from) {
     return;
   bool item = v >= V_ITEM_FIRST && v <= V_ITEM_LAST;
   int32_t want = x;
-  // The ESP's items are taken as they are, and so is what the CX60 holds: its limits are wider than the editors'
-  if (!(item && from == FROM_ESP) && from != FROM_BUS)
-    x = x < d.min ? d.min : x > d.max ? d.max : x;
+  // No clamp for the ESP's items, or the CX60's values past fit(): its limits are wider than the editors'. Lists
+  // (VF_ENUM) clamp, there's nothing to show past their options.
+  if (from == FROM_BUS)
+    x = fit(v, x);
+  if (!(item && from == FROM_ESP) && (from != FROM_BUS || (d.flags & VF_ENUM)))
+    x = clamp(x, d.min, d.max);
   // a button press counts even when the value is the same
   bool press = item && M.items[v - V_ITEM_FIRST].type == ITEM_BUTTON;
   if (x == val_get(v) && !press)
@@ -210,8 +252,8 @@ static void apply(val_t v, int32_t x, source_t from) {
   if (from == FROM_USER) {
     plat_value_changed(v);
     link_value_changed(v);
-  } else if (from == FROM_ESP && !(d.flags & VF_CX60)) {
-    plat_value_changed(v);  // not for CX60 values, the ESP has already written those to the CX60
+  } else if (from == FROM_ESP) {
+    plat_value_changed(v);
     if (x != want)
       link_value_changed(v);  // clamped, so tell the ESP what we actually stored
   }

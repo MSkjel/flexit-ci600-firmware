@@ -47,7 +47,7 @@ static int16_t item_point(int id) {
 
 void trend_second(void) {
   static uint16_t s;
-  if (++s < 900)
+  if (++s < TREND_STEP_S)
     return;
   s = 0;
   const int16_t now[TR_COUNT] = {M.t_outdoor, M.t_supply, M.t_extract, M.t_room};

@@ -11,7 +11,7 @@ int clock_month_days(unsigned yy, unsigned mo) {
   return mo >= 1 && mo <= 12 ? DIM[mo - 1] + (mo == 2 && leap(yy)) : 31;
 }
 
-void unix_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh, uint8_t *mi) {
+void clock_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh, uint8_t *mi) {
   uint32_t days = t / 86400, s = t % 86400;
   unsigned y = 1970, m = 0;
   while (days >= (uint32_t) (365 + leap(y)))
@@ -26,7 +26,7 @@ void unix_split(uint32_t t, uint16_t *yy, uint8_t *mo, uint8_t *dd, uint8_t *hh,
 }
 
 void clock_from_unix(uint32_t t) {
-  unix_split(t, &M.yy, &M.mo, &M.dd, &M.hh, &M.mi);
+  clock_split(t, &M.yy, &M.mo, &M.dd, &M.hh, &M.mi);
   M.ss = t % 60;
   M.wday = (uint8_t) ((t / 86400 + 3) % 7);  // 1970-01-01 was a Thursday, 0 = Monday
 }
@@ -52,7 +52,7 @@ static uint32_t change(unsigned y, unsigned mo) {
 static void dst_bounds(uint32_t t, uint32_t *spring, uint32_t *autumn) {
   uint16_t y;
   uint8_t mo, dd, hh, mi;
-  unix_split(t, &y, &mo, &dd, &hh, &mi);
+  clock_split(t, &y, &mo, &dd, &hh, &mi);
   *spring = change(y, 3);
   *autumn = change(y, 10);
 }
