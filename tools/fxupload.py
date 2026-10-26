@@ -12,7 +12,7 @@ import argparse
 import sys
 import time
 
-from mkupdate import parse
+from mkupdate import name_version, parse
 
 BL_ADDR = 1  # the bootloader always uses address 1, whatever the panel address is
 FC = 0x64  # function code of all bootloader commands
@@ -279,9 +279,9 @@ def main(argv):
     a = ap.parse_args(argv)
     if not 1 <= a.panel_addr <= 247:
         ap.error("--panel-addr must be 1..247")
-    bus = Bus(a.port, a.baud, a.verbose)
 
     if a.status:
+        bus = Bus(a.port, a.baud, a.verbose)
         try:
             st = status(bus)
         except Failed as ex:
@@ -292,13 +292,18 @@ def main(argv):
         return 0
     if not a.fxup:
         sys.exit("give a .fxup file (or --status)")
+    # The first piece erases the panel's firmware, so a cut-off or foreign file is refused before the port opens.
+    # Without the key only its shape is checked here, the bootloader checks the rest.
     stream = open(a.fxup, "rb").read()
     try:
         name = parse(stream)[0]
-    except (ValueError, IndexError):
-        sys.exit("%s isn't a firmware stream" % a.fxup)
-    print("Firmware stream: %d bytes, %s" % (len(stream), name.decode(errors="replace") if name else "no name"))
+    except ValueError as ex:
+        sys.exit("%s isn't a whole firmware stream: %s" % (a.fxup, ex))
+    if name_version(name) is None:
+        sys.exit("%s is named %r, not ci600 X.Y.Z: it isn't a stream from mkupdate.py" % (a.fxup, name))
+    print("Firmware stream: %d bytes, %s" % (len(stream), name.decode()))
 
+    bus = Bus(a.port, a.baud, a.verbose)
     try:
         if not a.no_enter:  # the running app reboots into the bootloader on 0x64/2 and doesn't answer
             status(bus, tries=2)  # only a panel already in the bootloader may answer at 1

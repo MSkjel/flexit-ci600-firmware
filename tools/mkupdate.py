@@ -137,22 +137,31 @@ def build(key, app, name):
 
 
 def parse(stream):
-    """Split a stream into (name, guard, blob). Like the bootloader, rejects anything after field 3."""
+    """Split a stream into (name, guard, blob). Raises ValueError unless field 3 ends where the stream does: a
+    cut-off download is refused, and like the bootloader nothing may follow it."""
     fields = {}
     i = 0
-    while i < len(stream):
+    while 3 not in fields:
+        if i == len(stream):
+            raise ValueError("the stream ends before field 3")
         key, i = read_varint(stream, i)
-        if 3 in fields or key & 7 != 2 or key >> 3 not in (1, 2, 3) or key >> 3 in fields:
+        if key & 7 != 2 or key >> 3 not in (1, 2, 3) or key >> 3 in fields:
             raise ValueError("unexpected protobuf key 0x%x before offset %d" % (key, i))
         n, i = read_varint(stream, i)
+        if i + n > len(stream):
+            raise ValueError("field %d runs %d bytes past the end of the stream" % (key >> 3, i + n - len(stream)))
         fields[key >> 3] = stream[i : i + n]
         i += n
-    return fields.get(1), fields.get(2), fields.get(3)
+    if i != len(stream):
+        raise ValueError("%d bytes after field 3" % (len(stream) - i))
+    return fields.get(1), fields.get(2), fields[3]
 
 
 def read_varint(buf, i):
     v = s = 0
     while True:
+        if i >= len(buf):
+            raise ValueError("the stream ends inside a varint")
         b = buf[i]
         i += 1
         v |= (b & 0x7F) << s
