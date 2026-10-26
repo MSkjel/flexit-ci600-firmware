@@ -36,7 +36,7 @@ $(BUILD)/lang_test: $(SIMLIB) $(call obj,sim/lang_test sim/sim_model sim/sim_esp
 $(BUILD)/unit_test: $(SIMLIB) $(HW_OBJ) $(call obj,sim/unit_test)
 $(BUILD)/replay: $(SIMLIB) $(HW_OBJ) $(call obj,sim/replay)
 # unit_test records the calls input.c, link.c and the week program make into the UI
-$(BUILD)/unit_test: LDLIBS += -Wl,--wrap=ui_key,--wrap=ui_idle,--wrap=ui_wake,--wrap=ui_toast,--wrap=ui_layout_changed,--wrap=ui_show_view,--wrap=ui_value_changed
+$(BUILD)/unit_test: LDLIBS += -Wl,--wrap=ui_key,--wrap=ui_idle,--wrap=ui_wake,--wrap=ui_toast,--wrap=ui_key_lock_notice,--wrap=ui_layout_changed,--wrap=ui_show_view,--wrap=ui_value_changed
 $(BUILD)/link_test: $(LINK_OBJ) $(call obj,sim/link_test)
 $(BUILD)/bulk_test: $(LINK_OBJ) $(call obj,sim/bulk_test hw/bus)  # bulk_test has its own link.c and Modbus server
 $(addprefix $(BUILD)/,$(PROGS)):

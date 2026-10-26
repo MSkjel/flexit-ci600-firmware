@@ -4,7 +4,9 @@
 #include "anim.h"
 #include "clock.h"
 #include "input.h"
+#include "picture.h"
 #include "plat.h"
+#include "trend.h"
 #include <string.h>
 
 #define ESP_QUIET_S 30  // the ESP sends a frame every CX60 cycle, so this long without one means it's gone

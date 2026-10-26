@@ -1,5 +1,5 @@
 // Drawing and formatting helpers.
-#include "ui.h"
+#include "ui_int.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +32,13 @@ lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *tx
     lv_obj_set_style_text_font(l, f, 0);
   lv_obj_set_style_text_color(l, c, 0);
   label_text(l, txt ? txt : "");
+  return l;
+}
+
+lv_obj_t *mk_text(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int w, lv_text_align_t align) {
+  lv_obj_t *l = mk_label(p, f, c, txt);
+  lv_obj_set_width(l, w);
+  lv_obj_set_style_text_align(l, align, 0);
   return l;
 }
 
@@ -103,51 +110,58 @@ void set_text(lv_obj_t *l, const char *fmt, ...) {
   lv_label_set_text(l, buf);
 }
 
-int sprint(char *buf, const char *fmt, ...) {
+int sprint(char *buf, size_t n, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  int n = lv_vsnprintf(buf, SIZE_MAX, fmt, ap);
+  int len = lv_vsnprintf(buf, n, fmt, ap);
   va_end(ap);
-  return n;
+  return len;
 }
 
-const char *fmt_dec(char *buf, int32_t v, uint8_t dec) {
+char *copy_text(char *buf, size_t n, const char *s) {
+  sprint(buf, n, "%s", s);
+  return buf;
+}
+
+char *add_text(char *buf, size_t n, const char *s) {
+  size_t len = strlen(buf);
+  if (len < n)
+    sprint(buf + len, n - len, "%s", s);
+  return buf;
+}
+
+const char *fmt_dec(char *buf, size_t n, int32_t v, uint8_t dec) {
   static const uint32_t DIV[4] = {1, 10, 100, 1000};
   if (!dec) {
-    sprint(buf, "%ld", (long) v);
+    sprint(buf, n, "%ld", (long) v);
     return buf;
   }
   uint32_t a = v < 0 ? 0u - (uint32_t) v : (uint32_t) v, div = DIV[dec > 3 ? 3 : dec];
-  sprint(buf, "%s%lu.%0*lu", v < 0 ? "-" : "", (unsigned long) (a / div), dec, (unsigned long) (a % div));
+  sprint(buf, n, "%s%lu.%0*lu", v < 0 ? "-" : "", (unsigned long) (a / div), dec, (unsigned long) (a % div));
   return buf;
 }
 
-const char *fmt_temp(char *buf, int16_t t, bool unit) {
+const char *fmt_temp(char *buf, size_t n, int16_t t, bool unit) {
   if (t == T_NONE)
-    return strcpy(buf, NO_VALUE);
+    return copy_text(buf, n, NO_VALUE);
   if (M.temp_dec)
-    fmt_dec(buf, t, 1);
+    fmt_dec(buf, n, t, 1);
   else
-    sprint(buf, "%d", (t + (t < 0 ? -5 : 5)) / 10);  // rounded to whole degrees
-  strcat(buf, unit ? "\xC2\xB0"
-                     "C"
-                   : "\xC2\xB0");
-  return buf;
+    sprint(buf, n, "%d", (t + (t < 0 ? -5 : 5)) / 10);  // rounded to whole degrees
+  return add_text(buf, n, unit ? DEG_C : DEG);
 }
 
-const char *fmt_target(char *buf, int16_t t) {
-  fmt_dec(buf, t, 1);
-  strcat(buf, "\xC2\xB0"
-              "C");
-  return buf;
+const char *fmt_target(char *buf, size_t n, int16_t t) {
+  fmt_dec(buf, n, t, 1);
+  return add_text(buf, n, DEG_C);
 }
 
-const char *fmt_hm(char *buf, int minutes) {
+const char *fmt_hm(char *buf, size_t n, int minutes) {
   int h = minutes / 60, m = minutes % 60;  // an end at midnight is 24:00
   if (M.clock_24h)
-    sprint(buf, "%02d:%02d", h, m);
+    sprint(buf, n, "%02d:%02d", h, m);
   else
-    sprint(buf, "%d:%02d %s", (h + 11) % 12 + 1, m, h % 24 < 12 ? _(S_AM) : _(S_PM));
+    sprint(buf, n, "%d:%02d %s", (h + 11) % 12 + 1, m, h % 24 < 12 ? _(S_AM) : _(S_PM));
   return buf;
 }
 
@@ -196,6 +210,22 @@ void mk_empty(lv_obj_t *p, lv_color_t c, const char *icon, const char *title, co
   lv_obj_align(mk_label(p, &font_f16, T.text, title), LV_ALIGN_CENTER, 0, 14);
   if (sub)
     lv_obj_align(mk_label(p, &font_f12, T.dim, sub), LV_ALIGN_CENTER, 0, 36);
+}
+
+void mk_empty_screen(lv_obj_t *p, lv_color_t c, const char *icon, const char *title, const char *sub) {
+  mk_empty(p, c, icon, title, sub);
+  ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
+}
+
+lv_obj_t *mk_pill(lv_obj_t *p, int h, lv_color_t bg, int pad_x, int pad_y, int gap) {
+  lv_obj_t *o = mk_box(p, 0, 0, LV_SIZE_CONTENT, h, bg, PILL_RADIUS);
+  lv_obj_set_style_pad_hor(o, pad_x, 0);
+  if (pad_y)
+    lv_obj_set_style_pad_ver(o, pad_y, 0);
+  lv_obj_set_style_pad_column(o, gap, 0);
+  lv_obj_set_flex_flow(o, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(o, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  return o;
 }
 
 lv_obj_t *mk_chart(lv_obj_t *p, int w, int lines) {
@@ -277,17 +307,17 @@ int item_pct(const item_t *it) {
 
 bool item_on(const item_t *it) { return it->value != 0 && it->value != ITEM_UNKNOWN; }
 
-char *item_text(char *buf, const item_t *it, bool unit) {
+char *item_text(char *buf, size_t n, const item_t *it, bool unit) {
   if (it->type == ITEM_BUTTON)
-    return strcpy(buf, _(S_PRESS));
+    return copy_text(buf, n, _(S_PRESS));
   if (it->type == ITEM_TEXT)
-    return strcpy(buf, it->text[0] ? it->text : NO_VALUE);
+    return copy_text(buf, n, it->text[0] ? it->text : NO_VALUE);
   if (it->value == ITEM_UNKNOWN)
-    return strcpy(buf, NO_VALUE);  // like an unknown temperature
+    return copy_text(buf, n, NO_VALUE);  // like an unknown temperature
   if (it->type == ITEM_TOGGLE)
-    return strcpy(buf, item_on(it) ? (it->on[0] ? it->on : _(S_ON)) : (it->off[0] ? it->off : _(S_OFF)));
-  fmt_dec(buf, it->value, it->dec);
-  return unit ? add_unit(buf, it->unit) : buf;
+    return copy_text(buf, n, item_on(it) ? (it->on[0] ? it->on : _(S_ON)) : (it->off[0] ? it->off : _(S_OFF)));
+  fmt_dec(buf, n, it->value, it->dec);
+  return unit ? add_unit(buf, n, it->unit) : buf;
 }
 
 // txt in the value font if it fits in w, else the row font, padded down to sit on the same line. Texts from the
@@ -299,10 +329,15 @@ void label_fit(lv_obj_t *l, const char *txt, int w) {
   lv_label_set_text(l, txt);
 }
 
-char *add_unit(char *buf, const char *unit) {
+char *add_unit(char *buf, size_t n, const char *unit) {
   if (unit && unit[0]) {
-    strcat(buf, unit[0] == '%' || !strncmp(unit, "\xC2\xB0", 2) ? "" : " ");  // no space before % or a degree sign
-    strcat(buf, unit);
+    bool tight = unit[0] == '%' ? !lang_pct_space(M.language) : !strncmp(unit, DEG, sizeof DEG - 1);
+    add_text(add_text(buf, n, tight ? "" : " "), n, unit);
   }
   return buf;
+}
+
+const char *fmt_pct(char *buf, size_t n, int pct) {
+  sprint(buf, n, "%d", pct);
+  return add_unit(buf, n, "%");
 }

@@ -1,5 +1,5 @@
 // Key test: UP and OK keep the fan in the air between the ducts.
-#include "ui.h"
+#include "ui_int.h"
 
 #define STEP_MS 40
 #define SUB 16  // positions and speeds are in 1/16 px

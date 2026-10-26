@@ -6,7 +6,7 @@
 #include "mbserver.h"
 #include "room.h"
 #include "sim.h"
-#include "ui.h"
+#include "ui_int.h"
 #include "unit.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,8 +113,9 @@ int main(int argc, char **argv) {
   unit_second();
   room_second();
   char a[16], b[16], c[16], d[16];
-  printf("model: outdoor %s, supply %s, extract %s, water %s\n", fmt_temp(a, M.t_outdoor, true),
-         fmt_temp(b, M.t_supply, true), fmt_temp(c, M.t_extract, true), fmt_temp(d, M.t_water, true));
+  printf("model: outdoor %s, supply %s, extract %s, water %s\n", fmt_temp(a, sizeof a, M.t_outdoor, true),
+         fmt_temp(b, sizeof b, M.t_supply, true), fmt_temp(c, sizeof c, M.t_extract, true),
+         fmt_temp(d, sizeof d, M.t_water, true));
   printf("       mode %d, supply fan %d%%, rotor %d%%, heating %d%%, cooling %d%%, boost %d min\n", M.mode_now,
          M.fan_sup, M.rotor_pct, M.heat_pct, M.cool_pct, M.boost_left);
   printf("       filter %u h, total %lu h, CX60 %d.%02d, alarms %d, log %d, EC fans %d, water heater %d\n",

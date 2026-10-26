@@ -1,5 +1,5 @@
 // Home screen, its dashboard view and the fan speed overlay.
-#include "ui.h"
+#include "ui_int.h"
 #include <string.h>
 
 // ---------------------------------------------------------------- dashboard
@@ -27,7 +27,7 @@ static const str_t TILE_NAMES[TILE_UNIT] = {
     [TILE_ROTOR] = S_ROTOR,     [TILE_FILTER] = S_FILTER, [TILE_HEATER] = S_HEATER,   [TILE_RECOVERY] = S_RECOVERY};
 
 // Next week program change today: "until 22:30" inside a period, "Min at 15:30" before one
-static bool next_change(char *b) {
+static bool next_change(char *b, size_t n) {
   if (!M.week_program)
     return false;
   int d = M.wday % 7, now = M.hh * 60 + M.mi, best = 24 * 60;
@@ -36,12 +36,12 @@ static bool next_change(char *b) {
     const period_t *s = &M.week[d][i];
     int a = s->start, e = s->end;
     if (now >= a && now < e) {
-      sprint(b, _(S_UNTIL), fmt_hm(t, e));
+      sprint(b, n, _(S_UNTIL), fmt_hm(t, sizeof t, e));
       return true;
     }
     if (a > now && a < best) {
       best = a;
-      sprint(b, _(S_MODE_AT), tr(MODE_NAMES[s->level % MODE_COUNT]), fmt_hm(t, a));
+      sprint(b, n, _(S_MODE_AT), tr(MODE_NAMES[s->level % MODE_COUNT]), fmt_hm(t, sizeof t, a));
     }
   }
   return best < 24 * 60;
@@ -114,42 +114,37 @@ static void tile_build(lv_obj_t *p, int i) {
 }
 
 // Percentage, or a dash when pct < 0
-static const char *pct_text(char *b, int pct) {
-  if (pct < 0)
-    return NO_VALUE;
-  sprint(b, "%d%%", pct);
-  return b;
-}
+static const char *pct_text(char *b, size_t n, int pct) { return pct < 0 ? NO_VALUE : fmt_pct(b, n, pct); }
 
 // Text for tile source src. Sets *bar to the bar fill, -1 = empty, and *c if it needs another colour.
-static const char *tile_value(int src, char *b, int *bar, lv_color_t *c) {
+static const char *tile_value(int src, char *b, size_t n, int *bar, lv_color_t *c) {
   switch (src) {
     case TILE_OUTDOOR:
-      return fmt_temp(b, M.t_outdoor, false);
+      return fmt_temp(b, n, M.t_outdoor, false);
     case TILE_SUPPLY:
-      return fmt_temp(b, M.t_supply, false);
+      return fmt_temp(b, n, M.t_supply, false);
     case TILE_EXTRACT:
-      return fmt_temp(b, M.t_extract, false);
+      return fmt_temp(b, n, M.t_extract, false);
     case TILE_ROOM:
-      return fmt_temp(b, M.t_room, false);
+      return fmt_temp(b, n, M.t_room, false);
     case TILE_ROTOR:
       *bar = M.rotor_pct;
-      return pct_text(b, M.rotor_pct);
+      return pct_text(b, n, M.rotor_pct);
     case TILE_FILTER: {
       int days = filter_days_left();
       *bar = filter_life();
       *c = *bar < 10 ? T.err : *bar < 25 ? T.warn : T.ok;
       if (!days)
         return _(S_DUE);  // "Change" doesn't fit the tile
-      sprint(b, _(S_DAYS_SHORT), days);
+      sprint(b, n, _(S_DAYS_SHORT), days);
       return b;
     }
     case TILE_HEATER:
       *bar = M.heat_pct;
-      return M.heat_pct ? pct_text(b, M.heat_pct) : M.heater_enabled ? _(S_OFF_LOWER) : NO_VALUE;
+      return M.heat_pct ? pct_text(b, n, M.heat_pct) : M.heater_enabled ? _(S_OFF_LOWER) : NO_VALUE;
     case TILE_RECOVERY:
       *bar = heat_recovery();
-      return pct_text(b, *bar);
+      return pct_text(b, n, *bar);
     default: {  // an ESP item
       const item_t *it = tile_item(src);
       if (!it || !M.esp_online || it->type == ITEM_BUTTON)
@@ -160,9 +155,9 @@ static const char *tile_value(int src, char *b, int *bar, lv_color_t *c) {
         *c = item_color(it);
         *bar = item_pct(it);
       }
-      item_text(b, it, true);  // with its unit if that fits
+      item_text(b, n, it, true);  // with its unit if that fits
       if (lv_txt_get_width(b, (uint32_t) strlen(b), &font_f20, 0, LV_TEXT_FLAG_NONE) > DASH_TILE_W - 16)
-        item_text(b, it, false);
+        item_text(b, n, it, false);
       return b;
     }
   }
@@ -172,7 +167,7 @@ static void tile_update(int i) {
   int src = tile_src(i), bar = -1;
   char b[32];
   lv_color_t c = tile_color(src);
-  const char *v = tile_value(src, b, &bar, &c);
+  const char *v = tile_value(src, b, sizeof b, &bar, &c);
   if (tile_item(src) && tile_item(src)->type == ITEM_TEXT)
     label_fit(dash->tile_val[i], v, DASH_TILE_W - 16);
   else
@@ -231,8 +226,8 @@ static void show_state(lv_color_t c, const char *text) {
 
 static void dash_update(void) {
   char a[24], s[48];
-  set_text(dash->big, "%s", fmt_temp(a, big_temp(), false));
-  set_text(dash->target, _(S_TARGET), fmt_target(a, M.setpoint_now ? M.setpoint_now : M.setpoint));
+  set_text(dash->big, "%s", fmt_temp(a, sizeof a, big_temp(), false));
+  set_text(dash->target, _(S_TARGET), fmt_target(a, sizeof a, M.setpoint_now ? M.setpoint_now : M.setpoint));
   if (M.bus_offline)
     show_state(T.err, _(S_NO_CONTACT_WITH_UNIT));
   else if (M.heat_pct)
@@ -258,8 +253,8 @@ static void dash_update(void) {
     if (M.fan_ext && M.fan_ext != M.fan_sup)
       set_text(dash->ring_sub, _(S_FANS_IN_OUT), M.fan_sup, M.fan_ext);
     else
-      set_text(dash->ring_sub, "%d %%", M.fan_sup);
-    lv_label_set_text(dash->ring_next, next_change(s) ? s : "");
+      lv_label_set_text(dash->ring_sub, fmt_pct(a, sizeof a, M.fan_sup));
+    lv_label_set_text(dash->ring_next, next_change(s, sizeof s) ? s : "");
   }
   lv_obj_align_to(dash->ring_mode, dash->ring, LV_ALIGN_CENTER, 0, 7);  // less room inside the ring further down
   lv_obj_align_to(dash->ring_sub, dash->ring, LV_ALIGN_CENTER, 0, 25);
@@ -277,7 +272,7 @@ static const view_t *const VIEWS[VIEW_COUNT] = {[VIEW_DASH] = &DASH_VIEW,       
 static int view, page;  // current view, VIEW_*, and its page
 
 // Installed and switched on in Display > Home screen > Views. The dashboard is always on.
-static bool view_on(int v) { return ui_has(VIEWS[v]->need) && (v == VIEW_DASH || M.view_on[v]); }
+static bool view_on(int v) { return HAS_ALL(VIEWS[v]->need) && (v == VIEW_DASH || M.view_on[v]); }
 
 // The start view, or the dashboard if that view is off or needs missing equipment
 int view_used(val_t v, int view) {
@@ -374,9 +369,8 @@ static void hud_build(lv_obj_t *b, intptr_t arg) {
   for (int i = 0; i <= HUD_BOOST; i++) {
     int h = 10 + i * 11;
     hud.bars[i] = mk_box(card, 22 + i * 46, 104 - h, 32, h, T.surface2, 6);
-    hud.names[i] = mk_label(card, &font_f12, T.dim, tr(i == HUD_BOOST ? S_BOOST : MODE_NAMES[i]));
-    lv_obj_set_width(hud.names[i], 46);
-    lv_obj_set_style_text_align(hud.names[i], LV_TEXT_ALIGN_CENTER, 0);
+    hud.names[i] =
+        mk_text(card, &font_f12, T.dim, tr(i == HUD_BOOST ? S_BOOST : MODE_NAMES[i]), 46, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(hud.names[i], 15 + i * 46, 110);
   }
   ui_hints(S_CHANGE, S_DONE, S_DONE, S_NONE);

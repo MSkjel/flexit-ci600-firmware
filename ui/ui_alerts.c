@@ -1,5 +1,5 @@
 // Alarm pop-up and lists, ESP messages and the help overlay.
-#include "ui.h"
+#include "ui_int.h"
 
 // Names by CX60 alarm code, from status registers 0xCD..0xEA
 static const str_t ALARM_TXT[] = {
@@ -43,12 +43,16 @@ const alarm_t *alarm_find(intptr_t code) {
 
 static lv_color_t alarm_color(uint8_t code) { return code == ALARM_FILTER ? T.warn : T.err; }
 
-// Alert card with border and badge in colour c, and the kind of message next to the badge
-static lv_obj_t *alert_card(lv_obj_t *b, int x, int y, int w, int h, lv_color_t c, int badge, const lv_font_t *f,
+#define POPUP_W 296                             // alarm pop-up
+#define NOTE_W 288                              // message from the ESP
+#define BESIDE(badge) (2 * CARD_PAD + (badge))  // x of the texts beside a badge
+
+// Centred, w wide, border and badge in colour c, the kind of message beside the badge
+static lv_obj_t *alert_card(lv_obj_t *b, int y, int w, int h, lv_color_t c, int badge, const lv_font_t *f,
                             const char *icon, const char *kind) {
-  lv_obj_t *card = mk_card(b, x, y, w, h, c, 2);
-  mk_badge(card, 14, 14, badge, f, c, icon);
-  lv_obj_set_pos(mk_label(card, &font_f12, c, kind), 14 + badge + 14, 14);
+  lv_obj_t *card = mk_card(b, (SCR_W - w) / 2, y, w, h, c, 2);
+  mk_badge(card, CARD_PAD, CARD_PAD, badge, f, c, icon);
+  lv_obj_set_pos(mk_label(card, &font_f12, c, kind), BESIDE(badge), CARD_PAD);
   return card;
 }
 
@@ -57,14 +61,14 @@ static void popup_build(lv_obj_t *b, intptr_t arg) {
   const alarm_t *a = alarm_find(arg);
   bool filter = a->code == ALARM_FILTER;
   lv_color_t c = alarm_color(a->code);
-  lv_obj_t *card = alert_card(b, 12, 10, 296, 176, c, 52, &icons_32, filter ? IC_FILTER : IC_ALERT,
+  lv_obj_t *card = alert_card(b, 10, POPUP_W, 176, c, 52, &icons_32, filter ? IC_FILTER : IC_ALERT,
                               filter ? _(S_SERVICE_CAPS) : _(S_ALARM_CAPS));
-  mk_wrap(card, &font_f20, T.text, alarm_text(a->code), 80, 31, 200);
+  mk_wrap(card, &font_f20, T.text, alarm_text(a->code), BESIDE(52), 31, POPUP_W - BESIDE(52) - CARD_PAD);
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
-  set_text(w, _(S_ALARM_SINCE), a->dd, a->mo, fmt_hm(hm, a->hh * 60 + a->mi));
-  lv_obj_set_pos(w, 80, 60);
-  mk_wrap(card, &font_f14, T.text, tr(ALARM_ADVICE[alarm_code(a->code)]), 14, 84, 268);
+  set_text(w, _(S_ALARM_SINCE), a->dd, a->mo, fmt_hm(hm, sizeof hm, a->hh * 60 + a->mi));
+  lv_obj_set_pos(w, BESIDE(52), 60);
+  mk_wrap(card, &font_f14, T.text, tr(ALARM_ADVICE[alarm_code(a->code)]), CARD_PAD, 84, POPUP_W - 2 * CARD_PAD);
   if (M.n_alarms > 1) {
     lv_obj_t *more = mk_label(card, &font_f12, c, "");
     set_text(more, _(S_N_MORE), M.n_alarms - 1);
@@ -105,7 +109,7 @@ static void alarm_row(int i, const alarm_t *a, bool hist) {
   lv_obj_t *when = mk_label(alarms->list, &font_f12, T.dim, "");
   char hm[12];
   set_text(when, _(S_ALARM_WHEN), hist ? (a->active ? _(S_ACTIVE_SINCE) : _(S_LOGGED)) : _(S_SINCE), a->dd, a->mo,
-           fmt_hm(hm, a->hh * 60 + a->mi));
+           fmt_hm(hm, sizeof hm, a->hh * 60 + a->mi));
   lv_obj_set_pos(when, 36, y + 20);
   lv_obj_t *code = mk_label(alarms->list, &font_f12, T.faint, "");
   set_text(code, "#%d", a->code);
@@ -119,8 +123,7 @@ static void alarms_build(lv_obj_t *b, intptr_t arg) {
   const alarm_t *src = hist ? M.history : M.alarms;
   alarms->n = hist ? M.n_history : M.n_alarms;
   if (!alarms->n) {
-    mk_empty(b, T.ok, IC_CHECK_C, hist ? _(S_NO_ALARMS_LOGGED) : _(S_NO_ACTIVE_ALARMS), NULL);
-    ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
+    mk_empty_screen(b, T.ok, IC_CHECK_C, hist ? _(S_NO_ALARMS_LOGGED) : _(S_NO_ACTIVE_ALARMS), NULL);
     return;
   }
   clamp_sel(alarms->n, alarms->n > ALARM_ROWS ? alarms->n - ALARM_ROWS : 0);
@@ -150,12 +153,12 @@ static void note_build(lv_obj_t *b, intptr_t arg) {
   bool alarm = M.note_level == NOTE_ALARM, warning = M.note_level == NOTE_WARNING;
   lv_color_t c = alarm ? T.err : warning ? T.warn : T.accent;
   str_t kind = alarm ? S_ALARM_CAPS : warning ? S_WARNING_CAPS : S_MESSAGE_CAPS;
-  lv_obj_t *card = alert_card(b, 16, 22, 288, 152, c, 44, &icons_22, icon_glyph(M.note_icon), tr(kind));
+  lv_obj_t *card = alert_card(b, 22, NOTE_W, 152, c, 44, &icons_22, icon_glyph(M.note_icon), tr(kind));
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
-  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, M.hh * 60 + M.mi));
-  lv_obj_set_pos(w, 72, 30);
-  mk_wrap(card, &font_f16, T.text, M.note, 14, 70, 258);
+  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, M.hh * 60 + M.mi));
+  lv_obj_set_pos(w, BESIDE(44), 30);
+  mk_wrap(card, &font_f16, T.text, M.note, CARD_PAD, 70, NOTE_W - 2 * CARD_PAD);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);
   ui_help(S_NOTE_HELP);
 }
@@ -170,32 +173,33 @@ static bool note_key(int k) {
 const screen_t SCR_NOTE = {.flags = SF_OVERLAY, .build = note_build, .key = note_key};
 
 // ---------------------------------------------------------------- help: the screen's text (arg) and the keys
-static int help_item;  // item whose ESP help is shown when the text is S_ITEM_HELP
+static int help_item;             // item whose ESP help is shown when the text is S_ITEM_HELP
+static lv_obj_t *item_help_text;  // the label it's shown in. A help takes every key, so only one asks at a time.
 
 void ui_help_item(int item) {
   help_item = item;
   ui_help(S_ITEM_HELP);
 }
 
-// Shows an item's help once it arrives from the ESP. Each help on the stack has its own text label.
+// Shows an item's help once it arrives from the ESP
 static void help_update(void) {
-  frame_t *f = ui_frame();
-  if (f->arg != S_ITEM_HELP)
+  if (ui_frame()->arg != S_ITEM_HELP)
     return;
   const char *h = link_item_help(help_item);
-  lv_obj_t *text = lv_obj_get_child(lv_obj_get_child(f->root, 0), 0);  // the card's first child
-  lv_label_set_text(text, !h ? _(S_ITEM_HELP) : h[0] ? h : _(S_NO_HELP));
+  lv_label_set_text(item_help_text, !h ? _(S_ITEM_HELP) : h[0] ? h : _(S_NO_HELP));
 }
 
 static void help_build(lv_obj_t *b, intptr_t arg) {
   str_t text = (str_t) arg;
-  lv_obj_t *card = mk_card(b, 16, 4, 288, BODY_H - 8, T.line, 1);
-  // the card's first child, for help_update(). Up to HELP_LINES lines
-  mk_wrap(card, &font_f14, T.text, tr(text ? text : S_NO_HELP), 14, 38, HELP_W);
+  lv_obj_t *card = mk_card(b, (SCR_W - HELP_CARD_W) / 2, 4, HELP_CARD_W, BODY_H - 8, T.line, 1);
+  lv_obj_t *t =
+      mk_wrap(card, &font_f14, T.text, tr(text ? text : S_NO_HELP), CARD_PAD, 38, HELP_W);  // HELP_LINES at most
+  if (text == S_ITEM_HELP)
+    item_help_text = t;
   help_update();
-  lv_obj_set_pos(mk_icon(card, &icons_22, T.accent, IC_HELP), 14, 9);
+  lv_obj_set_pos(mk_icon(card, &icons_22, T.accent, IC_HELP), CARD_PAD, 9);
   lv_obj_set_pos(mk_label(card, &font_f16, T.text, _(S_HELP)), 44, 10);
-  lv_obj_align(mk_wrap(card, &font_f12, T.dim, _(S_HELP_FOOTER), 0, 0, HELP_W), LV_ALIGN_BOTTOM_LEFT, 14, -10);
+  lv_obj_align(mk_wrap(card, &font_f12, T.dim, _(S_HELP_FOOTER), 0, 0, HELP_W), LV_ALIGN_BOTTOM_LEFT, CARD_PAD, -10);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);
 }
 

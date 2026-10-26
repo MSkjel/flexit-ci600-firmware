@@ -1,8 +1,9 @@
 // Screensaver. A clock on black or over the ESP's picture, with the ESP's animation on top.
-#include "ui.h"
+#include "ui_int.h"
 
-#define BAND_H 74  // height of the band behind the text over a picture
-#define SHADOW 2   // text shadow offset, px
+#define BAND_H 74              // height of the band behind the text over a picture
+#define SHADOW 2               // text shadow offset, px
+#define PICTURE_TEXT 0xD4DCDE  // date and temperatures over a picture, softer than the clock's white
 
 typedef struct {
   lv_obj_t *clock, *date, *temps;
@@ -32,17 +33,15 @@ bool saver_picture(void) { return ui_top() == &SCR_SAVER && saver->shows_pic; }
 // Clock, date and maybe temps on the band. Shadows are black, see-through and SHADOW px down and right.
 static void band_texts(lv_obj_t *band, lv_obj_t *l[3], bool temps, bool shadow) {
   int d = shadow ? SHADOW : 0;
-  lv_color_t c = shadow ? lv_color_black() : lv_color_hex(0xD4DCDE);
+  lv_color_t c = shadow ? lv_color_black() : lv_color_hex(PICTURE_TEXT);
   l[0] = mk_label(band, &font_n40, shadow ? c : lv_color_white(), "");
   lv_obj_set_pos(l[0], 14 + d, 2 + d);
   l[1] = mk_label(band, &font_f14, c, "");
   lv_obj_set_pos(l[1], 16 + d, 50 + d);
   l[2] = NULL;
   if (temps) {
-    l[2] = mk_label(band, &font_f16, c, "");
+    l[2] = mk_text(band, &font_f16, c, "", 150, LV_TEXT_ALIGN_RIGHT);
     lv_label_set_recolor(l[2], true);
-    lv_obj_set_width(l[2], 150);
-    lv_obj_set_style_text_align(l[2], LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(l[2], SCR_W - 164 + d, 14 + d);
   }
   for (int i = 0; shadow && i < 3; i++)
@@ -107,11 +106,12 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
 static void temps_text(lv_obj_t *l, uint32_t in, uint32_t out) {
   char a[16], c[16];
   if (saver->over_picture)
-    set_text(l, "%s  #%06x %s#\n%s  #%06x %s#", _(S_IN), (unsigned) in, fmt_temp(a, indoor_temp(), false), _(S_OUT),
-             (unsigned) out, fmt_temp(c, M.t_outdoor, false));
+    set_text(l, "%s  #%06x %s#\n%s  #%06x %s#", _(S_IN), (unsigned) in, fmt_temp(a, sizeof a, indoor_temp(), false),
+             _(S_OUT), (unsigned) out, fmt_temp(c, sizeof c, M.t_outdoor, false));
   else
-    set_text(l, "%s  #%06x %s#      %s  #%06x %s#", _(S_INDOOR), (unsigned) in, fmt_temp(a, indoor_temp(), false),
-             _(S_OUTDOOR), (unsigned) out, fmt_temp(c, M.t_outdoor, false));
+    set_text(l, "%s  #%06x %s#      %s  #%06x %s#", _(S_INDOOR), (unsigned) in,
+             fmt_temp(a, sizeof a, indoor_temp(), false), _(S_OUTDOOR), (unsigned) out,
+             fmt_temp(c, sizeof c, M.t_outdoor, false));
 }
 
 // Moves a few pixels every minute, like the big clock, so nothing stays in one place for hours
@@ -123,8 +123,8 @@ static void small_update(void) {
   lv_obj_align(saver->clock, left, 10 + dx, y);
   if (!saver->temps)
     return;
-  set_text(saver->temps, "%s %s  %s %s", _(S_IN), fmt_temp(a, indoor_temp(), false), _(S_OUT),
-           fmt_temp(c, M.t_outdoor, false));
+  set_text(saver->temps, "%s %s  %s %s", _(S_IN), fmt_temp(a, sizeof a, indoor_temp(), false), _(S_OUT),
+           fmt_temp(c, sizeof c, M.t_outdoor, false));
   lv_obj_align(saver->temps, right, -10 + dx, y);
 }
 

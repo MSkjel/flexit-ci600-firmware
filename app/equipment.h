@@ -16,3 +16,5 @@ enum { FEATURES(FEAT_ENUM) FEAT_COUNT };
 
 #define FBIT(f) (1u << (f))
 #define HAS(f) ((M.features >> (f)) & 1u)
+#define HAS_ALL(mask) ((M.features & (mask)) == (mask))  // every feature in an FBIT() mask
+#define HAS_ANY(mask) ((M.features & (mask)) != 0)       // any of them

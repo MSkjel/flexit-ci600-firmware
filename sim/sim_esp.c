@@ -1,6 +1,7 @@
 // Fake ESP at address 1 running the real pbulk code, talking to app/link.c over a fake CX60 bus.
 // One transaction per cycle, in the quiet after the status broadcast.
-#include "ui.h"
+#include "model.h"
+#include "plink_icons.h"
 #include "sim.h"
 #include "link.h"
 #include "plink.h"

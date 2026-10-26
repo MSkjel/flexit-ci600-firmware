@@ -1,6 +1,9 @@
 // Fake data for the simulator, and a stand-in for what the CX60 does when a value changes.
-#include "ui.h"
+#include "model.h"
+#include "panel.h"
 #include "plink.h"
+#include "plink_icons.h"
+#include "trend.h"
 #include "sim.h"
 #include <stdlib.h>
 #include <string.h>

@@ -1,5 +1,5 @@
 // Screen stack, status bar, key hints and themes.
-#include "ui.h"
+#include "ui_int.h"
 #include <string.h>
 
 theme_t T;
@@ -359,7 +359,7 @@ static size_t add_status(char *buf, size_t size, size_t n, lv_color_t c, const c
 
 static void update_status(void) {
   char buf[128];
-  lv_label_set_text(clock_lbl, fmt_hm(buf, M.hh * 60 + M.mi));
+  lv_label_set_text(clock_lbl, fmt_hm(buf, sizeof buf, M.hh * 60 + M.mi));
 
   // status icons. The label is right-aligned so the row grows to the left.
   size_t n = 0;
@@ -387,17 +387,19 @@ static void update_status(void) {
 void ui_toast(const char *icon, str_t msg) {
   if (toast)
     lv_obj_del(toast);
-  lv_obj_t *t = toast = mk_box(lv_layer_top(), 0, 0, LV_SIZE_CONTENT, LV_SIZE_CONTENT, T.text, 14);
-  lv_obj_set_style_pad_hor(t, 12, 0);
-  lv_obj_set_style_pad_ver(t, 5, 0);
-  lv_obj_set_style_pad_column(t, 6, 0);
-  lv_obj_set_flex_flow(t, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(t, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_t *t = toast = mk_pill(lv_layer_top(), LV_SIZE_CONTENT, T.text, 12, 5, 6);
   if (icon)
     mk_icon(t, &icons_16, T.bg, icon);
   mk_label(t, &font_f14, T.bg, tr(msg));
   lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 0);  // covers the title briefly rather than the content
   toast_end = lv_tick_get() + TOAST_MS;
+}
+
+void ui_key_lock_notice(bool toggled) {
+  if (toggled)
+    ui_toast(M.key_lock ? IC_LOCK : IC_UNLOCK, M.key_lock ? S_KEYS_LOCKED : S_KEYS_UNLOCKED);
+  else
+    ui_toast(IC_LOCK, S_KEYS_LOCKED_HOW);
 }
 
 // ---------------------------------------------------------------- input and ticks
@@ -558,5 +560,3 @@ void ui_init(void) {
   ready = true;
   ui_show_view(M.home_view);
 }
-
-bool ui_has(uint32_t need) { return (M.features & need) == need; }

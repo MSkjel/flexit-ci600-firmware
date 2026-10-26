@@ -1,4 +1,5 @@
 // Runs LVGL on the PC with the display in memory, saves screenshots and lays out the ESP's messages.
+#include "picture.h"
 #include "plat.h"
 #include "plink.h"
 #include "sim.h"

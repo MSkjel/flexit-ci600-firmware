@@ -47,7 +47,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_SUPPLY_CAPS] = "TILLUFT",
     [S_EXTRACT_CAPS] = "AVTREKK",
     [S_EXHAUST_CAPS] = "AVKAST",
-    [S_HEAT_RECOVERY_PCT] = "Varmegjenvinning %d%%",
+    [S_HEAT_RECOVERY_PCT] = "Varmegjenvinning %d %%",
     [S_HEAT_RECOVERY] = "Varmegjenvinning",
     [S_AXIS_24H] = "-24h",
     [S_AXIS_18H] = "-18h",
@@ -314,7 +314,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_TOP] = "Øverst",
     [S_PICTURE_HELP] =
         "Skjermsparerbildet fra ESP-en. Det forsvinner når panelet starter på nytt, og ESP-en sender det igjen.",
-    [S_RECEIVING_PCT] = "Mottar %d%%",
+    [S_RECEIVING_PCT] = "Mottar %d %%",
     [S_PICTURE_SIZE] = "%d x %d",
     [S_NONE_YET] = "Ingen ennå",
     [S_BACK_TO_START_VIEW] = "Tilbake til startvisning",

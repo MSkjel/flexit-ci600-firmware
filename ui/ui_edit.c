@@ -1,0 +1,212 @@
+// The value editor and the action confirm box (SCR_EDIT), over a row list.
+#include "ui_menu.h"
+#include <string.h>
+
+#define OPT_ROWS 5  // enum options shown at a time, longer lists scroll
+// SCR_EDIT state. It's an overlay so it can't use ui_screen_mem.
+static struct {
+  const frame_t *f;  // the editor's frame
+  const mitem_t *it;
+  int32_t v, min, max;  // value being edited and its range
+  lv_obj_t *val, *unit, *bar, *opts[OPT_ROWS], *check, *opt_bg;
+  uint16_t offer[MAX_OPTS];  // MI_ENUM: the n usable options, ed.v is offer[pos]
+  int n, pos;
+  int16_t first;  // first option on screen
+  bool armed;     // OK was pressed in this dialog, not just still held from the list
+} ed;
+
+#define EDIT_W 272  // width of the editor card, and of the text inside it
+#define EDIT_TEXT_W (EDIT_W - 2 * CARD_PAD)
+#define EDIT_TOP 40           // where the card's content starts, under its title
+#define OPT_H 24              // option row height
+#define FASTER_HELD_MS 1500   // UP or DOWN held this long steps 5 at a time
+#define FASTEST_HELD_MS 4000  // and this long, 10
+
+static int opt_rows(void) { return ed.n < OPT_ROWS ? ed.n : OPT_ROWS; }  // options shown
+
+// Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle.
+static void offer_options(const mitem_t *it, bool rebuild) {
+  int now = opt_used(it, ed.v);
+  uint16_t opts[MAX_OPTS];
+  int n = 0;
+  if (it->fn && it->fn->list)
+    n = it->fn->list(opts);
+  else
+    for (int o = ed.min; o <= ed.max && n < MAX_OPTS; o++)
+      opts[n++] = (uint16_t) o;
+  ed.n = ed.pos = 0;
+  for (int i = 0; i < n; i++)
+    if (opt_used(it, opts[i]) == opts[i]) {
+      if (opts[i] == now)
+        ed.pos = ed.n;
+      ed.offer[ed.n++] = opts[i];
+    }
+  ed.v = ed.offer[ed.pos];
+  int rows = opt_rows(), first = rebuild ? ed.first : ed.pos - rows / 2;
+  ed.first = (int16_t) (first < 0 ? 0 : first > ed.n - rows ? ed.n - rows : first);
+}
+
+static void edit_number(lv_obj_t *card, const mitem_t *it) {
+  ed.val = mk_label(card, &font_n40, T.accent, "");
+  ed.unit = mk_label(card, &font_f16, T.dim, "");
+  ed.bar = mk_bar(card, 18, 104, EDIT_TEXT_W - 8, 6, 0, ed.max - ed.min, T.accent);
+  char a[16];
+  lv_obj_set_pos(mk_label(card, &font_f12, T.faint, number_only(it, ed.min, a, sizeof a)), 18, 116);
+  lv_obj_align(mk_label(card, &font_f12, T.faint, number_only(it, ed.max, a, sizeof a)), LV_ALIGN_TOP_RIGHT, -18, 116);
+  ui_hints(S_ADJUST, S_SAVE, S_CANCEL, S_HELP);
+}
+
+static void edit_options(lv_obj_t *card) {
+  ed.opt_bg = mk_box(card, 8, 0, EDIT_W - 16, OPT_H - 2, T.accent_soft, 6);
+  for (int i = 0; i < opt_rows(); i++) {
+    ed.opts[i] = mk_label(card, &font_f14, T.text, "");
+    lv_obj_set_pos(ed.opts[i], 38, EDIT_TOP + i * OPT_H);
+  }
+  ed.check = mk_icon(card, &icons_16, T.accent, IC_CHECK);  // marks the current setting
+  ui_hints(S_CHOOSE, S_SAVE, S_CANCEL, S_HELP);
+}
+
+static const char *confirm_warning(const mitem_t *it) {
+  return tr(it->flags & MF_DANGER ? S_HOLD_OK_WARNING : S_PRESS_OK);
+}
+
+// Height of the action confirm box, the question with the warning below it at *warning_y
+static int confirm_height(const mitem_t *it, int *warning_y) {
+  lv_point_t qs, ws;
+  lv_txt_get_size(&qs, tr(it->help), &font_f14, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  lv_txt_get_size(&ws, confirm_warning(it), &font_f12, 0, 0, EDIT_TEXT_W, LV_TEXT_FLAG_NONE);
+  *warning_y = EDIT_TOP + qs.y + 10;
+  return *warning_y + ws.y + 14;
+}
+
+// Action confirm box. The help text says what it does, then how to confirm.
+static void edit_confirm(lv_obj_t *card, const mitem_t *it, int warning_y) {
+  mk_wrap(card, &font_f14, T.text, tr(it->help), CARD_PAD, EDIT_TOP, EDIT_TEXT_W);
+  mk_wrap(card, &font_f12, T.warn, confirm_warning(it), CARD_PAD, warning_y, EDIT_TEXT_W);
+  ui_hints(S_NONE, it->flags & MF_DANGER ? S_HOLD_TO_CONFIRM : S_CONFIRM, S_CANCEL, S_NONE);
+}
+
+static void edit_build(lv_obj_t *b, intptr_t arg) {
+  const mitem_t *it = (const mitem_t *) arg;
+  const frame_t *f = ui_frame();
+  bool rebuild = f->built && ed.f == f;  // keeps the value being edited
+  if (!rebuild) {
+    memset(&ed, 0, sizeof ed);
+    ed.f = f;
+    ed.v = it->type == MI_ACTION ? 0 : val_get(it->val);
+  }
+  ed.it = it;
+  if (rebuild && (!val_known(it->val) || (item_of(it->val) && !M.esp_online)))
+    ui_close_after(0);  // the ESP went away, or restarted and forgot the item being edited
+  ed.min = val_def(it->val).min;
+  ed.max = val_def(it->val).max;
+  if (ed.v == ITEM_UNKNOWN && item_of(it->val))
+    ed.v = ed.min;  // a number with no value yet starts from the bottom
+  if (it->type == MI_ENUM)
+    offer_options(it, rebuild);
+  int warning_y = 0, h = 150;
+  if (it->type == MI_ENUM)
+    h = EDIT_TOP + 6 + opt_rows() * OPT_H;
+  else if (it->type == MI_ACTION)
+    h = confirm_height(it, &warning_y);
+  if (h > BODY_H - 8)
+    h = BODY_H - 8;
+  lv_obj_t *card = mk_card(b, (SCR_W - EDIT_W) / 2, (BODY_H - h) / 2, EDIT_W, h, T.line, 1);
+  lv_obj_set_pos(mk_icon(card, &icons_16, T.accent, it->icon ? it->icon : IC_TUNE), CARD_PAD, 12);
+  lv_obj_set_pos(mk_label(card, &font_f16, T.text, item_title(it)), 38, 9);
+  row_help(it);
+  if (it->type == MI_NUM)
+    edit_number(card, it);
+  else if (it->type == MI_ENUM)
+    edit_options(card);
+  else
+    edit_confirm(card, it, warning_y);
+}
+
+static void edit_update(void) {
+  const mitem_t *it = ed.it;
+  char a[16];
+  if (it->type == MI_NUM) {
+    bool off = shown_off(it, ed.v);  // Off in a text font, the number font has no letters
+    const lv_font_t *f = off ? &font_f28 : &font_n40;
+    const char *unit = off ? "" : item_unit(it);
+    lv_obj_set_style_text_font(ed.val, f, 0);
+    lv_label_set_text(ed.val, number_only(it, ed.v, a, sizeof a));
+    label_text(ed.unit, unit);
+    int y = 38 + (font_n40.line_height - font_n40.base_line) - (f->line_height - f->base_line);  // same baseline
+    lv_obj_align(ed.val, LV_ALIGN_TOP_MID, -lv_txt_get_width(unit, strlen(unit), &font_f16, 0, 0) / 2 - 2, y);
+    lv_obj_align_to(ed.unit, ed.val, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -3 - font_n40.base_line);  // near its baseline
+    lv_bar_set_value(ed.bar, ed.v - ed.min, LV_ANIM_OFF);
+  } else if (it->type == MI_ENUM) {
+    int rows = opt_rows(), used = opt_used(it, val_get(it->val)), now = -1;
+    for (int i = 0; i < ed.n; i++)
+      if (ed.offer[i] == used)
+        now = i;
+    keep_in_view(&ed.first, ed.pos, rows);
+    for (int i = 0; i < rows; i++) {
+      int o = ed.offer[ed.first + i];
+      lv_label_set_text(ed.opts[i], opt_text(it, o));
+      lv_obj_set_style_text_color(ed.opts[i], o == ed.v ? T.accent : T.text, 0);
+    }
+    lv_obj_set_y(ed.opt_bg, EDIT_TOP - 1 + (ed.pos - ed.first) * OPT_H);
+    if (now >= ed.first && now < ed.first + rows) {
+      lv_obj_clear_flag(ed.check, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_pos(ed.check, 14, EDIT_TOP + 2 + (now - ed.first) * OPT_H);
+    } else {
+      lv_obj_add_flag(ed.check, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
+static bool edit_key(int k) {
+  const mitem_t *it = ed.it;
+  if ((k == KEY_UP || k == KEY_DOWN) && it->type != MI_ACTION) {
+    int d = k == KEY_UP ? 1 : -1;
+    if (it->type == MI_ENUM) {
+      ed.pos = step_sel(ed.pos, k, ed.n);  // UP moves up the list, unlike a number where it increases
+      ed.v = ed.offer[ed.pos];
+    } else {
+      uint32_t held = input_held_ms();
+      int step = it->step ? it->step : 1, mul = held > FASTEST_HELD_MS ? 10 : held > FASTER_HELD_MS ? 5 : 1;
+      int32_t base = item_of(it->val) ? ed.min : 0;  // an ESP number's steps count from its min
+      ed.v = base + step_value(ed.v - base, d * mul, step, ed.min - base, ed.max - base);
+    }
+    edit_update();
+    return true;
+  }
+  bool danger = it->flags & MF_DANGER;
+  if (k == KEY_OK && danger) {
+    ed.armed = true;
+    ui_toast(IC_TIMER_SAND, S_KEEP_HOLDING_OK);
+    return true;
+  }
+  if (k == KEY_OK_LONG && !(danger && ed.armed))
+    return true;
+  if (k == KEY_OK || k == KEY_OK_LONG) {
+    if (it->type == MI_ACTION) {
+      do_action(it->act);
+      ui_pop();
+      if (it->flags & MF_POP_PARENT)
+        ui_pop();
+      ui_toast(IC_CHECK, it->done ? it->done : S_DONE);
+    } else {
+      ui_pop();
+      val_set(it->val, ed.v);
+      ui_toast(IC_CHECK, S_SAVED);
+    }
+    return true;
+  }
+  return false;
+}
+
+static const char *edit_selected(void) { return ed.it->type == MI_ENUM ? opt_text(ed.it, ed.v) : NULL; }
+
+const screen_t SCR_EDIT = {
+    .flags = SF_OVERLAY, .build = edit_build, .update = edit_update, .key = edit_key, .selected = edit_selected};
+
+// The brightness being edited, so the backlight can show it
+int ui_backlight_preview(void) {
+  if (ui_top() != &SCR_EDIT || !ed.it || !(ed.it->flags & MF_BACKLIGHT))
+    return -1;
+  return (int) ed.v;  // at night 0 means off, but it previews as 0 %, not with the light off
+}

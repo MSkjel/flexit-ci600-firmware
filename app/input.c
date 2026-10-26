@@ -1,5 +1,6 @@
 // see input.h
 #include "input.h"
+#include "model.h"
 #include "panel.h"
 #include "ui.h"
 
@@ -8,12 +9,12 @@
 #define REPEAT_MS 120        // every this often
 #define FAST_AFTER_MS 3000   // and once held this long
 #define REPEAT_FAST_MS 60    // every this often
-#define HOLD_MAX_MS 60000    // where input_hold_ms stops
+#define HOLD_MAX_MS 60000    // where input_held_ms() stops
 #define OK_LONG_MS 2000      // OK held, KEY_OK_LONG
 #define HOME_MS 800          // BACK held, KEY_HOME
 #define LOCK_MS 3000         // HELP held, locks or unlocks the keys
 
-uint16_t input_hold_ms;
+static uint16_t hold_ms;    // how long the repeating key has been held
 static uint32_t now, last;  // now, and the last key press or news
 static bool idle;
 
@@ -26,6 +27,8 @@ void input_activity(void) {
 }
 
 bool input_idle(void) { return idle; }
+
+uint32_t input_held_ms(void) { return hold_ms; }
 
 void input_tick(uint32_t ms) {
   now = ms;
@@ -61,9 +64,9 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
       next_rep[k] = ms + REPEAT_FIRST_MS;
       long_done &= (uint8_t) ~bit;
       last = ms;
-      input_hold_ms = 0;
+      hold_ms = 0;
       if (M.key_lock && k != IN_HELP) {
-        ui_toast(IC_LOCK, S_KEYS_LOCKED_HOW);
+        ui_key_lock_notice(false);
         ignore |= bit;
         continue;
       }
@@ -77,10 +80,10 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
       } else if (k == IN_HELP && t > LOCK_MS) {
         long_done |= bit;
         val_set(V_KEY_LOCK, !M.key_lock);
-        ui_toast(M.key_lock ? IC_LOCK : IC_UNLOCK, M.key_lock ? S_KEYS_LOCKED : S_KEYS_UNLOCKED);
+        ui_key_lock_notice(true);
       } else if ((k == IN_UP || k == IN_DOWN) && (int32_t) (ms - next_rep[k]) >= 0) {
         next_rep[k] = ms + (t > FAST_AFTER_MS ? REPEAT_FAST_MS : REPEAT_MS);
-        input_hold_ms = (uint16_t) (t > HOLD_MAX_MS ? HOLD_MAX_MS : t);
+        hold_ms = (uint16_t) (t > HOLD_MAX_MS ? HOLD_MAX_MS : t);
         ui_key(TO_UI[k]);
         last = ms;
       }
@@ -89,7 +92,7 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms) {
       if (k == IN_BACK)
         ui_key(KEY_BACK);
       else if (k == IN_HELP)
-        M.key_lock ? ui_toast(IC_LOCK, S_KEYS_LOCKED_HOW) : ui_key(KEY_HELP);
+        M.key_lock ? ui_key_lock_notice(false) : ui_key(KEY_HELP);
     }
   }
 }

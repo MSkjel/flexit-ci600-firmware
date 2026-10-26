@@ -1,5 +1,5 @@
 // Week program screens: the week overview and one day's periods.
-#include "ui.h"
+#include "ui_int.h"
 
 // ---------------------------------------------------------------- the week
 #define WEEK_X 46  // timelines: left edge, width, row height, top
@@ -54,19 +54,21 @@ const screen_t SCR_SCHEDULE = {.title = S_WEEK_PROGRAM, .build = week_build, .up
 #define DAY_ROW 38
 
 typedef struct {
-  lv_obj_t *row[PERIODS_PER_DAY];
-  int n;  // rows: periods, plus "Add period" if there's room
+  lv_obj_t *row[PERIODS_PER_DAY], *text[PERIODS_PER_DAY];  // each row and its times or "Add period"
+  int n;                                                   // rows: periods, plus "Add period" if there's room
 } day_t;
 SCREEN_STATE(day_t, day);
 
-static void period_row(lv_obj_t *row, const period_t *p) {
+// Returns the label with the times
+static lv_obj_t *period_row(lv_obj_t *row, const period_t *p) {
   char a[16], b[16];
   mk_box(row, 10, 12, 10, 10, level_color(p->level), 3);
   lv_obj_t *t = mk_label(row, &font_f16, T.text, "");
-  set_text(t, "%s  \xE2\x80\x93  %s", fmt_hm(a, p->start), fmt_hm(b, p->end));
+  set_text(t, "%s  " EN_DASH "  %s", fmt_hm(a, sizeof a, p->start), fmt_hm(b, sizeof b, p->end));
   lv_obj_set_pos(t, 30, 6);
   lv_obj_align(mk_label(row, &font_f14, level_color(p->level), tr(MODE_NAMES[p->level % MODE_COUNT])),
                LV_ALIGN_RIGHT_MID, -12, 0);
+  return t;
 }
 
 static void day_build(lv_obj_t *b, intptr_t arg) {
@@ -78,9 +80,9 @@ static void day_build(lv_obj_t *b, intptr_t arg) {
   for (int s = 0; s < day->n; s++) {
     lv_obj_t *row = day->row[s] = mk_box(b, 8, 32 + s * DAY_ROW, 304, DAY_ROW - 4, T.bg, 8);
     if (s < M.n_periods[d])
-      period_row(row, &M.week[d][s]);
+      day->text[s] = period_row(row, &M.week[d][s]);
     else
-      lv_obj_set_pos(mk_label(row, &font_f14, T.faint, _(S_ADD_PERIOD)), 30, 8);
+      lv_obj_set_pos(day->text[s] = mk_label(row, &font_f14, T.faint, _(S_ADD_PERIOD)), 30, 8);
   }
   ui_hints(S_MOVE, S_EDIT, S_BACK, S_HELP);
   ui_help(S_DAY_SCREEN_HELP);
@@ -107,9 +109,6 @@ static bool day_key(int k) {
 }
 
 // Selected row's text: the period's times, or "+  Add period"
-static const char *day_selected(void) {
-  lv_obj_t *row = day->row[ui_frame()->sel];
-  return lv_label_get_text(lv_obj_get_child(row, lv_obj_get_child_cnt(row) == 1 ? 0 : 1));
-}
+static const char *day_selected(void) { return lv_label_get_text(day->text[ui_frame()->sel]); }
 
 const screen_t SCR_DAY = {.build = day_build, .update = day_update, .key = day_key, .selected = day_selected};

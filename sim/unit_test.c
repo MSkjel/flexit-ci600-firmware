@@ -11,7 +11,7 @@
 #include "settings.h"
 #include "trend.h"
 #include "sim.h"
-#include "ui.h"
+#include "ui_int.h"
 #include "unit.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1757,23 +1757,30 @@ static void test_fonts(void) {
 
 static void test_formats(void) {
   char b[24];
-  CHECK(!strcmp(fmt_dec(b, 12345, 3), "12.345"));
-  CHECK(!strcmp(fmt_dec(b, -12345, 2), "-123.45"));
-  CHECK(!strcmp(fmt_dec(b, -5, 1), "-0.5"));
-  CHECK(!strcmp(fmt_dec(b, 7, 0), "7"));
-  CHECK(!strcmp(fmt_dec(b, INT32_MIN, 1), "-214748364.8"));
+  CHECK(!strcmp(fmt_dec(b, sizeof b, 12345, 3), "12.345"));
+  CHECK(!strcmp(fmt_dec(b, sizeof b, -12345, 2), "-123.45"));
+  CHECK(!strcmp(fmt_dec(b, sizeof b, -5, 1), "-0.5"));
+  CHECK(!strcmp(fmt_dec(b, sizeof b, 7, 0), "7"));
+  CHECK(!strcmp(fmt_dec(b, sizeof b, INT32_MIN, 1), "-214748364.8"));
   M.clock_24h = false;
-  CHECK(!strcmp(fmt_hm(b, 0), "12:00 am") && !strcmp(fmt_hm(b, 13 * 60 + 5), "1:05 pm"));
-  CHECK(!strcmp(fmt_hm(b, 1440), "12:00 am"));
+  CHECK(!strcmp(fmt_hm(b, sizeof b, 0), "12:00 am") && !strcmp(fmt_hm(b, sizeof b, 13 * 60 + 5), "1:05 pm"));
+  CHECK(!strcmp(fmt_hm(b, sizeof b, 1440), "12:00 am"));
   M.clock_24h = true;
-  CHECK(!strcmp(fmt_hm(b, 13 * 60 + 5), "13:05") && !strcmp(fmt_hm(b, 1440), "24:00"));
+  CHECK(!strcmp(fmt_hm(b, sizeof b, 13 * 60 + 5), "13:05") && !strcmp(fmt_hm(b, sizeof b, 1440), "24:00"));
   // a period's start: 0..1435 in 15-minute steps
   CHECK(step_value(1425, 1, 15, 0, 1435) == 1435 && step_value(1435, -1, 15, 0, 1435) == 1425);
   CHECK(step_value(0, -1, 15, 0, 1435) == 0 && step_value(960, 1, 15, 5, 1440) == 975);
   CHECK(step_value(-10, 3, 5, -90, 90) == 5 && step_value(-88, -1, 5, -90, 90) == -90);
   // no space before % or °, but µg/m³ starts with the same byte as °
-  CHECK(!strcmp(add_unit(strcpy(b, "5"), "%"), "5%") && !strcmp(add_unit(strcpy(b, "21"), "\xC2\xB0"), "21\xC2\xB0"));
-  CHECK(!strcmp(add_unit(strcpy(b, "12"), "\xC2\xB5g/m\xC2\xB3"), "12 \xC2\xB5g/m\xC2\xB3"));
+  CHECK(!strcmp(add_unit(strcpy(b, "5"), sizeof b, "%"), "5%") &&
+        !strcmp(add_unit(strcpy(b, "21"), sizeof b, "\xC2\xB0"), "21\xC2\xB0"));
+  CHECK(!strcmp(add_unit(strcpy(b, "12"), sizeof b, "\xC2\xB5g/m\xC2\xB3"), "12 \xC2\xB5g/m\xC2\xB3"));
+  CHECK(!strcmp(fmt_pct(b, sizeof b, 50), "50%"));
+  M.language = 1;  // Norwegian puts a space before %
+  CHECK(!strcmp(fmt_pct(b, sizeof b, 50), "50 %") && !strcmp(add_unit(strcpy(b, "5"), sizeof b, "%"), "5 %"));
+  M.language = 0;
+  // texts are cut to fit their buffer
+  CHECK(!strcmp(fmt_dec(b, 5, 123456, 0), "1234") && !strcmp(add_text(strcpy(b, "ab"), 4, "cd"), "abc"));
 }
 
 // ---------------------------------------------------------------- values
@@ -1825,12 +1832,12 @@ static void test_items(void) {
   val_set(v + 1, 2000);
   CHECK(target->value == 1500);  // a number the user sets is kept in its range
   char b[24];
-  CHECK(!strcmp(item_text(b, button, true), _(S_PRESS)));
+  CHECK(!strcmp(item_text(b, sizeof b, button, true), _(S_PRESS)));
   item_t *washer = &M.items[6];
   *washer = (item_t) {.type = ITEM_TEXT, .flags = ITEMF_VIEW, .id = 80, .value = ITEM_UNKNOWN, .text = "Washing"};
-  CHECK(!strcmp(item_text(b, washer, true), "Washing") && (val_def(v + 4).flags & VF_RO));
+  CHECK(!strcmp(item_text(b, sizeof b, washer, true), "Washing") && (val_def(v + 4).flags & VF_RO));
   washer->text[0] = 0;
-  CHECK(!strcmp(item_text(b, washer, true), "\xE2\x80\x93"));
+  CHECK(!strcmp(item_text(b, sizeof b, washer, true), "\xE2\x80\x93"));
 
   trend_keep(77);
   for (int id = 100; id < 100 + N_TRENDS; id++)
@@ -1846,7 +1853,8 @@ static void test_items(void) {
   T.accent = lv_color_hex(0x0000FF);
   T.err = lv_color_hex(0xFF0000);
   val_set_remote(v, ITEM_UNKNOWN);
-  CHECK(!strcmp(item_text(b, co2, true), "\xE2\x80\x93") && !item_pct(co2) && item_color(co2).full == T.accent.full);
+  CHECK(!strcmp(item_text(b, sizeof b, co2, true), "\xE2\x80\x93") && !item_pct(co2) &&
+        item_color(co2).full == T.accent.full);
   for (int i = 0; i < 900; i++)
     trend_second();
   CHECK(t->pt[TREND_LEN - 1] == TREND_NONE && t->pt[TREND_LEN - 2] == 2500);
@@ -2408,7 +2416,7 @@ static void test_schedule(void) {
 
 // ---------------------------------------------------------------- keys and idle (input.c): what reaches the UI
 // input.c's calls into the UI land here, see --wrap in the Makefile
-static int keys[64], n_keys, idles, wakes, toasts;
+static int keys[64], n_keys, idles, wakes, toasts, lock_notices[2];  // lock_notices[toggled]
 void __wrap_ui_key(int k) {
   if (n_keys < (int) LEN(keys))
     keys[n_keys++] = k;
@@ -2420,6 +2428,7 @@ void __wrap_ui_toast(const char *icon, str_t msg) {
   (void) msg;
   toasts++;
 }
+void __wrap_ui_key_lock_notice(bool toggled) { lock_notices[toggled]++; }
 
 static uint32_t now_ms = 1000;
 
@@ -2477,12 +2486,11 @@ static void test_input(void) {
   // holding HELP for 3 s locks the keys, then a key press is refused with a toast
   n_keys = 0;
   hold(IN_HELP, 3100, 0);
-  CHECK(M.key_lock && n_keys == 0);
-  toasts = 0;
+  CHECK(M.key_lock && n_keys == 0 && lock_notices[true] == 1);
   hold(IN_OK, 50, 0);
-  CHECK(n_keys == 0 && toasts == 1);
+  CHECK(n_keys == 0 && lock_notices[false] == 1);
   hold(IN_HELP, 3100, 0);
-  CHECK(!M.key_lock);
+  CHECK(!M.key_lock && lock_notices[true] == 2 && lock_notices[false] == 1);
   // UP held repeats at 450 ms, then every 120 ms
   n_keys = 0;
   hold(IN_UP, 1000, 0);

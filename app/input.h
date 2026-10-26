@@ -11,5 +11,5 @@ void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms);
 void input_tick(uint32_t ms);  // every pass of the main loop, checks for idle
 void input_activity(void);     // something new to look at, like an alarm. Wakes up
 bool input_idle(void);
-int input_backlight(void);      // %, -1 = off
-extern uint16_t input_hold_ms;  // how long the repeating key has been held
+int input_backlight(void);     // %, -1 = off
+uint32_t input_held_ms(void);  // how long the repeating key has been held, up to a minute

@@ -1,7 +1,7 @@
 // Headless simulator. Runs the UI on fake data and saves screenshots.
 //   ./sim OUTDIR            every scene as OUTDIR/<name>.ppm
 //   ./sim --perf            how much of the screen each key repaints
-#include "ui.h"
+#include "ui_int.h"
 #include "pbus.h"
 #include "plink.h"
 #include "sim.h"

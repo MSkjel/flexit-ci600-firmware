@@ -1,6 +1,6 @@
 // Panel side of the ESP package test. The real link, picture and value code, behind plain C calls for the
 // C++ harness.
-#include "ui.h"
+#include "ui_int.h"
 #include "link.h"
 #include "panel_side.h"
 #include "picture.h"
@@ -88,7 +88,7 @@ int pn_item(int i, int *flags, int *icon, int *dec, int *step, int *id, int *min
 int pn_item_level(int i, int k) { return M.items[i].level[k]; }  // item i's level k as the panel has it
 const char *pn_item_text(int i) {                                // item i's value as the panel shows it
   static char b[24];
-  return item_text(b, &M.items[i], true);
+  return item_text(b, sizeof b, &M.items[i], true);
 }
 const char *pn_item_help(int i) { return link_item_help(i); }
 // Line y of the picture as the panel draws it, in RGB565

@@ -243,7 +243,7 @@ frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a c
 
 - **Something from Home Assistant:** nothing to do here, the ESP sends it as an item.
 - **A value or setting:** a line in `proto/plink_values.h` if the ESP should see it, otherwise in `app/values.h`.
-  Then a menu row in `ui/ui_menu.c` and the default in `panel_defaults()` (`app/panel.c`). The key is also its id
+  Then a menu row in `ui/ui_menus.c` and the default in `panel_defaults()` (`app/panel.c`). The key is also its id
   in flash.
 - **Optional equipment:** a line in `app/equipment.h`. Anything with `.need = FBIT(FEAT_x)` hides without it.
 - **A text:** name and English text in `ui/lang.h`, the translation in each `ui/lang_*.c`.

@@ -253,16 +253,6 @@
     *0: User need to register a callback with `lv_log_register_print_cb()`*/
     #define LV_LOG_PRINTF 0
 
-    /*Enable/disable LV_LOG_TRACE in modules that produces a huge number of logs*/
-    #define LV_LOG_TRACE_MEM        1
-    #define LV_LOG_TRACE_TIMER      1
-    #define LV_LOG_TRACE_INDEV      1
-    #define LV_LOG_TRACE_DISP_REFR  1
-    #define LV_LOG_TRACE_EVENT      1
-    #define LV_LOG_TRACE_OBJ_CREATE 1
-    #define LV_LOG_TRACE_LAYOUT     1
-    #define LV_LOG_TRACE_ANIM       1
-
 #endif  /*LV_USE_LOG*/
 
 /*-------------
@@ -487,7 +477,7 @@
 
 #define LV_USE_BAR        1
 
-#define LV_USE_BTN        1
+#define LV_USE_BTN        0
 
 #define LV_USE_BTNMATRIX  0
 
@@ -497,7 +487,7 @@
 
 #define LV_USE_DROPDOWN   0   /*Requires: lv_label*/
 
-#define LV_USE_IMG        1   /*Requires: lv_label*/
+#define LV_USE_IMG        0   /*Requires: lv_label*/
 
 #define LV_USE_LABEL      1
 #if LV_USE_LABEL

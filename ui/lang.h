@@ -1,7 +1,8 @@
 // Every UI text in English, X(id, text) gives S_<id>. _(S_X) is the text in the panel's language, tr(s) for ids
-// picked at run time. Other languages go in lang_*.c. make check catches missing texts, placeholder mismatches and
-// glyphs the fonts lack.
+// picked at run time. Other languages go in lang_*.c. make check catches missing texts, placeholder mismatches,
+// a % not spaced as lang_pct_space() says, and glyphs the fonts lack.
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 #define STRINGS(X) \
@@ -41,8 +42,8 @@
   X(EXTRACT_AIR_CAPS, "EXTRACT AIR") \
   X(TARGET, "Target %s") \
   X(NO_CONTACT_WITH_UNIT, "No contact with the unit") \
-  X(HEATING_PCT, "Heating %d %%") \
-  X(COOLING_PCT, "Cooling %d %%") \
+  X(HEATING_PCT, "Heating %d%%") \
+  X(COOLING_PCT, "Cooling %d%%") \
   X(HEATER_OFF, "Heater off") \
   X(BOOST_CAPS, "BOOST") \
   X(MIN_LEFT, "%d min left") \
@@ -75,8 +76,8 @@
   X(FAN_SPEED_HUD_HELP, "UP and DOWN change the fan speed. Going past MAX starts a boost: full speed for the boost " \
                         "time, then back to the previous speed.") \
   X(BOOST_MIN_LEFT, "Boost, %d min left") \
-  X(FANS_SUPPLY_EXTRACT, "Supply %d %%, extract %d %%") \
-  X(FANS_AT, "Fans at %d %%") \
+  X(FANS_SUPPLY_EXTRACT, "Supply %d%%, extract %d%%") \
+  X(FANS_AT, "Fans at %d%%") \
   X(MONDAY, "Monday") \
   X(TUESDAY, "Tuesday") \
   X(WEDNESDAY, "Wednesday") \
@@ -613,7 +614,7 @@
   X(INSTALLED, "Installed") \
   X(NOT_INSTALLED, "None") \
   X(PROCESSOR, "Processor") \
-  X(BUSY_PCT, "%d %% busy") \
+  X(BUSY_PCT, "%d%% busy") \
   X(UNIT, "Unit") \
   X(NO_CONTACT_LOWER, "no contact") \
   X(TALKING, "talking") \
@@ -723,6 +724,7 @@ typedef uint16_t str_t;  // S_*
 const char *tr(str_t s);                   // text in the panel's language
 const char *lang_name(int lang);           // a language's name, in that language
 const char *lang_text(int lang, str_t s);  // NULL if the language doesn't have it
+bool lang_pct_space(int lang);             // "50 %", not "50%" as in English
 #ifdef CI600_FMTCHECK
 #define _(s) EN_##s  // make check: the English literal, so the compiler checks every format string
 #else
