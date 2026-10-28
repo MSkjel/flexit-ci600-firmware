@@ -216,6 +216,9 @@ All of these come from the simulator. CI redraws them on every push to main and 
     make check    # all tests, SAN=1 adds ASan and UBSan
     make format   # clang-format and ruff
 
+`make` takes the ESP integration's authors for the credits from the ESP repo's history, next to this one as
+`esphome-flexit-modbus-server` (or `ESP_REPO=`), and leaves them out without it.
+
 `make check` needs PyYAML, `pillow` for the pictures, and `gcc-multilib` and `g++-multilib` since the simulator is
 32-bit. It also needs the ESP repo next to this one as `esphome-flexit-modbus-server` (or `ESP_REPO=`), since it
 runs the ESP's panel packages against this repo's link code. Every screen the tests draw is hashed into

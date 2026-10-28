@@ -1275,7 +1275,7 @@ static void notices(void) {
   run(12000);
   check_shot("91b_notices_later");
   check(!on_screen(lv_scr_act(), "CI600"), "the notices didn't go up");
-  run(20000);
+  run(30000);
   check(on_screen(lv_scr_act(), "CI600"), "the notices didn't come round again");
 
   // the OK light spells the version, the filter light goes on as before

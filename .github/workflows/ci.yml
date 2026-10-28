@@ -39,13 +39,19 @@ jobs:
         with:
           fetch-depth: 0  # the tags, for the version
       - run: git submodule update --init --depth 1
+      - uses: actions/checkout@v7
+        with:
+          repository: MSkjel/esphome-flexit-modbus-server
+          ref: ${{ env.ESP_REF }}
+          path: esp
+          fetch-depth: 0  # all of its history, for the credits
       - uses: ./.github/actions/apt
         with:
           packages: gcc-arm-none-eabi libnewlib-arm-none-eabi ccache
       - uses: ./.github/actions/ccache
         with:
           key: firmware
-      - run: make -C hw
+      - run: make -C hw ESP_REPO=$GITHUB_WORKSPACE/esp
       - if: env.HAS_FXUP_KEY == 'true'
         run: pip install cryptography==50.0.2 cffi==2.1.1 pycparser==3.0
       # Only this step gets the key

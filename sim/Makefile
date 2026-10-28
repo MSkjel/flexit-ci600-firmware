@@ -11,10 +11,10 @@ BUILD    := build$(if $(SAN),-san)
 OBJ_DIR  := $(BUILD)/obj
 COMPILE   = $(CC) $(CPPFLAGS) $(CFLAGS)
 AUTHORS  := MSkjel
+ESP_AUTHORS := MSkjel peetervalk bloever schmutzgeier
 .DEFAULT_GOAL := check
 include $(ROOT)/config.mk
 OUT      := $(BUILD)/out
-ESP_REPO ?= $(abspath $(ROOT)/../esphome-flexit-modbus-server)
 ESP_CODE := $(ESP_REPO)/packages/code
 ESP_MET  := $(ESP_CODE)/met
 CC       := gcc -m32 -msse2 -mfpmath=sse  # SSE floats round the same everywhere, which the JPEGs in the goldens need
