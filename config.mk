@@ -21,13 +21,17 @@ $(VERSION_H): $(FW_STAMP)
 	@mkdir -p $(dir $@)
 	@printf '#define FW_MAJOR %s\n#define FW_MINOR %s\n#define FW_PATCH %s\n' \
 	  $(call VER_PART,1) $(call VER_PART,2) $(call VER_PART,3) > $@
-# The authors for the About pages, from git the same way: $(AUTHORS_H) only changes with the list, which is empty
-# without python3. The simulator sets AUTHORS so its screens don't change with the history.
+# The authors for the About pages, from git the same way: this repo's, and the ESP integration's from the ESP repo's
+# history, left out without it. $(AUTHORS_H) only changes with the lists, which are empty without python3. The
+# simulator sets AUTHORS and ESP_AUTHORS so its screens don't change with the history.
+ESP_REPO ?= $(abspath $(ROOT)/../esphome-flexit-modbus-server)
 AUTHORS_H := $(BUILD)/gen/authors.h
 INCLUDES += -I$(BUILD)/gen
+NO_AUTHORS := '\#define AUTHORS_N 0\n\#define ESP_AUTHORS_N 0\n'
 $(AUTHORS_H): FORCE
-	@if command -v python3 >/dev/null; then python3 $(ROOT)/tools/mkauthors.py $(ROOT) $@ $(AUTHORS); \
-	else mkdir -p $(dir $@) && { echo '#define AUTHORS_N 0' | cmp -s - $@ || echo '#define AUTHORS_N 0' > $@; }; fi
+	@if command -v python3 >/dev/null; then \
+	  python3 $(ROOT)/tools/mkauthors.py $(ROOT) $(ESP_REPO) $@ $(AUTHORS) $(if $(ESP_AUTHORS),--esp $(ESP_AUTHORS)); \
+	else mkdir -p $(dir $@) && { printf $(NO_AUTHORS) | cmp -s - $@ || printf $(NO_AUTHORS) > $@; }; fi
 FORCE:
 .PHONY: FORCE
 # Sources in sorted order, so they link in the same order everywhere and the firmware comes out byte for byte the

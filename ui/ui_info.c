@@ -191,8 +191,9 @@ const screen_t SCR_INFO = {.build = info_build, .update = info_update, .key = in
 #define NOTICE_MS 50           // per px up
 #define NOTICE_LABELS 16       // enough for a screen of the shortest lines
 #define NOTICE_W (SCR_W - 24)  // wider lines wrap
+#define NOTICE_FADE 36         // px at the top and bottom where lines fade
 
-enum { N_TITLE, N_VERSION, N_GAP, N_HEAD, N_NAME, N_TEXT, N_MORE, N_LINK, N_LAST };
+enum { N_ICON, N_TITLE, N_VERSION, N_GAP, N_HEAD, N_NAME, N_TEXT, N_MORE, N_LINK, N_LAST };
 
 typedef struct {
   uint8_t kind;   // N_*
@@ -203,17 +204,23 @@ typedef struct {
 // Top to bottom, then again
 #define AUTHOR(name) {N_NAME, S_NONE, name}
 static const notice_t NOTICES[] = {
+    {N_ICON, S_NONE, IC_FAN},
     {N_TITLE, S_NONE, "CI600"},
     {N_VERSION, S_NONE, NULL},
     {N_GAP, S_NONE, NULL},
     {N_HEAD, S_NOTICE_REVERSED, NULL},
     {N_NAME, S_NONE, "MSkjel"},
 #if AUTHORS_N
-    {N_HEAD, S_NOTICE_WRITTEN, NULL},
+    {N_HEAD, S_NOTICE_PANEL, NULL},
     AUTHORS(AUTHOR),
+#endif
+#if ESP_AUTHORS_N
+    {N_HEAD, S_NOTICE_ESP, NULL},
+    ESP_AUTHORS(AUTHOR),
 #endif
     {N_HEAD, S_NOTICE_TOOLS, NULL},
     {N_NAME, S_NONE, "Ghidra"},
+    {N_NAME, S_NOTICE_PICOPWNER, NULL},  // read the flash out of the panel's STM32F1
     {N_HEAD, S_NOTICE_BUILT_ON, NULL},
     {N_NAME, S_NONE, "LVGL"},
     {N_NAME, S_NOTICE_JPEG, NULL},
@@ -245,10 +252,20 @@ static const struct {
   const lv_color_t *c;
   uint8_t above;
 } STYLES[] = {
-    [N_TITLE] = {&font_f28, &T.accent, 0}, [N_VERSION] = {&font_f14, &T.dim, 2}, [N_GAP] = {NULL, NULL, 20},
-    [N_HEAD] = {&font_f14, &T.dim, 22},    [N_NAME] = {&font_f16, &T.text, 2},   [N_TEXT] = {&font_f14, &T.text, 22},
-    [N_MORE] = {&font_f14, &T.text, 2},    [N_LINK] = {&font_f14, &T.dim, 22},   [N_LAST] = {&font_f16, &T.accent, 40},
+    [N_ICON] = {&icons_32, &T.accent, 0}, [N_TITLE] = {&font_f28, &T.accent, 4},
+    [N_VERSION] = {&font_f14, &T.dim, 2}, [N_GAP] = {NULL, NULL, 20},
+    [N_HEAD] = {&font_f14, &T.dim, 22},   [N_NAME] = {&font_f16, &T.text, 2},
+    [N_TEXT] = {&font_f14, &T.text, 22},  [N_MORE] = {&font_f14, &T.text, 2},
+    [N_LINK] = {&font_f14, &T.dim, 22},   [N_LAST] = {&font_f16, &T.accent, 40},
 };
+
+// Clear in the middle, fading out towards the top and bottom edge
+static void notices_fade(int i) {
+  int mid = notices->y[i] + notices->h[i] / 2, d = LV_MIN(mid, SCR_H - mid);
+  lv_opa_t o = d >= NOTICE_FADE ? LV_OPA_COVER : d <= 0 ? LV_OPA_TRANSP : (lv_opa_t) (d * LV_OPA_COVER / NOTICE_FADE);
+  if (lv_obj_get_style_text_opa(notices->l[i], 0) != o)
+    lv_obj_set_style_text_opa(notices->l[i], o, 0);
+}
 
 // Places lines on free labels until the screen is full below
 static void notices_fill(lv_obj_t *b) {
@@ -283,6 +300,7 @@ static void notices_fill(lv_obj_t *b) {
       notices->y[i] = notices->next_y;
       notices->h[i] = (int16_t) sz.y;
       notices->next_y += sz.y;
+      notices_fade(i);
     }
     if (++notices->next == LEN(NOTICES)) {
       notices->next = 0;
@@ -302,6 +320,8 @@ static void notices_step(lv_timer_t *t) {
     lv_obj_set_y(notices->l[i], --notices->y[i]);
     if (notices->y[i] + notices->h[i] <= 0)
       notices->h[i] = 0;
+    else
+      notices_fade(i);
   }
   notices->next_y--;
   notices_fill(lv_obj_get_parent(notices->l[0]));
@@ -340,7 +360,7 @@ static bool notices_led(uint32_t ms) {
 
 static void notices_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  notices->next_y = 70;  // the title starts a bit down rather than below the screen
+  notices->next_y = 50;  // the fan and title start a bit down rather than below the screen
   notices_fill(b);
   mk_timer(notices->l[0], notices_step, NOTICE_MS);
 }

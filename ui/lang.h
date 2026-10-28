@@ -667,12 +667,14 @@
   X(ABOUT_PAGE_HELP, "Software versions of this panel and the unit, and what's installed.") \
   X(NOTICE_FIRMWARE, "Replacement firmware %s") \
   X(NOTICE_REVERSED, "Reverse engineered by") \
-  X(NOTICE_WRITTEN, "Written by") \
+  X(NOTICE_PANEL, "Panel firmware by") \
+  X(NOTICE_ESP, "ESPHome integration by") \
   X(NOTICE_TOOLS, "Taken apart with") \
+  X(NOTICE_PICOPWNER, "stm32f1-picopwner by CTXz") \
   X(NOTICE_BUILT_ON, "Built on") \
   X(NOTICE_JPEG, "TJpgDec by ChaN") \
   X(NOTICE_FONT, "Text in Noto Sans") \
-  X(NOTICE_ICONS, "Icons from Material Design Icons by Pictogrammers") \
+  X(NOTICE_ICONS, "Icons from Material Design Icons\nby Pictogrammers") \
   X(NOTICE_ESPHOME, "Talks to Home Assistant through ESPHome") \
   X(NOTICE_FLEXIT, "Not made or approved by Flexit") \
   X(NOTICE_HARMED, "No ventilation units were harmed") \
