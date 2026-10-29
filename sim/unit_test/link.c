@@ -75,10 +75,38 @@ static int settings_out(uint32_t *out, int max) {
   return k;
 }
 
-static bool queued(uint16_t key, uint32_t value) {
+typedef struct {
+  int n;
+  uint16_t key[64];
+  uint32_t value[64];
+} msgs_t;
+
+static void add_msg(void *u, uint16_t key, const uint8_t *b, int n) {
+  msgs_t *m = u;
+  if (m->n < 64) {
+    m->key[m->n] = key;
+    m->value[m->n++] = plink_number(b, n);
+  }
+}
+
+// What goes after the answer the ESP has yet to take: the next one link_poll() put behind it, then the queue
+static msgs_t after_out(void) {
+  msgs_t m = {0};
+  const pbulk_panel_t *p = link_bulk_state();
+  if (p->next_full)
+    pbulk_parse(p->next, p->next_n, add_msg, &m);
   const plink_t *l = link_queue();
-  for (int i = 0; i < l->qn; i++)
-    if (l->key[i] == key && l->value[i] == value)
+  for (int i = 0; i < l->qn && m.n < 64; i++) {
+    m.key[m.n] = l->key[i];
+    m.value[m.n++] = l->value[i];
+  }
+  return m;
+}
+
+static bool queued(uint16_t key, uint32_t value) {
+  msgs_t m = after_out();
+  for (int i = 0; i < m.n; i++)
+    if (m.key[i] == key && m.value[i] == value)
       return true;
   return false;
 }
@@ -223,10 +251,11 @@ static void test_link(void) {
   CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   place(0, 0, 0, 10, 0, 0);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
-  CHECK_EQ(link_queue()->key[0], K_HELLO);
-  CHECK_EQ(link_queue()->value[0], (uint32_t) PLINK_VERSION << 16);
+  msgs_t m = after_out();
+  CHECK_EQ(m.key[0], K_HELLO);
+  CHECK_EQ(m.value[0], (uint32_t) PLINK_VERSION << 16);
   CHECK(queued(spare, 1));
-  CHECK_EQ(link_queue()->qn, PLINK_QUEUE);
+  CHECK_EQ(m.n, PLINK_QUEUE);
   CHECK(!placed());
   CHECK(!anim_used());
   CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);  // also after the answer to ours
@@ -249,10 +278,24 @@ static void test_link(void) {
   link_poll();  // they're in the answer
   link_send(K_FAN_NORM_SUP, 60);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
-  CHECK_EQ(link_queue()->key[0], K_HELLO);
+  CHECK_EQ(after_out().key[0], K_HELLO);
   CHECK(queued(K_SETPOINT, 215));
   CHECK(queued(K_FAN_NORM_SUP, 60));
   CHECK(!queued(K_FAN_NORM_SUP, 50) && !queued(K_ITEM_VALUE + 1, 7));
+  // and with one in the answer behind it too, the newer of them
+  link_init();
+  M.esp_version = PLINK_VERSION;
+  link_send(K_SETPOINT, 215);
+  link_poll();
+  link_send(K_SETPOINT, 220);
+  link_poll();
+  CHECK(link_bulk_state()->next_full);
+  number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
+  int setpoints = 0;
+  for (int i = 0; i < link_queue()->qn; i++)
+    if (link_queue()->key[i] == K_SETPOINT)
+      setpoints += link_queue()->value[i] == 220 ? 1 : 100;
+  CHECK_EQ(setpoints, 1);
 
   // ESP switched off: offline at once, and until it's heard again
   M.esp_online = true;

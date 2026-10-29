@@ -62,6 +62,7 @@ void sim_esp_items(void);  // send all of SIM_ITEMS
 void sim_esp_fill(void);   // send filler items up to N_ITEMS, on the smart home page
 void sim_esp_notify(const char *text, int icon, int level);
 void sim_esp_set(uint16_t key, uint32_t value);
+void sim_esp_saver_line(int i, int size, const char *text);  // line i of the screensaver's, size in px
 unsigned sim_esp_send_picture(void);
 unsigned sim_esp_send_photo(int *quality);  // a photo-like picture, as a JPEG at the best quality that fits
 unsigned sim_esp_send_moon(int *y, int *count);
@@ -72,6 +73,13 @@ void sim_esp_move_animation(uint16_t key, int a, int b, int ms);  // GLIDE or DR
 void sim_link_run(int cycles);                                    // run that many CX60 cycles
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1
 void sim_esp_report(const char *what);
+void sim_esp_watch(uint16_t key);  // sim_esp_seen() tells if a message with it came from the panel since
+bool sim_esp_seen(void);
+void sim_esp_shot(int quality, bool all);  // a K_SHOT
+// Tiles in the SHOT_DONE since, -1 for none yet. bytes of its PIC_DATA so far, bad heads or what isn't zeros after.
+int sim_esp_shot_done(unsigned long *bytes, unsigned long *bad);
+// The JPEG of the tiles so far, 0 if one is missing or it doesn't fit cap
+unsigned sim_esp_shot_jpeg(uint8_t *out, unsigned cap, int quality);
 extern unsigned long sim_cycles;
 
 #ifdef __cplusplus

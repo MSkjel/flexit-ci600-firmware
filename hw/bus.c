@@ -3,6 +3,8 @@
 #include "link.h"
 #include "mbserver.h"
 
+_Static_assert(PBULK_ANSWER_FRAME_MAX <= MB_MAX_FRAME, "a link answer goes out of the same tx");
+
 int bus_burst(const uint8_t *rx, int n, uint32_t first_us, uint32_t idle_us, uint32_t ms, uint8_t *tx, bool *modbus) {
   int skip = 0;  // bytes in front of the CX60's
   *modbus = false;

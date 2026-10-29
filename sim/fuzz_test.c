@@ -200,12 +200,20 @@ static void panel_loop(pbulk_panel_t *p) {
     CHECK(n <= PBULK_MAX);
     pbulk_parse(out, n, got_msg, &n);
   }
-  if (!p->out_full && !below(4)) {
-    uint8_t m[PBULK_ANSWER_MAX] = {K_THEME & 0xFF, K_THEME >> 8};
-    int len = below(PBULK_ANSWER_MAX - PBULK_MSG_HEAD + 1);
-    m[2] = (uint8_t) len;
-    noise(m + PBULK_MSG_HEAD, len);
-    pbulk_panel_put(p, m, PBULK_MSG_HEAD + len);
+  if (pbulk_panel_free(p) && !below(4)) {  // a message or two, DATA in 4s like a screenshot's
+    uint8_t m[PBULK_ANSWER_MAX];
+    int o = 0;
+    for (int k = 1 + below(2); k > 0 && PBULK_ANSWER_MAX - o >= PBULK_MSG_HEAD; k--) {
+      uint16_t key = below(2) ? PBULK_DATA_KEY : K_THEME;
+      int len = below(PBULK_ANSWER_MAX - o - PBULK_MSG_HEAD + 1);
+      if (key == PBULK_DATA_KEY)
+        len &= ~3;
+      plink_put16(m + o, key);
+      m[o + 2] = (uint8_t) len;
+      noise(m + o + PBULK_MSG_HEAD, len);
+      o += PBULK_MSG_HEAD + len;
+    }
+    pbulk_panel_put(p, m, o);
   }
 }
 

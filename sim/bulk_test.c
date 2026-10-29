@@ -1,7 +1,8 @@
 // The ESP link on a simulated bus, with the CX60's schedule as its firmware runs it. Fails if a link frame
 // ever overlaps the CX60, the CX60 gets more than 256 bytes at once, a picture arrives damaged, or the panel
 // refuses the link and refused isn't 1.
-//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2] [refused]
+//   build/bulk_test [seconds] [cx60 control_tick ms] [seed] [ESP RX FIFO threshold] [panel 2] [refused] [what]
+// what: 0 pictures to the panel, 1 a stream from it like a screenshot's, 2 both
 #include "bus.h"
 #include "link.h"
 #include "mbserver.h"
@@ -380,6 +381,10 @@ static uint8_t panel_answer[300];
 static int panel_answer_n;
 static int panel_coils;
 static uint32_t panel_said, esp_heard, esp_heard_wrong;  // numbered messages from the panel to the ESP
+static int what;                                         // see the top
+// The panel's stream, its bytes as sent and as the ESP got them
+static uint8_t stream_byte(uint32_t i) { return (uint8_t) ((i * 2246822519u) >> 19); }
+static uint32_t stream_sent, stream_got, stream_bad;
 static long panel_gap_answers;
 
 // hw/bus.c sorts the bursts out as on the panel, with these three in place of link.c's and mbserver.c's. A link
@@ -479,7 +484,21 @@ static void panel(void) {
     int n;
     while ((n = pbulk_panel_take(&PRX, p)) > 0)
       pbulk_parse(p, n, panel_msg, NULL);
-    if (!PRX.out_full && rnd() % 1000 == 0) {  // now and then the panel has messages for the ESP
+    while (what && pbulk_panel_free(&PRX)) {  // the stream fills every answer, as link.c fills it with a screenshot
+      uint8_t m[PBULK_ANSWER_MAX];
+      int n = (PBULK_ANSWER_MAX - PBULK_MSG_HEAD) & ~3;  // DATA, which an answer takes as much of as fits
+      m[0] = PBULK_DATA_KEY & 0xFF;
+      m[1] = PBULK_DATA_KEY >> 8;
+      m[2] = (uint8_t) n;
+      for (int i = 0; i < n; i++)
+        m[PBULK_MSG_HEAD + i] = stream_byte(stream_sent + (uint32_t) i);
+      if (!pbulk_panel_put(&PRX, m, PBULK_MSG_HEAD + n))
+        break;
+      stream_sent += (uint32_t) n;
+    }
+    if (what)
+      PRX.waiting = 255;                                // there's always more, as link.c says while a screenshot runs
+    if (pbulk_panel_free(&PRX) && rnd() % 1000 == 0) {  // now and then the panel has messages for the ESP
       uint8_t m[PBULK_ANSWER_MAX];
       int k = 0, count = 1 + rnd() % 9;
       for (int i = 0; i < count; i++, panel_said++) {
@@ -605,6 +624,11 @@ static void feed_help(void) {
 
 static void esp_got(void *u, uint16_t key, const uint8_t *b, int len) {
   (void) u;
+  if (key == PBULK_DATA_KEY) {
+    for (int i = 0; i < len; i++)
+      stream_bad += b[i] != stream_byte(stream_got++);
+    return;
+  }
   uint32_t v = len >= 2 ? (uint32_t) (b[0] | b[1] << 8) : 0;
   if (key != K_THEME || v != (esp_heard & 0xFFFF))
     esp_heard_wrong++;
@@ -753,7 +777,8 @@ static void esp(void) {
   E.prev_start = start;
   E.prev_k = k;
   feed_help();
-  feed_picture();
+  if (what != 1)
+    feed_picture();
   E.loop_at = now + esp_loop_len();
 }
 
@@ -838,6 +863,7 @@ int main(int argc, char **argv) {
   esp_threshold = argc > 4 ? atoi(argv[4]) : 1;
   PRESENT[2] = argc > 5 ? atoi(argv[5]) : 0;
   bool refused_ok = argc > 6 && atoi(argv[6]);
+  what = argc > 7 ? atoi(argv[7]) : 0;
   cx60_status(STATUS);
 
   C.io_c = 10;
@@ -888,6 +914,8 @@ int main(int argc, char **argv) {
          worst_end / 1e6, PBUS.end_us / 1000.0, PBUS_END_MAX_US / 1000.0, PW.overruns);
   printf("  pictures of %d bytes: %ld intact, %ld not; the first after %.1f s, then one every %.1f s\n", PIC_LEN,
          pics_ok, pics_bad, first_pic_at / 1e9, pics_ok > 1 ? (last_pic_at - first_pic_at) / 1e9 / (pics_ok - 1) : 0);
+  if (what)
+    printf("  the panel's stream: %u bytes, %.0f B/s, %u wrong\n", stream_got, stream_got / seconds, stream_bad);
   if (helps_sent > helps_got && now - help_queued > help_wait)
     help_wait = now - help_queued;  // still waiting
   printf("  help texts of %d bytes: %ld queued, %ld arrived, the longest wait %.1f s; one byte longer: %s\n",
@@ -910,7 +938,9 @@ int main(int argc, char **argv) {
   // Where the panel may refuse the link and does, nothing has to get through
   CHECK_MSG(refused_ok || !PRX.refused, "the panel refused %u frames", PRX.refused);
   bool excused = refused_ok && PRX.refused;
-  CHECK_MSG(excused || pics_ok > 0, "no picture arrived");
+  CHECK_MSG(excused || what == 1 || pics_ok > 0, "no picture arrived");
+  CHECK_MSG(!stream_bad, "%u bytes of the panel's stream wrong", stream_bad);
+  CHECK_MSG(excused || !what || stream_got > 0, "none of the panel's stream arrived");
   CHECK_MSG(excused || help_wait < HELP_WAIT_MAX, "a help text waited %.1f s", help_wait / 1e9);
   printf("%s\n", check_fails ? "FAILED" : "OK");
   return check_fails != 0;

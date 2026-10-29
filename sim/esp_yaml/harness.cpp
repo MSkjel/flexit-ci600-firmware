@@ -11,6 +11,7 @@
 #include "met_case.h"
 #include "panel_side.h"
 #include "sim.h"
+#include "tjpgd/tjpgd.h"
 
 namespace panel = flexit::panel;
 namespace pic = flexit::panel::picture;
@@ -108,6 +109,7 @@ static bool link_windows = true;     // false while the CX60 restarts and sends 
 static int link_lost_frames;         // the panel doesn't hear this many of the ESP's frames
 static int link_lost_answers;        // the ESP doesn't hear this many of the panel's answers
 static uint32_t link_quiet = 14400;  // end of the status broadcast to the poll, the panel refuses under 13 ms
+static bool loop_between;            // the panel's loop also runs between the two windows, as on the panel
 // The latest the panel's deadline after a status broadcast can be with that quiet time
 static uint32_t link_end() {
   uint32_t e = link_quiet - PBUS_END_MARGIN_US;
@@ -172,15 +174,20 @@ static void cx60_cycle() {
   link_frame();
   if (now_us > end + link_end())
     link_late++;
+  if (loop_between)
+    pn_poll();
   now_us = end + link_quiet;  // the poll, and the panel's reply
   on_bus(POLL, sizeof POLL, true);
   now_us += 500;
   on_bus(REPLY, sizeof REPLY, true);
-  for (auto &f : server->read_cbs)  // the gap after it
-    f();
-  if (!server->sent.empty())
+  for (int k = 0; k < 8; k++) {  // the gap after it, read every loop as the component does, so frames can follow
+    for (auto &f : server->read_cbs)
+      f();
+    if (server->sent.empty())
+      break;
     gap_frames++;
-  link_frame();
+    link_frame();
+  }
 }
 
 static void run(int n) {  // n CX60 cycles of 110 ms
@@ -3174,6 +3181,183 @@ static void item_icon_typo() {
             times_logged("No icon called 'nope'", at));
 }
 
+// ---------------------------------------------------------------- the panel's screen as a camera
+static uint32_t screen_rgb[PIC_MAX_W * PIC_MAX_H];
+
+struct JpegIn {
+  const std::vector<uint8_t> &b;
+  size_t at;
+};
+
+static size_t screen_in(JDEC *jd, uint8_t *b, size_t n) {
+  auto *in = (JpegIn *) jd->device;
+  n = std::min(n, in->b.size() - in->at);
+  if (b)
+    memcpy(b, in->b.data() + in->at, n);
+  in->at += n;
+  return n;
+}
+
+static int screen_out(JDEC *, void *bitmap, JRECT *r) {
+  auto *p = (const uint16_t *) bitmap;
+  for (unsigned y = r->top; y <= r->bottom; y++)
+    for (unsigned x = r->left; x <= r->right; x++)
+      screen_rgb[y * PIC_MAX_W + x] = sim_rgb888(*p++);
+  return 1;
+}
+
+// The camera's last image decoded into screen_rgb, and the mean error per colour channel of its worst tile against
+// what the panel shows. -1 if it isn't a whole JPEG. Text at quality 80 is 12 off, a tile that's out of date 30 or
+// more.
+static double screen_off() {
+  static uint8_t work[4096];
+  if (panel_screen.images.empty())
+    return -1;
+  JpegIn in{panel_screen.images.back(), 0};
+  JDEC jd;
+  if (jd_prepare(&jd, screen_in, work, sizeof work, &in) != JDR_OK || jd.width != PIC_MAX_W || jd.height != PIC_MAX_H ||
+      jd_decomp(&jd, screen_out, 0) != JDR_OK)
+    return -1;
+  double worst = 0;
+  for (int t = 0; t < SHOT_TILES; t++) {
+    int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
+    unsigned sum = 0;
+    for (int y = y0; y < y0 + SHOT_TILE_H; y++)
+      for (int x = x0; x < x0 + SHOT_TILE_W; x++)
+        for (int c = 0; c < 24; c += 8)
+          sum += (unsigned) abs((int) (screen_rgb[y * PIC_MAX_W + x] >> c & 255) - (int) (sim_pixel(x, y) >> c & 255));
+    worst = std::max(worst, (double) sum / (SHOT_TILE_W * SHOT_TILE_H * 3));
+  }
+  return worst;
+}
+
+// Cycles with the panel drawing as it does between them, until done() or max. The cycles it took, -1 if it didn't.
+static int watch(const std::function<bool()> &done, int max) {
+  for (int c = 0; c < max; c++) {
+    if (done())
+      return c;
+    run(1);
+    pn_draw(PBUS_CYCLE_US / 1000);
+  }
+  return -1;
+}
+
+static bool every_tile() {
+  auto &t = panel::shot::S.tiles;
+  return !panel::shot::S.asked && !t.empty() && std::all_of(t.begin(), t.end(), [](auto &b) { return b != nullptr; });
+}
+
+// An image for one look, within max cycles. The cycles it took, -1 if none came.
+static int one_image(int max) {
+  size_t had = panel_screen.images.size();
+  panel_screen.single = true;
+  return watch([had] { return panel_screen.images.size() > had; }, max);
+}
+
+static void screen_camera() {
+  step("the panel's screen as a camera");
+  namespace shot = panel::shot;
+  auto &cam = panel_screen;
+  const int partial = (int) (shot::PARTIAL_MS * 1000 / PBUS_CYCLE_US) + 5;
+  CHECK_MSG(shot::S.quality == 80, "screen_camera.yaml didn't attach the camera, quality %d", shot::S.quality);
+  pn_saver(0);
+  watch([] { return settled() && !panel::link::gaps.off; }, 2000);  // the gaps after polls back since earlier tests
+  // The panel's loop between the windows too, so it fills both with tiles
+  loop_between = true;
+  // The first look gets what came within PARTIAL_MS, black where nothing has. A stream fills in the rest.
+  int c = one_image(partial);
+  CHECK_MSG(c >= 0, "no image within %d cycles of the first look", partial);
+  CHECK_MSG(!cam.images.empty() && cam.images.back().size() > 1000, "the first image has %u bytes",
+            cam.images.empty() ? 0u : (unsigned) cam.images.back().size());
+  cam.stream = true;
+  c = watch(every_tile, 1000);
+  size_t bytes = 0;
+  for (auto &t : shot::S.tiles)
+    bytes += t ? t->size() : 0;
+  printf("  every tile after %d cycles = %.1f s more, %u bytes of tiles\n", c, c * (PBUS_CYCLE_US / 1e6),
+         (unsigned) bytes);
+  CHECK_MSG(c >= 0, "the tiles didn't all come in 1000 cycles");
+  watch([] { return false; }, 15);  // the stream's next image, done after the last tile
+  double off = screen_off();
+  CHECK_MSG(off >= 0 && off < 20, "the camera's image isn't the screen, a tile off by %.1f", off);
+  sim_ppm((std::string(outdir) + "/esp_screen_camera.ppm").c_str(), PIC_MAX_W, PIC_MAX_H, screen_rgb);
+  cam.stream = false;
+  // Nothing changed: the next look takes a few cycles
+  watch([] { return false; }, 10);
+  c = one_image(30);
+  CHECK_MSG(c >= 0 && c < 15 && screen_off() < 20, "an image of the unchanged screen took %d cycles", c);
+  printf("  then of the same screen after %d cycles\n", c);
+  // The screen changes, the next image shows it. Without the animations, a moving one would be off.
+  panel_clear_animation.execute("");
+  watch(settled, 500);
+  pn_saver(1);
+  c = one_image(partial + 300);
+  printf("  then of the screensaver after %d cycles\n", c);
+  CHECK_MSG(c >= 0, "no image of the screensaver");
+  cam.stream = true;  // until the shot is done
+  watch([] { return !panel::shot::S.asked; }, 600);
+  watch([] { return false; }, 15);
+  cam.stream = false;
+  off = screen_off();
+  CHECK_MSG(off >= 0 && off < 20, "the screensaver's image is off by %.1f", off);
+  pn_saver(0);
+  // The panel restarts: it doesn't know what we have, so the next shot asks for every tile
+  restart_panel();
+  CHECK_MSG(shot::S.all && !shot::S.asked, "after the panel's restart the next shot isn't of every tile");
+  // Nobody looks for KEEP_MS: the tiles are let go, the next look starts over
+  watch([] { return false; }, (int) (shot::KEEP_MS * 1000 / PBUS_CYCLE_US) + 20);
+  CHECK_MSG(shot::S.tiles.empty() && shot::S.tiles.capacity() == 0, "the tiles are kept after a minute without a look");
+  // Without the RAM for the tiles it doesn't ask
+  size_t free = ram_free;
+  ram_free = 16 * 1024;
+  cam.single = true;
+  watch([] { return false; }, 30);
+  CHECK_MSG(!shot::S.asked && shot::S.tiles.empty(), "a screenshot without the RAM for it");
+  ram_free = free;
+  c = watch([] { return !panel_screen.single; }, partial);
+  CHECK_MSG(c >= 0, "no image once the RAM was back");
+  cam.single = cam.stream = false;
+  watch([] { return !panel::shot::S.asked; }, 600);
+  loop_between = false;
+}
+
+// ---------------------------------------------------------------- the screensaver's lines
+static void saver_lines() {
+  step("the screensaver's lines (panel_saver_text)");
+  // line i as the panel has it, any size if it's empty
+  auto has = [](int i, const std::string &text, int size) {
+    int s;
+    return pn_saver_line(i, &s) == text && (text.empty() || s == size);
+  };
+  auto sent = [] {  // the ESP's loop queues them, the link takes them over
+    run(3);
+    run_until(settled, 100);
+  };
+  panel_saver_text.execute({"22.4 \u00b0C", "Humidity 45 %", "CO\u2082 812 ppm"}, {28, 15});
+  sent();
+  CHECK_MSG(
+      has(0, "22.4 \u00b0C", 28) && has(1, "Humidity 45 %", 16) && has(2, "CO\u2082 812 ppm", 16) && has(3, "", 0),
+      "the panel doesn't have the lines, or their sizes");
+  panel_saver_text.execute({"22.5 \u00b0C", "Humidity 45 %", "CO\u2082 812 ppm"}, {20});
+  sent();
+  CHECK_MSG(has(0, "22.5 \u00b0C", 20) && has(1, "Humidity 45 %", 16), "a changed line didn't reach the panel");
+  // The panel forgets them when it restarts, the ESP sends them again
+  CHECK_MSG(restart_panel() >= 0, "the link didn't come back");
+  CHECK_MSG(has(0, "22.5 \u00b0C", 20) && has(2, "CO\u2082 812 ppm", 16), "the lines didn't come back after a restart");
+  // More than SAVER_LINES, and one too long, cut where a character starts
+  std::string a63(63, 'a');
+  size_t from = log_all.size();
+  panel_saver_text.execute({"1", "2", "3", a63 + "\u00b0", "5"}, {});
+  sent();
+  CHECK_MSG(logged("lines at most", from), "no warning about a fifth line");
+  CHECK_MSG(has(0, "1", 16) && has(3, a63, 16), "the long line isn't cut before its last character");
+  // None brings the temperatures back
+  panel_saver_text.execute({}, {});
+  sent();
+  for (int i = 0; i < SAVER_LINES; i++)
+    CHECK_MSG(has(i, "", 0), "line %d is still on the panel", i);
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("usage: esp_test OUTDIR [PICTURE.ppm]\n");
@@ -3262,6 +3446,8 @@ int main(int argc, char **argv) {
   bootloader_away();
   settings_flash();
   item_icon_typo();
+  screen_camera();
+  saver_lines();
   printf("\n%d checks, %d failed\n", check_count, check_fails);
   return check_fails ? 1 : 0;
 }

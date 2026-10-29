@@ -6,6 +6,7 @@
 #include "input.h"
 #include "picture.h"
 #include "plat.h"
+#include "shot.h"
 #include "trend.h"
 #include <string.h>
 
@@ -72,11 +73,15 @@ static void got_hello(uint32_t v) {
   pic_ack = -1;
   if (v & HELLO_ASK) {
     plink_send(&queue, K_HELLO, hello_value());  // goes ahead of the waiting values
+    if (bulk.next_full)                          // the newer first, resend_cx60() keeps the one it has
+      pbulk_parse(bulk.next, bulk.next_n, resend_cx60, NULL);
     if (bulk.out_full)
       pbulk_parse(bulk.out, bulk.out_n, resend_cx60, NULL);
   }
   pic_reset();
   anim_clear_all();  // it sends them again
+  memset(M.saver_line, 0, sizeof M.saver_line);
+  shot_reset();      // and asks for a screenshot again
   val_forget_esp();  // its items may have changed, it sends them all again
   forget_helps(-1);
   sync_at = link_compatible() ? V_NONE : -1;
@@ -219,6 +224,9 @@ static void got_number(uint16_t key, uint32_t v) {
     case K_CX60_REG:
       plat_cx60_reg((uint16_t) (v >> 16), (int16_t) v);
       return;
+    case K_SHOT:
+      shot_ask(v);
+      return;
     case K_SHOW_VIEW:
       if (v < VIEW_COUNT) {
         input_activity();  // wakes it, or the view would sit at the idle brightness
@@ -280,6 +288,13 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if ((key >= K_PIC_BEGIN && key <= K_PIC_CLEAR) || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR) {
     pic_answer(key, b, n);
+    return;
+  }
+  if (key >= K_SAVER_LINE && key < K_SAVER_LINE + SAVER_LINES) {
+    int i = key - K_SAVER_LINE;
+    M.saver_size[i] = n ? b[0] : 0;
+    copy_text(M.saver_line[i], PLINK_TEXT_MAX + 1, b + 1, n ? n - 1 : 0);
+    ui_value_changed(V_NONE);
     return;
   }
   switch (key) {
@@ -344,7 +359,7 @@ void link_init(void) {
 void link_poll(void) {
   if (!HAS(FEAT_ESP))
     return;
-  uint8_t p[PBULK_MAX];
+  uint8_t p[PBULK_ANSWER_MAX > PBULK_MAX ? PBULK_ANSWER_MAX : PBULK_MAX];
   int n;
   while ((n = pbulk_panel_take(&bulk, p)) > 0)
     pbulk_parse(p, n, got_msg, NULL);
@@ -354,12 +369,14 @@ void link_poll(void) {
     plink_send(&queue, K_ANIM_GONE, (uint32_t) gone);
   send_sync();
   send_settings();
-  if (!bulk.out_full) {  // answer buffer is free, fill it
+  while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it
     n = plink_pack(&queue, p, PBULK_ANSWER_MAX);
-    if (n)
-      pbulk_panel_put(&bulk, p, n);
+    n += shot_take(p + n, PBULK_ANSWER_MAX - n);
+    if (!n)
+      break;
+    pbulk_panel_put(&bulk, p, n);
   }
-  n = plink_waiting(&queue);
+  n = plink_waiting(&queue) + (int) shot_waiting();
   bulk.waiting = n > 255 ? 255 : (uint8_t) n;  // what's left, so the ESP can leave room for it
 }
 

@@ -19,6 +19,7 @@ void pn_set(uint16_t key, int v);
 void pn_action(int a);
 int pn_idle(void);
 const char *pn_note(int *icon, int *level, int *fresh);
+const char *pn_saver_line(int i, int *size);  // the screensaver's line i from the ESP, and its size in px
 void pn_clock(int *y, int *mo, int *d, int *h, int *mi);
 int pn_item(int i, int *flags, int *icon, int *dec, int *step, int *id, int *min, int *max, int *value,
             const char **label, const char **unit);
@@ -40,6 +41,7 @@ void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_saver(int on);
 void pn_shot(const char *dir, const char *name);
+void pn_draw(int ms);  // ms on, the panel draws as its main loop does
 
 #ifdef __cplusplus
 }
