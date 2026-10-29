@@ -110,6 +110,7 @@ FILES = [
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
     ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64", "drift_x": -10}),
     ("packages/panel/met.yaml", {"latitude": "59.9139", "longitude": "10.7522", "encoding": "auto"}),
+    ("packages/panel/screen_camera.yaml", {"flexit_ref": "main", "flexit_refresh": "1d"}),  # core.yaml's
 ]
 
 

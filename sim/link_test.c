@@ -15,12 +15,19 @@ static plink_t L;  // the panel's outgoing queue
 // What each end got. Counted messages carry a sequence number, DATA one per 4 bytes.
 static int got_esp, got_panel, wrong;
 static uint32_t next_esp, next_panel;
-static uint16_t last_key;  // the last uncounted message the panel got
+static uint32_t data_goal, data_put, data_got;  // the panel's DATA, numbers of 4 bytes like the ESP's
+static uint16_t last_key;                       // the last uncounted message the panel got
 static uint8_t last[256];
 static int last_n, others;  // others = uncounted messages the panel got
 
 static void at_esp(void *u, uint16_t k, const uint8_t *b, int n) {
   (void) u;
+  if (k == PBULK_DATA_KEY) {
+    for (int i = 0; i + 4 <= n; i += 4, data_got++)
+      if (plink_number(b + i, 4) != data_got)
+        wrong++;
+    return;
+  }
   if (k != K_ACTION || plink_number(b, n) != next_esp)
     wrong++;
   next_esp++;
@@ -47,6 +54,7 @@ static void reset(uint16_t esess, uint16_t psess) {
   plink_init(&L);
   got_esp = got_panel = wrong = others = 0;
   next_esp = next_panel = 0;
+  data_goal = data_put = data_got = 0;
 }
 
 static void esp_send(uint16_t key, uint32_t v) {
@@ -55,15 +63,30 @@ static void esp_send(uint16_t key, uint32_t v) {
   CHECK(pbulk_esp_send(&E, key, b, 4, plink_bulk_flags(key)));
 }
 
-// The panel's main loop. Takes what came in and puts its own messages in the next answer.
+// The panel's main loop. Takes what came in and puts its own messages in the next answers, DATA in what's left.
 static void panel_loop(void) {
-  uint8_t p[PBULK_MAX];
+  uint8_t p[PBULK_ANSWER_MAX > PBULK_MAX ? PBULK_ANSWER_MAX : PBULK_MAX];
   int n;
   while ((n = pbulk_panel_take(&P, p)) > 0)
     pbulk_parse(p, n, at_panel, NULL);
-  if (!P.out_full && (n = plink_pack(&L, p, PBULK_ANSWER_MAX)) > 0)
+  while (pbulk_panel_free(&P)) {
+    n = plink_pack(&L, p, PBULK_ANSWER_MAX);
+    int k = (int) (data_goal - data_put) * 4, room = (PBULK_ANSWER_MAX - n - PBULK_MSG_HEAD) & ~3;
+    if (k > room)
+      k = room;
+    if (k > 0) {
+      plink_put16(p + n, PBULK_DATA_KEY);
+      p[n + 2] = (uint8_t) k;
+      for (int i = 0; i < k; i += 4)
+        plink_put32(p + n + PBULK_MSG_HEAD + i, data_put++);
+      n += PBULK_MSG_HEAD + k;
+    }
+    if (!n)
+      break;
     pbulk_panel_put(&P, p, n);
-  P.waiting = (uint8_t) (plink_waiting(&L) > 255 ? 255 : plink_waiting(&L));
+  }
+  unsigned w = plink_waiting(&L) + (data_goal - data_put) * 4;
+  P.waiting = (uint8_t) (w > 255 ? 255 : w);
 }
 
 // One lossless transaction in the quiet after a status broadcast. Returns the panel's status, -1 if no answer.
@@ -88,6 +111,7 @@ static void cycles(int n) {
 // ---------------------------------------------------------------- lost frames and answers, a late ESP
 static void test_random(void) {
   reset(0x2B, 0x51);
+  data_goal = 3000;
   int sent = 0, said = 0, lost = 0;
   unsigned seed = 1;
   for (int c = 0; c < 3000; c++) {
@@ -118,11 +142,13 @@ static void test_random(void) {
     }
   }
   cycles(400);
-  printf("random: ESP sent %d, panel got %d; panel sent %d, ESP got %d; %d answers lost, margin %u, %d wrong\n", sent,
-         got_panel, said, got_esp, lost, E.margin_us, wrong);
+  printf("random: ESP sent %d, panel got %d; panel sent %d and %u of DATA, ESP got %d and %u; %d answers lost, margin "
+         "%u, %d wrong\n",
+         sent, got_panel, said, data_goal, got_esp, data_got, lost, E.margin_us, wrong);
   CHECK(!wrong);
   CHECK_EQ(got_panel, sent);
   CHECK_EQ(got_esp, said);
+  CHECK_EQ(data_got, data_goal);
   CHECK(!E.resyncs);
   CHECK(!P.resyncs);
 }
@@ -156,7 +182,7 @@ static void test_esp_restart(void) {
     plink_send(&L, K_ACTION, (uint32_t) i);
   cycles(10);
   CHECK_EQ(got_esp, 6);
-  CHECK(!P.out_full);
+  CHECK(!P.out_full && !P.next_full);
   pbulk_esp_init(&E, 0x22, 3);  // the ESP restarts
   transact(PB_OK);              // first it gets an empty answer
   got_esp = 0;
@@ -220,6 +246,24 @@ static void test_busy(void) {
   CHECK(busy > 0 && P.busy > 0 && E.busy > 0);
   cycles(100);
   CHECK_EQ(got_panel, 300);
+  CHECK(!wrong);
+}
+
+// ---------------------------------------------------------------- with plenty to send, each answer carries some.
+// The one that says the ESP has all of out carries next, which the main loop put meanwhile.
+static void test_panel_rate(void) {
+  reset(0x51, 0x52);
+  uint32_t seq = 0;
+  int carried = 0;
+  for (int c = 0; c < 40; c++) {
+    while (plink_room(&L))
+      plink_send(&L, K_ACTION, seq++);
+    panel_loop();
+    int had = got_esp;
+    transact(PB_OK);
+    carried += got_esp > had;
+  }
+  CHECK_EQ(carried, 40);
   CHECK(!wrong);
 }
 
@@ -572,6 +616,7 @@ static const check_test_t TESTS[] = {
     {"panel_same_session", test_panel_same_session},
     {"esp_same_session", test_esp_same_session},
     {"busy", test_busy},
+    {"panel_rate", test_panel_rate},
     {"refused", test_refused},
     {"wrap", test_wrap},
     {"text", test_text},

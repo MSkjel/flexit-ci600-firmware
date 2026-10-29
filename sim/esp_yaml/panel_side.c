@@ -5,6 +5,7 @@
 #include "panel_side.h"
 #include "picture.h"
 #include "plink.h"
+#include "shot.h"
 #include "sim.h"
 #include <stdio.h>
 #include <string.h>
@@ -149,6 +150,12 @@ void pn_saver(int on) {
 }
 
 // Screenshot of the picture screensaver as DIR/NAME.ppm
+void pn_draw(int ms) {
+  shot_poll();
+  lv_tick_inc((uint32_t) ms);
+  lv_timer_handler();
+}
+
 void pn_shot(const char *dir, const char *name) {
   pn_saver(1);
   sim_shot(dir, name);

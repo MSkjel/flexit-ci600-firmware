@@ -40,6 +40,7 @@ void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_saver(int on);
 void pn_shot(const char *dir, const char *name);
+void pn_draw(int ms);  // ms on, the panel draws as its main loop does
 
 #ifdef __cplusplus
 }

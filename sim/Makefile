@@ -94,8 +94,9 @@ SCREENS := shots/*.ppm shots_no/*.ppm shots*/checks/*.ppm esp/*.ppm replay/*.ppm
 # hashed and sorted by name in C order, since wildcards sort by the locale and CI has another one
 HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 
-# bulk_test SECONDS CONTROL_TICK_MS SEED ESP_RX_THRESHOLD PANEL_2 [REFUSED], three runs: the defaults; a slow CX60,
-# the ESP's bytes late in big chunks and a second panel on the bus; and a CX60 in between with another seed
+# bulk_test SECONDS CONTROL_TICK_MS SEED ESP_RX_THRESHOLD PANEL_2 [REFUSED] [WHAT], four runs: the defaults; a slow
+# CX60, the ESP's bytes late in big chunks and a second panel on the bus; a CX60 in between with another seed; and
+# a screenshot's stream from the panel while pictures go to it
 check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/esp $(OUT)/replay
 	$(BUILD)/unit_test
@@ -104,6 +105,7 @@ check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	$(BUILD)/bulk_test 120
 	$(BUILD)/bulk_test 60 4 7 114 1
 	$(BUILD)/bulk_test 60 2 3 1 0
+	$(BUILD)/bulk_test 60 1 5 1 0 0 2
 	$(BUILD)/esp_test $(OUT)/esp
 	$(BUILD)/replay captures/cap1.txt $(OUT)/replay
 	$(BUILD)/replay captures/cap1.txt $(OUT)/replay glued

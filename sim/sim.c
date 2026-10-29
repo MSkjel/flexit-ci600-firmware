@@ -2,9 +2,11 @@
 //   ./sim OUTDIR            every scene as OUTDIR/<name>.ppm
 //   ./sim --perf            how much of the screen each key repaints
 #include "ui_int.h"
+#include "link.h"
 #include "pbus.h"
 #include "plink.h"
 #include "sim.h"
+#include "tjpgd/tjpgd.h"
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1519,6 +1521,163 @@ static void perf(void) {
   measure("key test running, 200 ms", KEY_UP);
 }
 
+// ---------------------------------------------------------------- screenshots, see app/shot.c
+#define SHOT_Q 80
+#define SHOT_OFF 20  // the most a tile may be off, see shot_error(). Text at SHOT_Q is 12, a stale one 30 or more
+static int shot_q = SHOT_Q;
+static uint8_t shot_jpeg[64 * 1024];
+static uint32_t shot_rgb[PIC_MAX_W * PIC_MAX_H];
+
+typedef struct {
+  const uint8_t *b;
+  size_t n, at;
+} jpeg_src_t;
+
+static size_t shot_in(JDEC *jd, uint8_t *b, size_t n) {
+  jpeg_src_t *s = jd->device;
+  if (n > s->n - s->at)
+    n = s->n - s->at;
+  if (b)
+    memcpy(b, s->b + s->at, n);
+  s->at += n;
+  return n;
+}
+
+static int shot_out(JDEC *jd, void *bitmap, JRECT *r) {
+  (void) jd;
+  const uint16_t *p = bitmap;
+  for (unsigned y = r->top; y <= r->bottom; y++)
+    for (unsigned x = r->left; x <= r->right; x++)
+      shot_rgb[y * PIC_MAX_W + x] = sim_rgb888(*p++);
+  return 1;
+}
+
+// The ESP's JPEG of the tiles decoded into shot_rgb, and the mean error per colour channel against the screen of its
+// worst tile. -1 if it isn't a whole JPEG.
+static double shot_error(unsigned *len) {
+  static uint8_t work[4096];
+  *len = sim_esp_shot_jpeg(shot_jpeg, sizeof shot_jpeg, shot_q);
+  JDEC jd;
+  jpeg_src_t src = {shot_jpeg, *len, 0};
+  if (!*len || jd_prepare(&jd, shot_in, work, sizeof work, &src) != JDR_OK || jd_decomp(&jd, shot_out, 0) != JDR_OK)
+    return -1;
+  double worst = 0;
+  for (int t = 0; t < SHOT_TILES; t++) {
+    int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
+    unsigned sum = 0;
+    for (int y = y0; y < y0 + SHOT_TILE_H; y++)
+      for (int x = x0; x < x0 + SHOT_TILE_W; x++) {
+        uint32_t a = shot_rgb[y * PIC_MAX_W + x], b = sim_pixel(x, y);
+        for (int c = 0; c < 24; c += 8)
+          sum += (unsigned) abs((int) (a >> c & 255) - (int) (b >> c & 255));
+      }
+    worst = LV_MAX(worst, (double) sum / (SHOT_TILE_W * SHOT_TILE_H * 3));
+  }
+  return worst;
+}
+
+// One cycle of the link and the panel's loop meanwhile
+static void cycle(void) {
+  sim_link_run(1);
+  run(PBUS_CYCLE_US / 1000);
+}
+
+// The panel and the link run together until the ESP has the SHOT_DONE, at most max cycles. Returns the tiles sent,
+// -1 if it didn't come, and in *err the decoded JPEG's error against the screen.
+static int take_shot(const char *what, bool all, int max, double *err) {
+  unsigned long c0 = sim_cycles, bytes, bad;
+  sim_esp_shot(shot_q, all);
+  int tiles;
+  while ((tiles = sim_esp_shot_done(&bytes, &bad)) < 0 && sim_cycles - c0 < (unsigned long) max)
+    cycle();
+  unsigned len = 0;
+  *err = tiles >= 0 ? shot_error(&len) : -1;
+  unsigned long n = sim_cycles - c0;
+  printf("  screenshot of %s: %d tiles in %lu bytes, %lu cycles = %.1f s, a %u-byte JPEG, its worst tile off by %.1f\n",
+         what, tiles, bytes, n, n * (PBUS_CYCLE_US / 1e6), len, *err);
+  check(!bad, "screenshot tiles came out of turn");
+  return tiles;
+}
+
+static void shot_save(const char *name) {
+  char path[512];
+  snprintf(path, sizeof path, "%s/%s.ppm", outdir, name);
+  sim_ppm(path, PIC_MAX_W, PIC_MAX_H, shot_rgb);
+}
+
+// Screenshots for the ESP: the JPEG it puts together from the tiles is the screen, an update only sends what was
+// drawn over, values from the panel don't wait behind the tiles, and one over a moving animation still ends
+static void screenshots(void) {
+  fresh();
+  M.idle_after = IDLE_STEPS - 1;                                     // never, nothing on the screen changes by itself
+  sim_esp_set(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);  // the model forgot the ESP
+  sim_esp_set(K_TIME, 9 * 365 * 86400 + 12 * 3600);
+  settle();
+  run(3000);  // the toast gone
+  double err;
+  int tiles = take_shot("the dashboard", true, 3000, &err);
+  check(tiles == SHOT_TILES && err >= 0 && err < SHOT_OFF, "the dashboard's screenshot isn't what it shows");
+  shot_save("95_esp_screenshot");
+  tiles = take_shot("the same again", false, 50, &err);
+  check(!tiles && err >= 0 && err < SHOT_OFF, "a screenshot of an unchanged screen sent tiles");
+  sim_esp_set(K_TIME, 9 * 365 * 86400 + 12 * 3600 + 60);  // the clock on a minute
+  settle();
+  run(100);
+  tiles = take_shot("the clock a minute on", false, 500, &err);
+  check(tiles > 0 && tiles <= 6 && err >= 0 && err < SHOT_OFF, "a minute on, the screenshot sent more than the clock");
+
+  // a value from the panel goes ahead of the tiles
+  sim_esp_shot(SHOT_Q, true);
+  for (int i = 0; i < 20; i++)
+    cycle();
+  sim_esp_watch(K_ROOM_TEMP);
+  link_send(K_ROOM_TEMP, 215);
+  cycle();
+  cycle();
+  check(sim_esp_seen(), "a value from the panel waited behind the screenshot");
+  tiles = take_shot("the dashboard while values go", false, 3000, &err);
+  check(tiles > 0 && err >= 0 && err < SHOT_OFF, "the screenshot didn't end with values going too");
+
+  // the photo screensaver, then an animation drifting over it
+  int quality;
+  sim_esp_send_photo(&quality);
+  settle();
+  M.screensaver = 4;
+  ui_push(&SCR_SAVER, 0);
+  run(500);
+  tiles = take_shot("the photo screensaver", true, 3000, &err);
+  check(tiles == SHOT_TILES && err >= 0 && err < SHOT_OFF, "the photo screensaver's screenshot isn't what it shows");
+  shot_save("95b_esp_screenshot_photo");
+  shot_q = 95;  // its busiest tiles don't fit the panel's buffer and lose their faint detail
+  tiles = take_shot("the photo screensaver at 95", true, 3000, &err);
+  check(tiles == SHOT_TILES && err >= 0 && err < SHOT_OFF, "the photo screensaver at 95 isn't what it shows");
+  shot_q = SHOT_Q;
+  tiles = take_shot("the photo screensaver at 80 again", true, 3000, &err);
+  sim_esp_send_animation(250, 20);
+  settle();
+  sim_esp_move_animation(K_ANIM_DRIFT, 60, 0, 0);
+  settle();
+  tiles = take_shot("an animation drifting over it", false, 3000, &err);
+  check(tiles > 0, "a screenshot over a moving animation didn't end");
+
+  // stopped, the panel sends nothing more
+  sim_esp_shot(SHOT_Q, true);
+  for (int i = 0; i < 5; i++)
+    cycle();
+  sim_esp_set(K_SHOT, 0);
+  for (int i = 0; i < 5; i++)
+    cycle();
+  unsigned long bytes, bad, before;
+  sim_esp_shot_done(&before, &bad);
+  for (int i = 0; i < 20; i++)
+    cycle();
+  sim_esp_shot_done(&bytes, &bad);
+  check(bytes == before, "the panel sent tiles after the screenshot was stopped");
+  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
+  settle();
+  ui_go_home();
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "usage: sim OUTDIR (every screen as OUTDIR/<name>.ppm) | sim --perf\n");
@@ -1565,6 +1724,7 @@ int main(int argc, char **argv) {
   notices();
   keytest();
   check_trial();
+  screenshots();
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

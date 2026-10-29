@@ -8,11 +8,11 @@
 #include "link.h"
 #include "mbserver.h"
 #include "panel.h"
-#include "picture.h"
 #include "plat.h"
 #include "room.h"
 #include "rs485.h"
 #include "settings.h"
+#include "shot.h"
 #include "trend.h"
 #include "ui.h"
 #include "unit.h"
@@ -48,6 +48,7 @@ static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
     return;
   }
   lcd_draw(a->x1, a->y1, a->x2, a->y2, (const uint16_t *) px, flushed);
+  shot_flushed(a, px);  // while the DMA sends it
   flush_px += (uint32_t) (a->x2 - a->x1 + 1) * (uint32_t) (a->y2 - a->y1 + 1);
 }
 
@@ -245,7 +246,7 @@ int main(void) {
   drv.hor_res = SCR_W;
   drv.ver_res = SCR_H;
   drv.flush_cb = flush;
-  drv.rounder_cb = pic_round;
+  drv.rounder_cb = shot_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
   uint32_t now_s = board_rtc_get();
@@ -282,6 +283,7 @@ int main(void) {
         second();
       }
       input_tick(t);
+      shot_poll();
       draw();
       bool leds[N_LIGHTS];
       panel_leds(leds, t);

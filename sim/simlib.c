@@ -1,7 +1,7 @@
 // Runs LVGL on the PC with the display in memory, saves screenshots and lays out the ESP's messages.
-#include "picture.h"
 #include "plat.h"
 #include "plink.h"
+#include "shot.h"
 #include "sim.h"
 #include "ui.h"
 #include "src/draw/sw/lv_draw_sw.h"
@@ -25,6 +25,7 @@ static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
   sim_px += (unsigned long) w * (unsigned long) (a->y2 - a->y1 + 1);
   for (int y = a->y1; y <= a->y2; y++)
     memcpy(&fb[y * W + a->x1], px + (y - a->y1) * w, w * sizeof *px);
+  shot_flushed(a, px);
   lv_disp_flush_ready(d);
 }
 
@@ -37,7 +38,7 @@ void sim_display_init(void) {
   drv.hor_res = W;
   drv.ver_res = H;
   drv.flush_cb = flush;
-  drv.rounder_cb = pic_round;
+  drv.rounder_cb = shot_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
 }
@@ -45,6 +46,7 @@ void sim_display_init(void) {
 void sim_run(int ms) {
   for (int t = 0; t < ms; t += 5) {
     lv_tick_inc(5);
+    shot_poll();
     lv_timer_handler();
   }
 }

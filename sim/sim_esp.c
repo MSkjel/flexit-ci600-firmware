@@ -41,10 +41,25 @@ static uint16_t last_key;
 static uint32_t last_val;
 static int last_ack_status = -1;
 
+static void shot_data(const uint8_t *b, int n);
+static void shot_end(void);
+static int shot_done = -1;  // tiles in the last SHOT_DONE, -1 = none since the SHOT
+static uint16_t watched;    // a key sim_esp_seen() looks out for
+static bool seen;
+
 static void esp_got(void *u, uint16_t key, const uint8_t *b, int n) {
   (void) u;
+  if (key == K_PIC_DATA) {
+    shot_data(b, n);
+    return;
+  }
   uint32_t v = plink_number(b, n);
   got_from_panel++;
+  seen |= key == watched;
+  if (key == K_SHOT_DONE) {
+    shot_done = (int) v;
+    shot_end();
+  }
   last_key = key;
   last_val = v;
   if (key == K_HELLO && (v & HELLO_ASK))
@@ -360,6 +375,94 @@ void sim_esp_notify(const char *text, int icon, int level) {
 }
 
 void sim_esp_set(uint16_t key, uint32_t value) { send_number(key, value); }
+
+void sim_esp_watch(uint16_t key) {
+  watched = key;
+  seen = false;
+}
+bool sim_esp_seen(void) { return seen; }
+
+// ---------------------------------------------------------------- screenshots, as the ESP puts them together
+#define TILE_BYTES 1024
+static uint8_t tile[SHOT_TILES][TILE_BYTES];
+static uint16_t tile_len[SHOT_TILES];
+static bool tile_whole[SHOT_TILES];
+static uint8_t head[SHOT_TILE_HEAD];  // of the tile coming in
+static int head_n, in_tile, in_left;  // head bytes so far, then the tile and the bytes it still needs
+static bool lost;                     // a head that makes no sense, nothing more until SHOT_DONE
+static unsigned long shot_bytes, shot_bad;
+
+// PIC_DATA from the panel: the tiles one after the other, each behind its head
+static void shot_data(const uint8_t *b, int n) {
+  shot_bytes += (unsigned long) n;
+  for (int i = 0; i < n && !lost;) {
+    if (head_n < SHOT_TILE_HEAD) {
+      head[head_n++] = b[i++];
+      if (head_n < SHOT_TILE_HEAD)
+        continue;
+      in_tile = head[SHOT_TILE_NUM];
+      in_left = plink_get16(head + SHOT_TILE_LEN);
+      if (!in_left) {  // the zeros at the end
+        head_n = 0;
+        continue;
+      }
+      if (in_tile >= SHOT_TILES || in_left > TILE_BYTES) {
+        shot_bad++;
+        lost = true;
+        break;
+      }
+      tile_len[in_tile] = 0;
+      tile_whole[in_tile] = false;
+      continue;
+    }
+    int k = in_left < n - i ? in_left : n - i;
+    memcpy(tile[in_tile] + tile_len[in_tile], b + i, (size_t) k);
+    tile_len[in_tile] = (uint16_t) (tile_len[in_tile] + k);
+    in_left -= k;
+    i += k;
+    if (!in_left) {
+      tile_whole[in_tile] = true;
+      head_n = 0;
+    }
+  }
+}
+
+// SHOT_DONE: what came after the last tile can only be zeros
+static void shot_end(void) {
+  for (int i = 0; i < head_n && i < SHOT_TILE_HEAD; i++)
+    shot_bad += head[i] != 0;
+  head_n = 0;
+  lost = false;
+}
+
+void sim_esp_shot(int quality, bool all) {
+  shot_done = -1;
+  shot_bytes = shot_bad = 0;
+  send_number(K_SHOT, (uint32_t) quality | (all ? SHOT_ALL : 0));
+}
+
+int sim_esp_shot_done(unsigned long *bytes, unsigned long *bad) {
+  *bytes = shot_bytes;
+  *bad = shot_bad;
+  return shot_done;
+}
+
+unsigned sim_esp_shot_jpeg(uint8_t *out, unsigned cap, int quality) {
+  unsigned n = pjpeg_head(out, cap, PIC_MAX_W, PIC_MAX_H, quality, SHOT_TILE_W / 16);
+  for (int t = 0; t < SHOT_TILES; t++) {
+    if (!tile_whole[t] || n + tile_len[t] + 4 > cap)
+      return 0;
+    if (t) {
+      out[n++] = 0xFF;
+      out[n++] = (uint8_t) (0xD0 + (t - 1) % 8);
+    }
+    memcpy(out + n, tile[t], tile_len[t]);
+    n += tile_len[t];
+  }
+  out[n++] = 0xFF;
+  out[n++] = 0xD9;
+  return n;
+}
 
 void sim_esp_report(const char *what) {
   printf("  %-30s %6lu cycles so far, ESP sent %lu, got %lu (last key 0x%03X = %lu), pic ack %d\n", what, sim_cycles,

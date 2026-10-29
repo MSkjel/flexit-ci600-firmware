@@ -107,7 +107,8 @@ void set_text(lv_obj_t *l, const char *fmt, ...) {
   va_start(ap, fmt);
   lv_vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
-  lv_label_set_text(l, buf);
+  if (strcmp(lv_label_get_text(l), buf))  // LVGL draws the same text again
+    lv_label_set_text(l, buf);
 }
 
 int sprint(char *buf, size_t n, const char *fmt, ...) {
