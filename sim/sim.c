@@ -782,6 +782,31 @@ static void saver_text(void) {
   M.saver_text = 0;
   saver_shot("87_saver_band_top");
   M.saver_top = false;
+  // The ESP's lines in place of the temperatures, a big one and two small ones: over the picture, in a corner and on
+  // black. One too long ends in dots, one that doesn't fit is left out, and without the ESP the temperatures are back.
+  sim_esp_saver_line(0, 28, "22.4 \u00b0C");
+  sim_esp_saver_line(1, 16, "Humidity 45 %");
+  sim_esp_saver_line(2, 16, "CO\u2082 812 ppm");
+  settle();
+  saver_shot("87b_saver_lines");
+  M.saver_text = SAVER_TEXT_SMALL;
+  saver_shot("87c_saver_lines_small");
+  M.saver_text = 0;
+  M.screensaver = SAVER_CLOCK_TEMPS;
+  saver_shot("87d_saver_lines_black");
+  M.screensaver = 5;
+  sim_esp_saver_line(1, 16, "Humidity in the bathroom 45 %");
+  sim_esp_saver_line(3, 28, "Left out");
+  settle();
+  saver_shot("87e_saver_lines_long");
+  M.esp_online = false;
+  ui_push(&SCR_SAVER, 0);
+  check_shot("saver_lines_esp_away");
+  ui_pop();
+  M.esp_online = true;
+  for (int i = 0; i < SAVER_LINES; i++)
+    sim_esp_saver_line(i, 16, "");
+  settle();
 }
 
 // The dashboard's outdoor temperature, the night theme and the dashboard as the only view

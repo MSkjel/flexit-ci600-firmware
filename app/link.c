@@ -80,6 +80,7 @@ static void got_hello(uint32_t v) {
   }
   pic_reset();
   anim_clear_all();  // it sends them again
+  memset(M.saver_line, 0, sizeof M.saver_line);
   shot_reset();      // and asks for a screenshot again
   val_forget_esp();  // its items may have changed, it sends them all again
   forget_helps(-1);
@@ -287,6 +288,13 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if ((key >= K_PIC_BEGIN && key <= K_PIC_CLEAR) || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR) {
     pic_answer(key, b, n);
+    return;
+  }
+  if (key >= K_SAVER_LINE && key < K_SAVER_LINE + SAVER_LINES) {
+    int i = key - K_SAVER_LINE;
+    M.saver_size[i] = n ? b[0] : 0;
+    copy_text(M.saver_line[i], PLINK_TEXT_MAX + 1, b + 1, n ? n - 1 : 0);
+    ui_value_changed(V_NONE);
     return;
   }
   switch (key) {

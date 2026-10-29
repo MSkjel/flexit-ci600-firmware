@@ -62,6 +62,7 @@ void sim_esp_items(void);  // send all of SIM_ITEMS
 void sim_esp_fill(void);   // send filler items up to N_ITEMS, on the smart home page
 void sim_esp_notify(const char *text, int icon, int level);
 void sim_esp_set(uint16_t key, uint32_t value);
+void sim_esp_saver_line(int i, int size, const char *text);  // line i of the screensaver's, size in px
 unsigned sim_esp_send_picture(void);
 unsigned sim_esp_send_photo(int *quality);  // a photo-like picture, as a JPEG at the best quality that fits
 unsigned sim_esp_send_moon(int *y, int *count);

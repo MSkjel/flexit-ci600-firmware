@@ -3321,6 +3321,43 @@ static void screen_camera() {
   loop_between = false;
 }
 
+// ---------------------------------------------------------------- the screensaver's lines
+static void saver_lines() {
+  step("the screensaver's lines (panel_saver_text)");
+  // line i as the panel has it, any size if it's empty
+  auto has = [](int i, const std::string &text, int size) {
+    int s;
+    return pn_saver_line(i, &s) == text && (text.empty() || s == size);
+  };
+  auto sent = [] {  // the ESP's loop queues them, the link takes them over
+    run(3);
+    run_until(settled, 100);
+  };
+  panel_saver_text.execute({"22.4 \u00b0C", "Humidity 45 %", "CO\u2082 812 ppm"}, {28, 15});
+  sent();
+  CHECK_MSG(
+      has(0, "22.4 \u00b0C", 28) && has(1, "Humidity 45 %", 16) && has(2, "CO\u2082 812 ppm", 16) && has(3, "", 0),
+      "the panel doesn't have the lines, or their sizes");
+  panel_saver_text.execute({"22.5 \u00b0C", "Humidity 45 %", "CO\u2082 812 ppm"}, {20});
+  sent();
+  CHECK_MSG(has(0, "22.5 \u00b0C", 20) && has(1, "Humidity 45 %", 16), "a changed line didn't reach the panel");
+  // The panel forgets them when it restarts, the ESP sends them again
+  CHECK_MSG(restart_panel() >= 0, "the link didn't come back");
+  CHECK_MSG(has(0, "22.5 \u00b0C", 20) && has(2, "CO\u2082 812 ppm", 16), "the lines didn't come back after a restart");
+  // More than SAVER_LINES, and one too long, cut where a character starts
+  std::string a63(63, 'a');
+  size_t from = log_all.size();
+  panel_saver_text.execute({"1", "2", "3", a63 + "\u00b0", "5"}, {});
+  sent();
+  CHECK_MSG(logged("lines at most", from), "no warning about a fifth line");
+  CHECK_MSG(has(0, "1", 16) && has(3, a63, 16), "the long line isn't cut before its last character");
+  // None brings the temperatures back
+  panel_saver_text.execute({}, {});
+  sent();
+  for (int i = 0; i < SAVER_LINES; i++)
+    CHECK_MSG(has(i, "", 0), "line %d is still on the panel", i);
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("usage: esp_test OUTDIR [PICTURE.ppm]\n");
@@ -3410,6 +3447,7 @@ int main(int argc, char **argv) {
   settings_flash();
   item_icon_typo();
   screen_camera();
+  saver_lines();
   printf("\n%d checks, %d failed\n", check_count, check_fails);
   return check_fails ? 1 : 0;
 }

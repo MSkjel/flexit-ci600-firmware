@@ -376,6 +376,13 @@ void sim_esp_notify(const char *text, int icon, int level) {
 
 void sim_esp_set(uint16_t key, uint32_t value) { send_number(key, value); }
 
+void sim_esp_saver_line(int i, int size, const char *text) {
+  uint8_t b[1 + PLINK_TEXT_MAX] = {(uint8_t) size};
+  int n = (int) strlen(text);
+  memcpy(b + 1, text, n);
+  send(K_SAVER_LINE + i, b, 1 + n);
+}
+
 void sim_esp_watch(uint16_t key) {
   watched = key;
   seen = false;

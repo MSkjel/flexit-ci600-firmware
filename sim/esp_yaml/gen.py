@@ -212,6 +212,7 @@ def period_ms(v):
 
 
 PTYPE = {"int": "int", "string": "std::string", "bool": "bool", "float": "float"}
+PTYPE.update({f"{t}[]": f"std::vector<{c}>" for t, c in PTYPE.items()})
 X_TYPE = {"sensor": "float", "binary_sensor": "bool", "text_sensor": "std::string"}  # the type of x in on_value
 # stubs.h's class for each kind of entity
 CLASS = {

@@ -63,6 +63,10 @@ const char *pn_note(int *icon, int *level, int *fresh) {
   M.note_new = false;
   return M.note;
 }
+const char *pn_saver_line(int i, int *size) {
+  *size = M.saver_size[i];
+  return M.saver_line[i];
+}
 void pn_clock(int *y, int *mo, int *d, int *h, int *mi) {
   *y = M.yy;
   *mo = M.mo;

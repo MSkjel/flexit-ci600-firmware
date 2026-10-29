@@ -138,6 +138,8 @@ typedef struct {
   char note[NOTE_LEN];            // notification text from the ESP
   uint8_t note_icon, note_level;  // ICN_*, NOTE_*
   bool note_new;
+  char saver_line[SAVER_LINES][PLINK_TEXT_MAX + 1];  // the ESP's lines on the screensaver, see K_SAVER_LINE
+  uint8_t saver_size[SAVER_LINES];                   // and their sizes in px
 
   uint8_t trend[TR_COUNT][TREND_LEN];  // last 24 h of the temperatures, oldest first, encoded by trend_code()
 
