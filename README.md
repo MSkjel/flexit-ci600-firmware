@@ -54,6 +54,8 @@ With an ESP:
 - 24 h charts of the ESP's sensors, like CO2 and humidity
 - Messages from Home Assistant
 - A picture, photo, animation or the local weather (MET Norway) as the screensaver
+- Lines of your own on the screensaver, like the humidity in the bathroom
+- The panel's screen as a camera in Home Assistant
 - The clock from Home Assistant, and panel updates from Home Assistant
 
 ## Installing
@@ -240,7 +242,9 @@ About 9 times a second the CX60 sends a status broadcast and then leaves the bus
 sends a frame in that gap and the panel answers. Anything left over goes in the gaps after the CX60's polls.
 Messages are numbered and resent until the other side has them. `proto/pbus.h` has the bus timing, `pbulk.h` the
 frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a copy of `proto/`: update it with
-`make -C sim esp_sync` (`esp_test` fails if they differ).
+`make -C sim esp_sync` (`esp_test` fails if they differ). Screenshots for the ESP's camera go the other way, a 64x8
+tile at a time, JPEG-coded as it's drawn again on its way to the LCD (`app/shot.c`), so the panel keeps nothing but
+the tile being sent.
 
 ### Adding things
 

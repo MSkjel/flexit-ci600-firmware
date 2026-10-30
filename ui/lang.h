@@ -169,6 +169,7 @@
   /* Filter */ \
   X(FILTER_HELP, "When to change the filters, and resetting the timer after a change.") \
   X(CHANGE_NOW, "Change now") \
+  X(DAY_LEFT, "%d day left") \
   X(DAYS_LEFT, "%d days left") \
   X(STATUS, "Status") \
   X(STATUS_HELP, "Time until the filters should be changed.") \
@@ -185,6 +186,7 @@
   /* Alarms */ \
   X(ALARMS, "Alarms") \
   X(ALARMS_HELP, "Current and past alarms, and which ones pop up.") \
+  X(ONE_ACTIVE, "%d active") \
   X(N_ACTIVE, "%d active") \
   X(ALL_CLEAR, "All clear") \
   X(ACTIVE_ALARMS, "Active alarms") \

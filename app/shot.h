@@ -7,8 +7,8 @@
 
 void shot_ask(uint32_t v);  // K_SHOT
 void shot_reset(void);      // the ESP restarted, it asks again
-// The display's rounder. Notes what was drawn over, and while a shot runs rounds every area to whole tile rows, so
-// LVGL's strips start on them and a tile is always drawn in one. Then pic_round().
+// The display's rounder, after pic_round(). Notes what was drawn over, and while a shot runs rounds every area to
+// whole tile rows, so LVGL's strips start on them and a tile is always drawn in one.
 void shot_round(lv_disp_drv_t *d, lv_area_t *a);
 // The display's flush, px area a's pixels row by row: the tile we wait for is encoded from it if it's all there.
 // Not while the LCD is held, it would be what isn't shown.

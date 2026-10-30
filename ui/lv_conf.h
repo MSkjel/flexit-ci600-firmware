@@ -143,7 +143,7 @@
  * "Transformed layers" (where transform_angle/zoom properties are used) use larger buffers
  * and can't be drawn in chunks. So these settings affects only widgets with opacity.
  */
-#define LV_LAYER_SIMPLE_BUF_SIZE          (24 * 1024)
+#define LV_LAYER_SIMPLE_BUF_SIZE          (4 * 1024)  /* nothing uses opacity; the heap is 16 KB, so no bigger */
 #define LV_LAYER_SIMPLE_FALLBACK_BUF_SIZE (3 * 1024)
 
 /*Default image cache size. Image caching keeps the images opened.
@@ -263,9 +263,15 @@
  *If LV_USE_LOG is enabled an error message will be printed on failure*/
 #define LV_USE_ASSERT_NULL          1   /*Check if the parameter is NULL. (Very fast, recommended)*/
 #define LV_USE_ASSERT_MALLOC        1   /*Checks is the memory is successfully allocated or no. (Very fast, recommended)*/
+#ifdef CI600_SIM /* the sim checks what the panel can't afford to */
+#define LV_USE_ASSERT_STYLE         1
+#define LV_USE_ASSERT_MEM_INTEGRITY 1
+#define LV_USE_ASSERT_OBJ           1
+#else
 #define LV_USE_ASSERT_STYLE         0   /*Check if the styles are properly initialized. (Very fast, recommended)*/
 #define LV_USE_ASSERT_MEM_INTEGRITY 0   /*Check the integrity of `lv_mem` after critical operations. (Slow)*/
 #define LV_USE_ASSERT_OBJ           0   /*Check the object's type and existence (e.g. not deleted). (Slow)*/
+#endif
 
 /*Add a custom handler when assert happens e.g. to restart the MCU*/
 #ifdef CI600_SIM

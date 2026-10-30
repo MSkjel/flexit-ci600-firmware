@@ -160,6 +160,8 @@ void row_help(const mitem_t *it) {
 #define ROW_H 34
 #define ROWS 5  // rows on screen, their widgets are reused as the list scrolls
 #define MAX_ROWS 24
+_Static_assert(N_ITEMS <= MAX_ROWS, "the ESP's items fill a menu");
+_Static_assert(MAX_ROWS < 128, "shown[] ends with -1");
 #define ROW_END (SCR_W - 18)  // where a row's switch and arrow end
 #define SWITCH_W 36           // toggle switch, its knob and the gap around the knob
 #define KNOB 14
@@ -416,6 +418,8 @@ static bool list_key(int k) {
     case MI_NUM:
     case MI_ENUM:
     case MI_ACTION:
+      if (read_only(it))
+        break;
       if (it == &b) {  // SCR_EDIT keeps the pointer and may rebuild from it, so copy generated rows
         edit_row = b;
         it = &edit_row;

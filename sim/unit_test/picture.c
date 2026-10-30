@@ -188,7 +188,7 @@ static void test_picture(void) {
   CHECK_EQ(status(begin(PIC_MAX_W + 2, H, 4)), PIC_BAD_SIZE);
   CHECK_EQ(status(begin(W, H, PIC_POOL + 1)), PIC_TOO_BIG);
 
-  // a big one, with progress every KiB
+  // the whole picture again, in 1-byte pieces
   fill(0, H, 3);
   CHECK_EQ(status(send_picture(1)), PIC_DONE);
   CHECK(shows());
@@ -391,8 +391,10 @@ static void test_jpeg(void) {
   lv_area_t probe = {0, 0, 0, 36}, low = {0, 0, 0, 4};
   pic_round(NULL, &over);
   pic_round(NULL, &beside);
+  lv_disp_get_default()->rendering_in_progress = 1;  // the probes come while LVGL draws
   pic_round(NULL, &probe);
   pic_round(NULL, &low);
+  lv_disp_get_default()->rendering_in_progress = 0;
   CHECK_EQ(over.y1, o->coords.y1);
   CHECK_EQ(over.y2, o->coords.y1 + 15);
   CHECK_EQ(over.x1, o->coords.x1 + 3);
@@ -559,10 +561,38 @@ static void test_deflate(void) {
   free(got);
 }
 
+// The panel acks every KiB of a long one, counting up, then DONE
+static void test_progress(void) {
+  no_picture();
+  static uint8_t j[8192];
+  pjpeg_t e;
+  pjpeg_begin(&e, 2 * JW, 2 * JH, 97, j, sizeof j);
+  while (pjpeg_mcu(&e, photo, NULL)) {
+  }
+  uint32_t n = pjpeg_end(&e);
+  CHECK(n > 2048 && n <= sizeof j);
+  int32_t a = jpeg_begin(2 * JW, 2 * JH, n);
+  CHECK(a < 0);
+  int acks = 0;
+  uint32_t got = 0;
+  bool counting = true;
+  for (uint32_t i = 0; i < n; i += 61) {
+    a = data(j + i, n - i < 61 ? n - i : 61);
+    if (a < 0)
+      continue;
+    counting &= status(a) == PIC_PROGRESS && (a & 0xFFFF) > got && (a & 0xFFFF) <= i + 61;
+    got = a & 0xFFFF;
+    acks++;
+  }
+  CHECK(counting);
+  CHECK_EQ(acks, (int) (n / 1024));
+  CHECK_EQ(status(end(plink_crc32(0, j, n))), PIC_DONE);
+  CHECK_EQ(pic_state(), PIC_READY);
+  CHECK_EQ(pic_width(), 2 * JW);
+}
+
 const check_test_t PICTURE_TESTS[] = {
-    {"picture", test_picture},
-    {"picture_parts", test_picture_parts},
-    {"jpeg", test_jpeg},
-    {"deflate", test_deflate},
-    {0},
+    {"picture", test_picture}, {"picture_parts", test_picture_parts},
+    {"jpeg", test_jpeg},       {"progress", test_progress},
+    {"deflate", test_deflate}, {0},
 };

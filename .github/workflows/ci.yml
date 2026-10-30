@@ -15,7 +15,9 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
-  ESP_REF: main  # the esphome-flexit-modbus-server branch the link is tested against
+  # The esphome-flexit-modbus-server branch the link is tested against: dev with dev, since the proto files are synced
+  # there first, main for everything else, tags and pull requests included
+  ESP_REF: ${{ github.ref_name == 'dev' && 'dev' || 'main' }}
 
 # The apt packages and ccache's objects come from the cache, LVGL comes without its history. The timeouts stop a
 # stalled package mirror early.
@@ -52,6 +54,9 @@ jobs:
         with:
           key: firmware
       - run: make -C hw ESP_REPO=$GITHUB_WORKSPACE/esp
+      - name: The version built is the tag's, that's what the ESP goes by
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "$(cat hw/build/version)" = "${GITHUB_REF_NAME#v}"
       - if: env.HAS_FXUP_KEY == 'true'
         run: pip install cryptography==50.0.2 cffi==2.1.1 pycparser==3.0
       # Only this step gets the key
@@ -96,7 +101,7 @@ jobs:
       - uses: ./.github/actions/ccache
         with:
           key: ${{ matrix.san && 'sanitizers' || 'test' }}
-      - run: make -C sim check SAN=${{ matrix.san }} ESP_REPO=$GITHUB_WORKSPACE/esp
+      - run: make -C sim check SAN=${{ matrix.san }} ESP_REPO=$GITHUB_WORKSPACE/esp FUZZ_SEED=${{ github.run_number }}
       - if: matrix.san == ''
         run: make -C sim gallery ESP_REPO=$GITHUB_WORKSPACE/esp
       - if: matrix.san == ''

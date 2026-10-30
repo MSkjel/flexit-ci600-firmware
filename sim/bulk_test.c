@@ -487,8 +487,7 @@ static void panel(void) {
     while (what && pbulk_panel_free(&PRX)) {  // the stream fills every answer, as link.c fills it with a screenshot
       uint8_t m[PBULK_ANSWER_MAX];
       int n = (PBULK_ANSWER_MAX - PBULK_MSG_HEAD) & ~3;  // DATA, which an answer takes as much of as fits
-      m[0] = PBULK_DATA_KEY & 0xFF;
-      m[1] = PBULK_DATA_KEY >> 8;
+      plink_put16(m, PBULK_DATA_KEY);
       m[2] = (uint8_t) n;
       for (int i = 0; i < n; i++)
         m[PBULK_MSG_HEAD + i] = stream_byte(stream_sent + (uint32_t) i);
@@ -589,7 +588,7 @@ static void feed_picture(void) {  // queue pictures for the link, as packages/pa
     bool ok;
     uint8_t v[58] = {0};
     if (pic_pos == -1) {
-      memcpy(v + 6, &pic_no, 4);  // in this test the header carries the picture number
+      plink_put32(v + 6, pic_no);  // in this test the header carries the picture number
       ok = pbulk_esp_send(&ETX, K_PIC_BEGIN, v, sizeof v, false);
     } else if (pic_pos >= PIC_LEN) {
       ok = pbulk_esp_send(&ETX, K_PIC_END, v, 4, false);

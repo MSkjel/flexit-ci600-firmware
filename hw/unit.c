@@ -489,7 +489,7 @@ void unit_second(void) {
   }
   M.bus_ours = MB.ours;
   if (!offline && M.boost_left && reg16(R_ST_BOOST_S) == boost_seen) {
-    if (++boost_stuck_s == BOOST_STUCK_S) {
+    if (boost_stuck_s < BOOST_STUCK_S && ++boost_stuck_s == BOOST_STUCK_S) {  // once, not every 256 s
       bus_write(R_CMD_BOOST_OFF, 1);
       ui_toast(IC_TIMER, S_BOOST_NEEDS_ADDR_1);
     }

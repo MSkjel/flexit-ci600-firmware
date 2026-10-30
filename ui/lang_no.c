@@ -166,6 +166,7 @@ const char *const LANG_NO[S_COUNT] = {
     // Filter
     [S_FILTER_HELP] = "Når filtrene skal byttes, og nullstilling av telleren etter bytte.",
     [S_CHANGE_NOW] = "Bytt nå",
+    [S_DAY_LEFT] = "%d dag igjen",
     [S_DAYS_LEFT] = "%d dager igjen",
     [S_STATUS] = "Status",
     [S_STATUS_HELP] = "Tid til filtrene bør byttes.",
@@ -173,7 +174,7 @@ const char *const LANG_NO[S_COUNT] = {
     [S_RUNNING_SINCE_CHANGE] = "Timer siden bytte",
     [S_RUNNING_SINCE_CHANGE_HELP] = "Viftetimer siden filtertelleren sist ble nullstilt.",
     [S_TIMES_CHANGED] = "Antall bytter",
-    [S_TIMES_CHANGED_HELP] = "Hvor mange ganger filtertimeren er nullstilt.",
+    [S_TIMES_CHANGED_HELP] = "Hvor mange ganger filtertelleren er nullstilt.",
     [S_CHANGE_EVERY] = "Bytt hver",
     [S_UNIT_DAYS] = "dager",
     [S_CHANGE_EVERY_HELP] = "Hvor ofte filterpåminnelsen kommer.",
@@ -182,6 +183,7 @@ const char *const LANG_NO[S_COUNT] = {
     // Alarms
     [S_ALARMS] = "Alarmer",
     [S_ALARMS_HELP] = "Alarmer nå og tidligere, og hvilke som dukker opp.",
+    [S_ONE_ACTIVE] = "%d aktiv",
     [S_N_ACTIVE] = "%d aktive",
     [S_ALL_CLEAR] = "Ingen alarmer",
     [S_ACTIVE_ALARMS] = "Aktive alarmer",

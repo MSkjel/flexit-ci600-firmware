@@ -234,7 +234,7 @@ def flash(bus, stream):
     # The loader only accepts a piece in state 2. The first piece erases the old application, which takes a
     # few seconds with no answer.
     print("Arming...")
-    sent, restarts, t0 = 0, 0, time.time()
+    sent, restarts, refused, t0 = 0, 0, 0, time.time()
     arm(bus)
     while sent < len(stream):
         piece = stream[sent : sent + PIECE]
@@ -250,6 +250,9 @@ def flash(bus, stream):
                 arm(bus)
                 continue
             if not taken:
+                refused += 1
+                if refused == 5:
+                    raise Failed("the piece at %d is refused again and again" % sent)
                 continue
         sent += len(piece)
         print("\r  %d/%d bytes (%d%%)" % (sent, len(stream), 100 * sent // len(stream)), end="", flush=True)

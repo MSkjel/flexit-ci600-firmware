@@ -474,9 +474,9 @@ __attribute__((optimize("O3"))) bool pic_read(const lv_area_t *a, lv_color_t *bu
 
 void pic_round(lv_disp_drv_t *d, lv_area_t *a) {
   (void) d;
-  // LVGL asking how high a strip may be, any from 8 lines. Below that it would find none and loop forever.
-  bool probe = a->x1 == 0 && a->x2 == 0 && a->y1 == 0 && a->y2 >= 7;
-  if (!shown || pic.format != PIC_JPEG || (!probe && !_lv_area_is_on(a, &shown->coords)))
+  // LVGL asking how high a strip may be, only while it draws. Below 8 lines it would find none and loop forever.
+  bool probe = lv_disp_get_default()->rendering_in_progress;
+  if (!shown || pic.format != PIC_JPEG || (probe ? a->y2 < 7 : !_lv_area_is_on(a, &shown->coords)))
     return;
   int top = shown->coords.y1;
   a->y1 = (lv_coord_t) (a->y1 - ((a->y1 - top) & 7));

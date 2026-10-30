@@ -73,7 +73,7 @@ static void apply_theme(void) {
 }
 
 // ---------------------------------------------------------------- stack
-#define STACK_MAX 10
+#define STACK_MAX 12  // the deepest menu path and its help, plus an alarm pop-up, a note and the screensaver
 #define TOAST_MS 1800
 static frame_t stack[STACK_MAX];
 static int depth;
@@ -246,6 +246,10 @@ void ui_rebuild(void) {
   lv_obj_set_style_bg_color(hintbar, T.bg, 0);
   lv_obj_set_style_border_color(hintbar, T.line, 0);
   memset(shown_hints, 0xFF, sizeof shown_hints);  // force a redraw
+  if (toast) {                                    // it isn't an overlay, so it would keep the old colours
+    lv_obj_del(toast);
+    toast = NULL;
+  }
   rebuild_visible();
 }
 

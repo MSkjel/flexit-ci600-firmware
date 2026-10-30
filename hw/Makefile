@@ -8,6 +8,7 @@ OBJ_DIR := $(BUILD)
 COMPILE  = $(CC) $(CFLAGS)
 .DEFAULT_GOAL := all
 include $(ROOT)/config.mk
+DEFS    += -DPJPEG_ALSO=0  # the panel's JPEGs are one quality, see pjpeg.h
 STOCK   ?=
 CC      := arm-none-eabi-gcc
 OBJCOPY := arm-none-eabi-objcopy

@@ -5,6 +5,7 @@
 #include "sim.h"
 #include "ui.h"
 #include "src/draw/sw/lv_draw_sw.h"
+#include "tjpgd/tjpgd.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,10 +30,15 @@ static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
   lv_disp_flush_ready(d);
 }
 
+// One 40-line draw buffer, or with SIM_LINES=8 in the environment two of 8 lines like the panel, whose strips the
+// rounders then see
 void sim_display_init(void) {
   lv_init();
   static lv_disp_draw_buf_t db;
-  lv_disp_draw_buf_init(&db, draw_buf, NULL, W * 40);
+  if (getenv("SIM_LINES") && atoi(getenv("SIM_LINES")) == 8)
+    lv_disp_draw_buf_init(&db, draw_buf, draw_buf + W * 8, W * 8);
+  else
+    lv_disp_draw_buf_init(&db, draw_buf, NULL, W * 40);
   static lv_disp_drv_t drv;
   lv_disp_drv_init(&drv);
   drv.hor_res = W;
@@ -185,3 +191,55 @@ uint32_t plat_entropy(void) {
   static uint32_t starts;
   return ++starts * 0x9E3779B9u;
 }
+
+// ---- a JPEG of the screen against the screen
+static uint32_t jpeg_rgb[W * H];
+
+typedef struct {
+  const uint8_t *b;
+  size_t n, at;
+} jpeg_src_t;
+
+static size_t jpeg_in(JDEC *jd, uint8_t *b, size_t n) {
+  jpeg_src_t *s = jd->device;
+  if (n > s->n - s->at)
+    n = s->n - s->at;
+  if (b)
+    memcpy(b, s->b + s->at, n);
+  s->at += n;
+  return n;
+}
+
+static int jpeg_out(JDEC *jd, void *bitmap, JRECT *r) {
+  (void) jd;
+  const uint16_t *p = bitmap;
+  for (unsigned y = r->top; y <= r->bottom; y++)
+    for (unsigned x = r->left; x <= r->right; x++)
+      jpeg_rgb[y * W + x] = sim_rgb888(*p++);
+  return 1;
+}
+
+double sim_jpeg_off(const uint8_t *jpeg, size_t n) {
+  static uint8_t work[4096];
+  JDEC jd;
+  jpeg_src_t src = {jpeg, n, 0};
+  if (!n || jd_prepare(&jd, jpeg_in, work, sizeof work, &src) != JDR_OK || jd.width != W || jd.height != H ||
+      jd_decomp(&jd, jpeg_out, 0) != JDR_OK)
+    return -1;
+  double worst = 0;
+  lv_refr_now(NULL);  // then fb[] is the screen
+  for (int t = 0; t < SHOT_TILES; t++) {
+    int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
+    unsigned sum = 0;
+    for (int y = y0; y < y0 + SHOT_TILE_H; y++)
+      for (int x = x0; x < x0 + SHOT_TILE_W; x++) {
+        uint32_t a = jpeg_rgb[y * W + x], b = sim_rgb888(fb[y * W + x].full);
+        for (int c = 0; c < 24; c += 8)
+          sum += (unsigned) abs((int) (a >> c & 255) - (int) (b >> c & 255));
+      }
+    worst = LV_MAX(worst, (double) sum / (SHOT_TILE_W * SHOT_TILE_H * 3));
+  }
+  return worst;
+}
+
+const uint32_t *sim_jpeg_rgb(void) { return jpeg_rgb; }

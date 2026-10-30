@@ -54,9 +54,9 @@ static void band_texts(lv_obj_t *band, lv_obj_t *l[3], lv_obj_t *lines[SAVER_LIN
   lv_obj_set_pos(l[1], 16 + d, 50 + d);
   l[2] = NULL;
   if (temps) {
-    l[2] = mk_text(band, &font_f16, c, "", 150, LV_TEXT_ALIGN_RIGHT);
+    l[2] = mk_text(band, &font_f16, c, "", BAND_LINES_W, LV_TEXT_ALIGN_RIGHT);
     lv_label_set_recolor(l[2], true);
-    lv_obj_set_pos(l[2], SCR_W - 164 + d, 14 + d);
+    lv_obj_set_pos(l[2], SCR_W - 14 - BAND_LINES_W + d, 14 + d);
     mk_lines(band, lines, c, BAND_LINES_W, LV_TEXT_ALIGN_RIGHT);
   }
   for (int i = 0; shadow && i < 3; i++)

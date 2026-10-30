@@ -214,6 +214,16 @@ def period_ms(v):
 PTYPE = {"int": "int", "string": "std::string", "bool": "bool", "float": "float"}
 PTYPE.update({f"{t}[]": f"std::vector<{c}>" for t, c in PTYPE.items()})
 X_TYPE = {"sensor": "float", "binary_sensor": "bool", "text_sensor": "std::string"}  # the type of x in on_value
+# What yaml_wire() hooks up for each kind. A package using another trigger stops gen.py, so none is dropped unseen.
+TRIGGERS = {
+    "select": {"set_action", "on_value"},
+    "number": {"set_action"},
+    "switch": {"turn_on_action", "turn_off_action", "on_turn_on", "on_turn_off"},
+    "button": {"on_press"},
+    "sensor": {"on_value"},
+    "binary_sensor": {"on_state"},
+    "text_sensor": {"on_value"},
+}
 # stubs.h's class for each kind of entity
 CLASS = {
     "select": "Select",
@@ -268,7 +278,16 @@ def check_proto(esp):
 
 def collect(esp):
     """What the harness needs from the packages in FILES."""
-    y = {"globals": [], "scripts": [], "boots": [], "intervals": [], "entities": {}, "images": [], "headers": []}
+    y = {
+        "globals": [],
+        "scripts": [],
+        "boots": [],
+        "intervals": [],
+        "entities": {},
+        "images": [],
+        "headers": [],
+        "time_syncs": [],
+    }
     for path, doc in (p for top in FILES for p in packages(esp, *top)):
         # esphome includes are relative to the package. Headers go in after the globals, like ESPHome does it.
         for inc in (doc.get("esphome") or {}).get("includes", []) or []:
@@ -288,14 +307,23 @@ def collect(esp):
             y["boots"].append((b.get("priority", 600) if isinstance(b, dict) else 600, lambdas(then(b))))
         for i in doc.get("interval", []):
             y["intervals"] += [(period_ms(i["interval"]), code) for code in lambdas(then(i))]
+        for t in doc.get("time", []) or []:
+            if set(t) - {"platform", "id", "timezone", "on_time_sync"}:
+                sys.exit(f"gen.py doesn't wire time's {sorted(set(t) - {'platform', 'id', 'timezone'})}")
+            y["time_syncs"] += lambdas(t.get("on_time_sync"))
         for kind in CLASS:
             for e in doc.get(kind, []) or []:
                 eid = e.get("id")
                 if eid is None:
                     continue
                 if isinstance(eid, Extend):  # !extend adds options to an existing select
+                    if set(e) - {"id", "options"}:
+                        sys.exit(f"gen.py only merges options into {eid}, not {sorted(set(e) - {'id', 'options'})}")
                     y["entities"][str(eid)][1].setdefault("options", []).extend(e.get("options", []))
                     continue
+                for k in e:
+                    if (k.startswith("on_") or k.endswith("_action")) and k not in TRIGGERS[kind]:
+                        sys.exit(f"gen.py doesn't wire {kind} {eid}'s {k}")
                 y["entities"][eid] = (kind, e)
         y["images"] += doc.get("image", []) or []  # declared in extra.h, only their triggers are wired here
     return y
@@ -340,6 +368,9 @@ def emit(y):
         body = "\n".join(lambdas(s["then"]))
         out.append(f"void Script_{s['id']}::execute({params[s['id']]}) {{\n{body}\n}}")
     out.append("")
+    out.append("void yaml_time_sync() {")
+    out += [f"  []() {{\n{b}\n  }}();" for b in y["time_syncs"]]
+    out.append("}")
     out.append("void yaml_boot() {")
     for _, codes in sorted(y["boots"], key=lambda b: -b[0]):  # higher priority first, as ESPHome runs them
         for b in codes:
@@ -382,8 +413,9 @@ def emit(y):
                     out.append(f"  {eid}.add_on_state_callback([](bool x) {{ if ({on}) {{ {inline(e[a])} }} }});")
         if kind == "button" and "on_press" in e:
             out.append(f"  {eid}.on_press = []() {{ {inline(e['on_press'])} }};")
-        if kind in X_TYPE and "on_value" in e:
-            out.append(f"  {eid}.add_on_state_callback([]({X_TYPE[kind]} x) {{ {inline(e['on_value'])} }});")
+        trigger = "on_state" if kind == "binary_sensor" else "on_value"  # ESPHome's names
+        if kind in X_TYPE and trigger in e:
+            out.append(f"  {eid}.add_on_state_callback([]({X_TYPE[kind]} x) {{ {inline(e[trigger])} }});")
     for e in y["images"]:
         for t in ("on_download_finished", "on_error"):
             if t in e:

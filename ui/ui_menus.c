@@ -12,7 +12,7 @@ static void info_filter_left(char *b, size_t n) {
   if (!days)
     copy_text(b, n, _(S_CHANGE_NOW));
   else
-    sprint(b, n, _(S_DAYS_LEFT), days);
+    sprint(b, n, days == 1 ? _(S_DAY_LEFT) : _(S_DAYS_LEFT), days);
 }
 static void info_filter_hours(char *b, size_t n) { sprint(b, n, _(S_FILTER_HOURS), M.filter_hours); }
 static void info_picture(char *b, size_t n) {
@@ -175,7 +175,7 @@ static void grid_temp(char *b, size_t n) {
 static void grid_sched(char *b, size_t n) { copy_text(b, n, M.week_program ? _(S_PROGRAM_ON) : _(S_OFF)); }
 static void grid_alarms(char *b, size_t n) {
   if (M.n_alarms)
-    sprint(b, n, _(S_N_ACTIVE), M.n_alarms);
+    sprint(b, n, M.n_alarms == 1 ? _(S_ONE_ACTIVE) : _(S_N_ACTIVE), M.n_alarms);
   else
     copy_text(b, n, _(S_ALL_CLEAR));
 }

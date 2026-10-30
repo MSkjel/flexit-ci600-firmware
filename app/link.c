@@ -359,7 +359,7 @@ void link_init(void) {
 void link_poll(void) {
   if (!HAS(FEAT_ESP))
     return;
-  uint8_t p[PBULK_ANSWER_MAX > PBULK_MAX ? PBULK_ANSWER_MAX : PBULK_MAX];
+  uint8_t p[PBULK_PAYLOAD_MAX];
   int n;
   while ((n = pbulk_panel_take(&bulk, p)) > 0)
     pbulk_parse(p, n, got_msg, NULL);

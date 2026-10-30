@@ -11,7 +11,6 @@
 #include "met_case.h"
 #include "panel_side.h"
 #include "sim.h"
-#include "tjpgd/tjpgd.h"
 
 namespace panel = flexit::panel;
 namespace pic = flexit::panel::picture;
@@ -29,7 +28,15 @@ int log_level = 3;
 std::string log_all;
 static uint32_t now_us;
 static uint32_t micros_step;  // each micros() this much later, to see a loop give way after its slice
-uint32_t millis() { return now_us / 1000; }
+// millis() goes round at 2^32 ms as the ESP's does, not where now_us does, and 30 s into the run so the code meets it
+static uint64_t wrapped_us = (1ull << 32) * 1000 - 30000000;
+uint32_t millis() {
+  static uint32_t last;
+  if (now_us < last)
+    wrapped_us += 1ull << 32;
+  last = now_us;
+  return (uint32_t) ((wrapped_us + now_us) / 1000);
+}
 uint32_t micros() { return now_us += micros_step; }
 static uint32_t waited_us;
 void delayMicroseconds(uint32_t us) {
@@ -47,6 +54,8 @@ BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
 static void run_task() {
+  if (tasks.empty())
+    return;  // a CHECK before found it missing
   auto t = tasks.front();
   tasks.erase(tasks.begin());
   t.first(t.second);
@@ -776,6 +785,7 @@ static void boot() {
   panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
+  yaml_time_sync();  // Home Assistant's time, right after boot
   CHECK_MSG(pic::S.want == "dusk" && anim::find("ball"),
             "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
             anim::find("ball") != nullptr);
@@ -2156,11 +2166,18 @@ static void met_requests() {
   panel_weather_aurora.control(0);
   CHECK_MSG(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
             "met.yaml's options aren't met_scene.h's names");
-  met::unreachable();  // right after boot the network may not be up: try again at the next check
-  CHECK_MSG(met::backoff_s == 0 && met::due(), "backed off before MET Norway ever answered");
-  for (int i = 0; i < 3; i++)
+  met::unreachable();  // right after boot the network may not be up: a quick retry of tick()'s, no back-off
+  CHECK_MSG(met::backoff_s == 0 && met::retry_soon && !met::due(), "backed off before MET Norway ever answered");
+  panel_http.down = true;
+  met::not_before = 0;
+  yaml_every(1000);
+  CHECK_MSG(met::fetching && !tasks.empty(), "the early retry didn't ask");
+  run_task();
+  yaml_every(1000);
+  CHECK_MSG(met::early_tries == 2 && met::retry_soon, "the retry's failure isn't counted as early");
+  for (int i = 0; i < 2; i++)
     met::unreachable();
-  CHECK_MSG(met::backoff_s == 600 && !met::due(), "kept trying without backing off");
+  CHECK_MSG(met::backoff_s == 600 && !met::due() && !met::retry_soon, "kept trying without backing off");
   // the request, in a task of its own: no answer, then the forecast in 512-byte reads, then without the RAM
   auto ask = [] {
     panel_weather_fetch.execute();  // met.yaml's, every update_interval
@@ -2168,7 +2185,6 @@ static void met_requests() {
       run_task();
     yaml_every(1000);  // and its poll()
   };
-  panel_http.down = true;
   met::not_before = 0;
   ask();
   CHECK_MSG(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
@@ -3182,53 +3198,12 @@ static void item_icon_typo() {
 }
 
 // ---------------------------------------------------------------- the panel's screen as a camera
-static uint32_t screen_rgb[PIC_MAX_W * PIC_MAX_H];
-
-struct JpegIn {
-  const std::vector<uint8_t> &b;
-  size_t at;
-};
-
-static size_t screen_in(JDEC *jd, uint8_t *b, size_t n) {
-  auto *in = (JpegIn *) jd->device;
-  n = std::min(n, in->b.size() - in->at);
-  if (b)
-    memcpy(b, in->b.data() + in->at, n);
-  in->at += n;
-  return n;
-}
-
-static int screen_out(JDEC *, void *bitmap, JRECT *r) {
-  auto *p = (const uint16_t *) bitmap;
-  for (unsigned y = r->top; y <= r->bottom; y++)
-    for (unsigned x = r->left; x <= r->right; x++)
-      screen_rgb[y * PIC_MAX_W + x] = sim_rgb888(*p++);
-  return 1;
-}
-
-// The camera's last image decoded into screen_rgb, and the mean error per colour channel of its worst tile against
-// what the panel shows. -1 if it isn't a whole JPEG. Text at quality 80 is 12 off, a tile that's out of date 30 or
-// more.
+// How far off what the panel shows the camera's last image is, see sim_jpeg_off()
 static double screen_off() {
-  static uint8_t work[4096];
   if (panel_screen.images.empty())
     return -1;
-  JpegIn in{panel_screen.images.back(), 0};
-  JDEC jd;
-  if (jd_prepare(&jd, screen_in, work, sizeof work, &in) != JDR_OK || jd.width != PIC_MAX_W || jd.height != PIC_MAX_H ||
-      jd_decomp(&jd, screen_out, 0) != JDR_OK)
-    return -1;
-  double worst = 0;
-  for (int t = 0; t < SHOT_TILES; t++) {
-    int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
-    unsigned sum = 0;
-    for (int y = y0; y < y0 + SHOT_TILE_H; y++)
-      for (int x = x0; x < x0 + SHOT_TILE_W; x++)
-        for (int c = 0; c < 24; c += 8)
-          sum += (unsigned) abs((int) (screen_rgb[y * PIC_MAX_W + x] >> c & 255) - (int) (sim_pixel(x, y) >> c & 255));
-    worst = std::max(worst, (double) sum / (SHOT_TILE_W * SHOT_TILE_H * 3));
-  }
-  return worst;
+  auto &j = panel_screen.images.back();
+  return sim_jpeg_off(j.data(), j.size());
 }
 
 // Cycles with the panel drawing as it does between them, until done() or max. The cycles it took, -1 if it didn't.
@@ -3240,6 +3215,11 @@ static int watch(const std::function<bool()> &done, int max) {
     pn_draw(PBUS_CYCLE_US / 1000);
   }
   return -1;
+}
+
+// n cycles with the panel drawing between them
+static void draw_cycles(int n) {
+  watch([] { return false; }, n);
 }
 
 static bool every_tile() {
@@ -3277,13 +3257,13 @@ static void screen_camera() {
   printf("  every tile after %d cycles = %.1f s more, %u bytes of tiles\n", c, c * (PBUS_CYCLE_US / 1e6),
          (unsigned) bytes);
   CHECK_MSG(c >= 0, "the tiles didn't all come in 1000 cycles");
-  watch([] { return false; }, 15);  // the stream's next image, done after the last tile
+  draw_cycles(15);  // the stream's next image, done after the last tile
   double off = screen_off();
   CHECK_MSG(off >= 0 && off < 20, "the camera's image isn't the screen, a tile off by %.1f", off);
-  sim_ppm((std::string(outdir) + "/esp_screen_camera.ppm").c_str(), PIC_MAX_W, PIC_MAX_H, screen_rgb);
+  sim_ppm((std::string(outdir) + "/esp_screen_camera.ppm").c_str(), PIC_MAX_W, PIC_MAX_H, sim_jpeg_rgb());
   cam.stream = false;
   // Nothing changed: the next look takes a few cycles
-  watch([] { return false; }, 10);
+  draw_cycles(10);
   c = one_image(30);
   CHECK_MSG(c >= 0 && c < 15 && screen_off() < 20, "an image of the unchanged screen took %d cycles", c);
   printf("  then of the same screen after %d cycles\n", c);
@@ -3296,7 +3276,7 @@ static void screen_camera() {
   CHECK_MSG(c >= 0, "no image of the screensaver");
   cam.stream = true;  // until the shot is done
   watch([] { return !panel::shot::S.asked; }, 600);
-  watch([] { return false; }, 15);
+  draw_cycles(15);
   cam.stream = false;
   off = screen_off();
   CHECK_MSG(off >= 0 && off < 20, "the screensaver's image is off by %.1f", off);
@@ -3305,13 +3285,13 @@ static void screen_camera() {
   restart_panel();
   CHECK_MSG(shot::S.all && !shot::S.asked, "after the panel's restart the next shot isn't of every tile");
   // Nobody looks for KEEP_MS: the tiles are let go, the next look starts over
-  watch([] { return false; }, (int) (shot::KEEP_MS * 1000 / PBUS_CYCLE_US) + 20);
+  draw_cycles((int) (shot::KEEP_MS * 1000 / PBUS_CYCLE_US) + 20);
   CHECK_MSG(shot::S.tiles.empty() && shot::S.tiles.capacity() == 0, "the tiles are kept after a minute without a look");
   // Without the RAM for the tiles it doesn't ask
   size_t free = ram_free;
   ram_free = 16 * 1024;
   cam.single = true;
-  watch([] { return false; }, 30);
+  draw_cycles(30);
   CHECK_MSG(!shot::S.asked && shot::S.tiles.empty(), "a screenshot without the RAM for it");
   ram_free = free;
   c = watch([] { return !panel_screen.single; }, partial);

@@ -19,6 +19,10 @@ void sim_draw(lv_obj_t *o, const lv_area_t *a, lv_color_t bg, lv_color_t *buf); 
 // 0xRRGGBB as the panel draws it, and back with the low bits filled from the high ones
 uint16_t sim_rgb565(uint32_t rgb);
 uint32_t sim_rgb888(uint16_t c);
+// A JPEG of the screen decoded, and the mean error per colour channel against what the screen shows, of the tile
+// that's furthest off. -1 if it isn't a whole 320x240 JPEG. Text at quality 80 is 12 off, a stale tile 30 or more.
+double sim_jpeg_off(const uint8_t *jpeg, size_t n);
+const uint32_t *sim_jpeg_rgb(void);  // the pixels it decoded, 0xRRGGBB
 // The ESP's picture and animation messages as plink_keys.h lays them out, into b. Each returns its length. pal is
 // 16 colours, NULL for none.
 int sim_pic_begin(uint8_t *b, uint8_t id, int format, int w, int h, uint32_t len, const uint32_t *pal);
@@ -78,6 +82,7 @@ bool sim_esp_seen(void);
 void sim_esp_shot(int quality, bool all);  // a K_SHOT
 // Tiles in the SHOT_DONE since, -1 for none yet. bytes of its PIC_DATA so far, bad heads or what isn't zeros after.
 int sim_esp_shot_done(unsigned long *bytes, unsigned long *bad);
+extern int sim_esp_late;  // answers that ended after the CX60's quiet time, a sim run fails on any
 // The JPEG of the tiles so far, 0 if one is missing or it doesn't fit cap
 unsigned sim_esp_shot_jpeg(uint8_t *out, unsigned cap, int quality);
 extern unsigned long sim_cycles;

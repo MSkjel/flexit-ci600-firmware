@@ -57,10 +57,13 @@ static lv_area_t area_of(int t) {
   return (lv_area_t) {x, y, (lv_coord_t) (x + SHOT_TILE_W - 1), (lv_coord_t) (y + SHOT_TILE_H - 1)};
 }
 
+// The tiles still in buf go back to dirty. Those the link took but the ESP hasn't acked don't: a HELLO makes it
+// ask for them all and drop what came before.
 void shot_reset(void) {
-  for (int i = 0; i < 2 && S.at < S.len; i++)
-    if (S.last[i])
-      add(S.dirty, S.last[i] - 1);  // they didn't all get there
+  if (S.at < S.len)
+    for (int i = 0; i < 2; i++)
+      if (S.last[i])
+        add(S.dirty, S.last[i] - 1);
   memset(S.todo, 0, sizeof S.todo);
   memset(S.last, 0, sizeof S.last);
   S.quality = S.want = 0;

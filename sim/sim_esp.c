@@ -65,7 +65,7 @@ static void esp_got(void *u, uint16_t key, const uint8_t *b, int n) {
   if (key == K_HELLO && (v & HELLO_ASK))
     send_number(K_HELLO, (uint32_t) PLINK_VERSION << 16);
   if (key == K_ITEM_HELP && v < (uint32_t) SIM_N_ITEMS) {  // reply with the item's help text, which may be empty
-    uint8_t h[1 + PLINK_HELP_MAX] = {(uint8_t) v};
+    uint8_t h[2 + PLINK_HELP_MAX] = {(uint8_t) v};
     sim_text((char *) h + 1, PLINK_HELP_MAX + 1, SIM_ITEMS[v].help);
     send(K_ITEM_HELP, h, 1 + (int) strlen((char *) h + 1));
   }
@@ -83,8 +83,13 @@ static void cx60_cycle(void) {
   if (n) {
     uint32_t idle = end + 1500 + (uint32_t) (n + 1) * PBUS_BYTE_US;
     int an = link_bulk_frame(f, n, idle, idle / 1000, a);
-    if (an)
+    if (an) {
       pbulk_esp_answer(&FL, a, an, esp_got, NULL);
+      // off the bus by the CX60's quiet time, as the panel promises with PBUS_PANEL_US from its idle interrupt
+      if (idle + PBUS_PANEL_US + (uint32_t) an * PBUS_BYTE_US > end + PBUS_END_MAX_US && !sim_esp_late++)
+        printf("the panel's %d-byte answer to a %d-byte frame ending at +%u us ends after the CX60's quiet time\n", an,
+               n, (unsigned) (idle - end));
+    }
   }
   link_bus(POLL, 8, end + 14000, end + 14000 + 9 * PBUS_BYTE_US, (end + 14000) / 1000);
   now_us += PBUS_CYCLE_US;
@@ -92,6 +97,7 @@ static void cx60_cycle(void) {
 }
 
 // ---------------------------------------------------------------- sending pictures, as the ESP does
+int sim_esp_late;
 static uint8_t comp[PIC_POOL + 1024], wire[PIC_POOL + 2048];  // the bytes, and how they go in DATA
 static unsigned comp_len, comp_pos, wire_len;
 static bool pic_sending, place_after;  // place_after: an animation, place it at place_x, place_y after END
@@ -100,8 +106,13 @@ static uint8_t pic_id;
 
 static unsigned pack_rows(const uint8_t rows[][TP_W / 2], int y, int count) {
   unsigned n = 0;
-  for (int r = y; r < y + count; r++)
+  for (int r = y; r < y + count; r++) {
+    if (n + TP_W / 2 + TP_W / 256 + 1 > sizeof comp) {  // a row packs to that at most
+      fprintf(stderr, "the test picture doesn't pack into PIC_POOL, pick a simpler one\n");
+      exit(1);
+    }
     n += plink_pack_row(rows[r], TP_W / 2, comp + n);
+  }
   return n;
 }
 
