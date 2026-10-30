@@ -30,10 +30,15 @@ static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
   lv_disp_flush_ready(d);
 }
 
+// One 40-line draw buffer, or with SIM_LINES=8 in the environment two of 8 lines like the panel, whose strips the
+// rounders then see
 void sim_display_init(void) {
   lv_init();
   static lv_disp_draw_buf_t db;
-  lv_disp_draw_buf_init(&db, draw_buf, NULL, W * 40);
+  if (getenv("SIM_LINES") && atoi(getenv("SIM_LINES")) == 8)
+    lv_disp_draw_buf_init(&db, draw_buf, draw_buf + W * 8, W * 8);
+  else
+    lv_disp_draw_buf_init(&db, draw_buf, NULL, W * 40);
   static lv_disp_drv_t drv;
   lv_disp_drv_init(&drv);
   drv.hor_res = W;
