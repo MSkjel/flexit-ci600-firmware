@@ -42,6 +42,8 @@ extern std::string log_all;  // everything logged, for checks
 uint32_t millis();
 inline size_t ram_free = 200 * 1024, ram_block = 100 * 1024;  // the fake heap, set by the tests
 template<typename T> struct RAMAllocator {  // picture.h checks free RAM before downloading or making a picture
+  enum { ALLOC_EXTERNAL = 1, ALLOC_INTERNAL = 2 };
+  RAMAllocator(uint8_t = 0) {}
   size_t get_free_heap_size() const { return ram_free; }
   size_t get_max_free_block_size() const { return ram_block; }
   T *allocate(size_t n) { return n * sizeof(T) > ram_block ? nullptr : (T *) malloc(n * sizeof(T)); }
@@ -166,11 +168,16 @@ struct Number {
       v = x;
       return *this;
     }
-    void perform() { n->control(v); }
+    void perform() {  // ESPHome refuses a value outside the traits, it doesn't clamp
+      if (v < n->traits.min || v > n->traits.max) {
+        ESP_LOGW("number", "Value %f is outside %f..%f", v, n->traits.min, n->traits.max);
+        return;
+      }
+      n->control(v);
+    }
   };
   Call make_call() { return Call{this}; }
   void control(float v) {
-    v = std::max(traits.min, std::min(traits.max, v));
     if (set_action)
       set_action(v);
     if (optimistic)
@@ -236,6 +243,8 @@ struct BinarySensor {
   Callbacks<bool> cb;
   bool has_state() const { return has; }
   void publish_state(bool v) {
+    if (has && v == state)
+      return;  // ESPHome's callbacks only see a change
     state = v;
     has = true;
     cb.call(v);
@@ -358,7 +367,7 @@ struct HttpContainer {
   size_t cut = SIZE_MAX;  // the connection drops after this much of the body, and read() gives cut_with
   int cut_with = 0;
   std::string get_response_header(const std::string &h) const {
-    return h == "last-modified" ? last_modified : h == "expires" ? expires : type;
+    return h == "last-modified" ? last_modified : h == "expires" ? expires : h == "content-type" ? type : "";
   }
   int read(uint8_t *buf, size_t n) {  // 512 at a time, like a real one
     if (at >= cut)

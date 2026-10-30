@@ -82,6 +82,7 @@ bool sim_esp_seen(void);
 void sim_esp_shot(int quality, bool all);  // a K_SHOT
 // Tiles in the SHOT_DONE since, -1 for none yet. bytes of its PIC_DATA so far, bad heads or what isn't zeros after.
 int sim_esp_shot_done(unsigned long *bytes, unsigned long *bad);
+extern int sim_esp_late;  // answers that ended after the CX60's quiet time, a sim run fails on any
 // The JPEG of the tiles so far, 0 if one is missing or it doesn't fit cap
 unsigned sim_esp_shot_jpeg(uint8_t *out, unsigned cap, int quality);
 extern unsigned long sim_cycles;

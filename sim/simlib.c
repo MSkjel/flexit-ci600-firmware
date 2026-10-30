@@ -227,12 +227,13 @@ double sim_jpeg_off(const uint8_t *jpeg, size_t n) {
       jd_decomp(&jd, jpeg_out, 0) != JDR_OK)
     return -1;
   double worst = 0;
+  lv_refr_now(NULL);  // then fb[] is the screen
   for (int t = 0; t < SHOT_TILES; t++) {
     int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
     unsigned sum = 0;
     for (int y = y0; y < y0 + SHOT_TILE_H; y++)
       for (int x = x0; x < x0 + SHOT_TILE_W; x++) {
-        uint32_t a = jpeg_rgb[y * W + x], b = sim_pixel(x, y);
+        uint32_t a = jpeg_rgb[y * W + x], b = sim_rgb888(fb[y * W + x].full);
         for (int c = 0; c < 24; c += 8)
           sum += (unsigned) abs((int) (a >> c & 255) - (int) (b >> c & 255));
       }

@@ -588,7 +588,7 @@ static void feed_picture(void) {  // queue pictures for the link, as packages/pa
     bool ok;
     uint8_t v[58] = {0};
     if (pic_pos == -1) {
-      memcpy(v + 6, &pic_no, 4);  // in this test the header carries the picture number
+      plink_put32(v + 6, pic_no);  // in this test the header carries the picture number
       ok = pbulk_esp_send(&ETX, K_PIC_BEGIN, v, sizeof v, false);
     } else if (pic_pos >= PIC_LEN) {
       ok = pbulk_esp_send(&ETX, K_PIC_END, v, 4, false);

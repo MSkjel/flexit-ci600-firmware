@@ -52,9 +52,11 @@ static void tap(int k) {
   uint8_t bit = (uint8_t) (1u << in);
   int hold = k == KEY_HOME ? 1000 : k == KEY_OK_LONG ? 2200 : 0;
   input_keys(bit, 0, bit, now);
-  for (int t = 0; t < hold; t += 5) {
+  for (int t = 0; t < hold; t += 5) {  // the display runs on while a key is held
     now += 5;
     input_keys(0, 0, bit, now);
+    input_tick(now);
+    sim_run(5);
   }
   input_keys(0, bit, 0, now);
 }
@@ -1706,6 +1708,10 @@ int main(int argc, char **argv) {
   keytest();
   check_trial();
   screenshots();
+  if (sim_esp_late) {
+    printf("%d answers to the ESP ended after the CX60's quiet time\n", sim_esp_late);
+    failed++;
+  }
   if (failed)
     printf("%d failed: screens that left LVGL's heap too little, steps that went somewhere else, or checks\n", failed);
   return failed != 0;

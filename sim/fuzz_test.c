@@ -536,6 +536,7 @@ static const check_test_t TESTS[] = {
 };
 
 int main(int argc, char **argv) {
+  printf("fuzz_test from seed %s\n", getenv("FUZZ_SEED") ? getenv("FUZZ_SEED") : "1");
   sim_display_init();
   anim_init();
   return check_main("fuzz_test", (const check_test_t *const[]) {TESTS, NULL}, argc, argv);

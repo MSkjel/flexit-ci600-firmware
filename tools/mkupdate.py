@@ -154,7 +154,7 @@ def parse(stream):
         i += n
     if i != len(stream):
         raise ValueError("%d bytes after field 3" % (len(stream) - i))
-    return fields.get(1), fields.get(2), fields[3]
+    return fields.get(1, b""), fields.get(2, b""), fields[3]  # a stream not from here may lack 1 and 2
 
 
 def read_varint(buf, i):

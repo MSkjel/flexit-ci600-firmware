@@ -28,7 +28,15 @@ int log_level = 3;
 std::string log_all;
 static uint32_t now_us;
 static uint32_t micros_step;  // each micros() this much later, to see a loop give way after its slice
-uint32_t millis() { return now_us / 1000; }
+// millis() goes round at 2^32 ms as the ESP's does, not where now_us does, and 30 s into the run so the code meets it
+static uint64_t wrapped_us = (1ull << 32) * 1000 - 30000000;
+uint32_t millis() {
+  static uint32_t last;
+  if (now_us < last)
+    wrapped_us += 1ull << 32;
+  last = now_us;
+  return (uint32_t) ((wrapped_us + now_us) / 1000);
+}
 uint32_t micros() { return now_us += micros_step; }
 static uint32_t waited_us;
 void delayMicroseconds(uint32_t us) {
@@ -46,6 +54,8 @@ BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
 static void run_task() {
+  if (tasks.empty())
+    return;  // a CHECK before found it missing
   auto t = tasks.front();
   tasks.erase(tasks.begin());
   t.first(t.second);
@@ -775,6 +785,7 @@ static void boot() {
   panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
+  yaml_time_sync();  // Home Assistant's time, right after boot
   CHECK_MSG(pic::S.want == "dusk" && anim::find("ball"),
             "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
             anim::find("ball") != nullptr);

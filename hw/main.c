@@ -22,6 +22,7 @@ model_t M;
 // Two draw buffers, LVGL renders into one while DMA sends the other.
 #define LV_LINES 8
 _Static_assert(SCR_W *LV_LINES <= 0xFFFF, "a strip goes out in one DMA transfer");
+_Static_assert(LV_LINES >= 8 && LV_LINES % 8 == 0, "pic_round and shot_round want whole 8-line strips");
 static lv_color_t draw_buf[2][SCR_W * LV_LINES];
 static lv_disp_drv_t drv;
 

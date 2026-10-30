@@ -94,6 +94,7 @@ SCREENS := shots/*.ppm shots_no/*.ppm shots*/checks/*.ppm esp/*.ppm replay/*.ppm
 # hashed and sorted by name in C order, since wildcards sort by the locale and CI has another one
 HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 
+# FUZZ_SEED=n starts fuzz_test from another seed, CI passes its run number
 # bulk_test SECONDS CONTROL_TICK_MS SEED ESP_RX_THRESHOLD PANEL_2 [REFUSED] [WHAT], four runs: the defaults; a slow
 # CX60, the ESP's bytes late in big chunks and a second panel on the bus; a CX60 in between with another seed; and
 # a screenshot's stream from the panel while pictures go to it
@@ -112,9 +113,14 @@ check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	$(BUILD)/sim $(OUT)/shots
 	SIM_LANG=1 $(BUILD)/sim $(OUT)/shots_no
 	SIM_LINES=8 $(BUILD)/sim $(OUT)/strips
+	@cd $(OUT)/shots && sha256sum *.ppm checks/*.ppm > ../strips_40.txt
+	@cd $(OUT)/strips && sha256sum *.ppm checks/*.ppm | cmp -s - ../strips_40.txt \
+	  || { echo "the 8-line strips draw differently from the 40-line ones"; exit 1; }
 	$(BUILD)/lang_test
 	@cd $(OUT) && $(HASH_SCREENS) > screens.txt
 	@diff $(CURDIR)/golden.txt $(OUT)/screens.txt | sed -n 's/^> [0-9a-f]*  /changed: /p'
+	@awk '{print $$2}' $(CURDIR)/golden.txt | sort > $(OUT)/golden_names.txt
+	@awk '{print $$2}' $(OUT)/screens.txt | sort | comm -23 $(OUT)/golden_names.txt - | sed 's/^/gone: /'
 	@cmp -s $(CURDIR)/golden.txt $(OUT)/screens.txt \
 	  || { echo "screens changed: make changed shows them, make golden takes them"; exit 1; }
 	@echo "all tests passed"
@@ -172,6 +178,7 @@ gallery: met
 	python3 gallery.py $(OUT) $(OUT)/gallery
 
 met: $(BUILD)/met_render
+	rm -rf $(OUT)/met
 	$(BUILD)/met_render $(OUT)/met esp_yaml/met_sample.json
 	python3 shots.py --scale 1 --cols 6 $(OUT)/met
 

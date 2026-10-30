@@ -59,6 +59,10 @@ static lv_obj_t *alert_card(lv_obj_t *b, int y, int w, int h, lv_color_t c, int 
 // ---------------------------------------------------------------- alarm pop-up (arg = alarm code)
 static void popup_build(lv_obj_t *b, intptr_t arg) {
   const alarm_t *a = alarm_find(arg);
+  if (!a) {  // gone since, ui_alarms_changed() is about to take the pop-up down
+    ui_close_after(0);
+    return;
+  }
   bool filter = a->code == ALARM_FILTER;
   lv_color_t c = alarm_color(a->code);
   lv_obj_t *card = alert_card(b, 10, POPUP_W, 176, c, 52, &icons_32, filter ? IC_FILTER : IC_ALERT,

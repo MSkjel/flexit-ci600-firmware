@@ -135,6 +135,7 @@ static void test_link(void) {
   // Before the ESP flashes us it asks for our settings: the format, each saved value, then how many
   memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
   M.theme = 2;
+  M.brightness = 77;
   plat_save_now();
   int saved_n = 0, theme_at = -1;
   for (val_t s = val_next(V_NONE, VF_SAVED, 0); s != V_COUNT; s = val_next(s, VF_SAVED, 0))
@@ -170,18 +171,20 @@ static void test_link(void) {
   settings_load();
   CHECK_EQ(M.theme, 2);  // saved before the restart
   CHECK(!plat_fresh());
-  // none from another format, nor with one missing
+  // none from another format. With one missing they're applied as they come, but not saved, and no restart
   memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
   settings_load();
   M.theme = 0;
   snap[0]++;
   for (int i = 0; i < k; i++)
     number_from_esp(K_SETTINGS, snap[i], false);
+  CHECK_EQ(M.theme, 0);
   snap[0]--;
   for (int i = 0; i < k; i++)
     if (i != theme_at)
       number_from_esp(K_SETTINGS, snap[i], false);
   CHECK_EQ(M.theme, 0);
+  CHECK_EQ(M.brightness, 77);
   CHECK_EQ(stub_resets, resets + 1);
   plat_save_now();
   settings_load();  // with settings again, for what follows

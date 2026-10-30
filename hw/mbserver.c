@@ -185,12 +185,15 @@ static int frame_len(const uint8_t *q, int n) {
     c[k++] = 5;
   if (fc <= FC_WRITE_REG || fc == FC_RELAY)
     c[k++] = 8;
-  if (fc >= FC_READ_COILS && fc <= FC_READ_INPUT)
+  if (fc >= FC_READ_COILS && fc <= FC_READ_INPUT && q[2] <= MB_MAX_FRAME - 5)  // a reply's data, 250 at most
     c[k++] = 5 + q[2];
   if ((fc == FC_WRITE_COILS || fc == FC_WRITE_REGS) && n >= 7) {
-    c[k++] = 9 + q[6];
+    if (q[6] <= MB_MAX_FRAME - 9)
+      c[k++] = 9 + q[6];
     c[k++] = 8;
   }
+  if (fc == FC_BOOTLOADER)
+    c[k++] = 6;
   for (int i = 0; i < k; i++)
     if (c[i] <= n && pbus_crc_ok(q, c[i]))
       return c[i];

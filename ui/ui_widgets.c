@@ -137,7 +137,9 @@ const char *fmt_dec(char *buf, size_t n, int32_t v, uint8_t dec) {
     sprint(buf, n, "%ld", (long) v);
     return buf;
   }
-  uint32_t a = v < 0 ? 0u - (uint32_t) v : (uint32_t) v, div = DIV[dec > 3 ? 3 : dec];
+  if (dec > 3)
+    dec = 3;
+  uint32_t a = v < 0 ? 0u - (uint32_t) v : (uint32_t) v, div = DIV[dec];
   sprint(buf, n, "%s%lu.%0*lu", v < 0 ? "-" : "", (unsigned long) (a / div), dec, (unsigned long) (a % div));
   return buf;
 }

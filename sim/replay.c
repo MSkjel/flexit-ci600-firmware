@@ -19,11 +19,13 @@ extern uint32_t stub_ms, stub_rtc;  // board_stub.c
 void plat_value_changed(val_t v) { unit_value_changed(v); }
 void plat_action(int a) { unit_action(a); }
 
-static int unhex(const char *h, uint8_t *b) {
+// -1 for a line that isn't hex or doesn't fit
+static int unhex(const char *h, uint8_t *b, int cap) {
   int n = 0;
   while (h[0] && h[1] && h[0] != '\n') {
     unsigned v;
-    sscanf(h, "%2x", &v);
+    if (n == cap || sscanf(h, "%2x", &v) != 1)
+      return -1;
     b[n++] = (uint8_t) v;
     h += 2;
   }
@@ -70,7 +72,11 @@ int main(int argc, char **argv) {
         extra++;
         ours_n = 0;
       }  // we replied where the ESP didn't
-      int n = unhex(hex, q);
+      int n = unhex(hex, q, sizeof q);
+      if (n < 0) {
+        fprintf(stderr, "bad line: %s", line);
+        return 1;
+      }
       frames++;
       if (glued) {
         if (chunk_n + n <= (int) sizeof chunk) {
@@ -85,7 +91,11 @@ int main(int argc, char **argv) {
         ours_n = mb_chunk(chunk, chunk_n, ours);
         chunk_n = 0;
       }
-      int n = unhex(hex, theirs);
+      int n = unhex(hex, theirs, sizeof theirs);
+      if (n < 0) {
+        fprintf(stderr, "bad line: %s", line);
+        return 1;
+      }
       if (!ours_n)
         missing++;
       else if (ours_n == n && !memcmp(ours, theirs, n))

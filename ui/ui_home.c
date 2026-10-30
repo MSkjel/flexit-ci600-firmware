@@ -171,9 +171,9 @@ static void tile_update(int i) {
   if (tile_item(src) && tile_item(src)->type == ITEM_TEXT)
     label_fit(dash->tile_val[i], v, DASH_TILE_W - 16);
   else
-    lv_label_set_text(dash->tile_val[i], v);
+    set_text(dash->tile_val[i], "%s", v);
   if (src >= TILE_ITEM)  // the ESP can rename items, a weather item's label is the current condition
-    lv_label_set_text(dash->tile_cap[i], tile_name(src) ? tile_name(src) : NO_VALUE);
+    set_text(dash->tile_cap[i], "%s", tile_name(src) ? tile_name(src) : NO_VALUE);
   lv_obj_set_style_bg_color(dash->tile_stripe[i], c, 0);
   if (dash->tile_bar[i]) {
     lv_obj_set_style_bg_color(dash->tile_bar[i], c, LV_PART_INDICATOR);
@@ -237,24 +237,24 @@ static void dash_update(void) {
   else if (!M.heater_enabled)
     show_state(T.faint, _(S_HEATER_OFF));
   else
-    lv_label_set_text(dash->state, "");
+    set_text(dash->state, "%s", "");
 
   lv_color_t mc = mode_color();
   lv_arc_set_value(dash->ring, M.boost_left ? MODE_MAX : M.mode_now);
   lv_obj_set_style_arc_color(dash->ring, mc, LV_PART_INDICATOR);
   lv_obj_set_style_text_color(dash->ring_icon, mc, 0);
-  lv_label_set_text(dash->ring_icon, M.mode_now == MODE_STOP && !M.boost_left ? IC_FAN_OFF : IC_FAN);
+  set_text(dash->ring_icon, "%s", M.mode_now == MODE_STOP && !M.boost_left ? IC_FAN_OFF : IC_FAN);
   if (M.boost_left) {
-    lv_label_set_text(dash->ring_mode, _(S_BOOST_CAPS));
+    set_text(dash->ring_mode, "%s", _(S_BOOST_CAPS));
     set_text(dash->ring_sub, _(S_MIN_LEFT), M.boost_left);
-    lv_label_set_text(dash->ring_next, "");
+    set_text(dash->ring_next, "%s", "");
   } else {
-    lv_label_set_text(dash->ring_mode, tr(MODE_CAPS[M.mode_now % MODE_COUNT]));
+    set_text(dash->ring_mode, "%s", tr(MODE_CAPS[M.mode_now % MODE_COUNT]));
     if (M.fan_ext && M.fan_ext != M.fan_sup)
       set_text(dash->ring_sub, _(S_FANS_IN_OUT), M.fan_sup, M.fan_ext);
     else
-      lv_label_set_text(dash->ring_sub, fmt_pct(a, sizeof a, M.fan_sup));
-    lv_label_set_text(dash->ring_next, next_change(s, sizeof s) ? s : "");
+      set_text(dash->ring_sub, "%s", fmt_pct(a, sizeof a, M.fan_sup));
+    set_text(dash->ring_next, "%s", next_change(s, sizeof s) ? s : "");
   }
   lv_obj_align_to(dash->ring_mode, dash->ring, LV_ALIGN_CENTER, 0, 7);  // less room inside the ring further down
   lv_obj_align_to(dash->ring_sub, dash->ring, LV_ALIGN_CENTER, 0, 25);
