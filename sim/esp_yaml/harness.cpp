@@ -2166,11 +2166,18 @@ static void met_requests() {
   panel_weather_aurora.control(0);
   CHECK_MSG(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
             "met.yaml's options aren't met_scene.h's names");
-  met::unreachable();  // right after boot the network may not be up: try again at the next check
-  CHECK_MSG(met::backoff_s == 0 && met::due(), "backed off before MET Norway ever answered");
-  for (int i = 0; i < 3; i++)
+  met::unreachable();  // right after boot the network may not be up: a quick retry of tick()'s, no back-off
+  CHECK_MSG(met::backoff_s == 0 && met::retry_soon && !met::due(), "backed off before MET Norway ever answered");
+  panel_http.down = true;
+  met::not_before = 0;
+  yaml_every(1000);
+  CHECK_MSG(met::fetching && !tasks.empty(), "the early retry didn't ask");
+  run_task();
+  yaml_every(1000);
+  CHECK_MSG(met::early_tries == 2 && met::retry_soon, "the retry's failure isn't counted as early");
+  for (int i = 0; i < 2; i++)
     met::unreachable();
-  CHECK_MSG(met::backoff_s == 600 && !met::due(), "kept trying without backing off");
+  CHECK_MSG(met::backoff_s == 600 && !met::due() && !met::retry_soon, "kept trying without backing off");
   // the request, in a task of its own: no answer, then the forecast in 512-byte reads, then without the RAM
   auto ask = [] {
     panel_weather_fetch.execute();  // met.yaml's, every update_interval
@@ -2178,7 +2185,6 @@ static void met_requests() {
       run_task();
     yaml_every(1000);  // and its poll()
   };
-  panel_http.down = true;
   met::not_before = 0;
   ask();
   CHECK_MSG(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
