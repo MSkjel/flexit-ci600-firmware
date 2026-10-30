@@ -15,7 +15,9 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
-  ESP_REF: main  # the esphome-flexit-modbus-server branch the link is tested against
+  # The esphome-flexit-modbus-server branch the link is tested against: dev with dev, since the proto files are synced
+  # there first, main for everything else, tags and pull requests included
+  ESP_REF: ${{ github.ref_name == 'dev' && 'dev' || 'main' }}
 
 # The apt packages and ccache's objects come from the cache, LVGL comes without its history. The timeouts stop a
 # stalled package mirror early.
