@@ -6,7 +6,6 @@
 #include "pbus.h"
 #include "plink.h"
 #include "sim.h"
-#include "tjpgd/tjpgd.h"
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -794,7 +793,7 @@ static void saver_text(void) {
   M.saver_text = 0;
   M.screensaver = SAVER_CLOCK_TEMPS;
   saver_shot("87d_saver_lines_black");
-  M.screensaver = 5;
+  M.screensaver = SAVER_PIC_ALL;
   sim_esp_saver_line(1, 16, "Humidity in the bathroom 45 %");
   sim_esp_saver_line(3, 28, "Left out");
   settle();
@@ -1548,57 +1547,14 @@ static void perf(void) {
 
 // ---------------------------------------------------------------- screenshots, see app/shot.c
 #define SHOT_Q 80
-#define SHOT_OFF 20  // the most a tile may be off, see shot_error(). Text at SHOT_Q is 12, a stale one 30 or more
+#define SHOT_OFF 20  // the most a tile may be off, see sim_jpeg_off()
 static int shot_q = SHOT_Q;
 static uint8_t shot_jpeg[64 * 1024];
-static uint32_t shot_rgb[PIC_MAX_W * PIC_MAX_H];
 
-typedef struct {
-  const uint8_t *b;
-  size_t n, at;
-} jpeg_src_t;
-
-static size_t shot_in(JDEC *jd, uint8_t *b, size_t n) {
-  jpeg_src_t *s = jd->device;
-  if (n > s->n - s->at)
-    n = s->n - s->at;
-  if (b)
-    memcpy(b, s->b + s->at, n);
-  s->at += n;
-  return n;
-}
-
-static int shot_out(JDEC *jd, void *bitmap, JRECT *r) {
-  (void) jd;
-  const uint16_t *p = bitmap;
-  for (unsigned y = r->top; y <= r->bottom; y++)
-    for (unsigned x = r->left; x <= r->right; x++)
-      shot_rgb[y * PIC_MAX_W + x] = sim_rgb888(*p++);
-  return 1;
-}
-
-// The ESP's JPEG of the tiles decoded into shot_rgb, and the mean error per colour channel against the screen of its
-// worst tile. -1 if it isn't a whole JPEG.
+// The ESP's JPEG of the tiles, its length in *len, and how far off the screen its worst tile is
 static double shot_error(unsigned *len) {
-  static uint8_t work[4096];
   *len = sim_esp_shot_jpeg(shot_jpeg, sizeof shot_jpeg, shot_q);
-  JDEC jd;
-  jpeg_src_t src = {shot_jpeg, *len, 0};
-  if (!*len || jd_prepare(&jd, shot_in, work, sizeof work, &src) != JDR_OK || jd_decomp(&jd, shot_out, 0) != JDR_OK)
-    return -1;
-  double worst = 0;
-  for (int t = 0; t < SHOT_TILES; t++) {
-    int x0 = t % SHOT_COLS * SHOT_TILE_W, y0 = t / SHOT_COLS * SHOT_TILE_H;
-    unsigned sum = 0;
-    for (int y = y0; y < y0 + SHOT_TILE_H; y++)
-      for (int x = x0; x < x0 + SHOT_TILE_W; x++) {
-        uint32_t a = shot_rgb[y * PIC_MAX_W + x], b = sim_pixel(x, y);
-        for (int c = 0; c < 24; c += 8)
-          sum += (unsigned) abs((int) (a >> c & 255) - (int) (b >> c & 255));
-      }
-    worst = LV_MAX(worst, (double) sum / (SHOT_TILE_W * SHOT_TILE_H * 3));
-  }
-  return worst;
+  return sim_jpeg_off(shot_jpeg, *len);
 }
 
 // One cycle of the link and the panel's loop meanwhile
@@ -1627,7 +1583,7 @@ static int take_shot(const char *what, bool all, int max, double *err) {
 static void shot_save(const char *name) {
   char path[512];
   snprintf(path, sizeof path, "%s/%s.ppm", outdir, name);
-  sim_ppm(path, PIC_MAX_W, PIC_MAX_H, shot_rgb);
+  sim_ppm(path, PIC_MAX_W, PIC_MAX_H, sim_jpeg_rgb());
 }
 
 // Screenshots for the ESP: the JPEG it puts together from the tiles is the screen, an update only sends what was

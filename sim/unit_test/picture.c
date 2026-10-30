@@ -391,8 +391,10 @@ static void test_jpeg(void) {
   lv_area_t probe = {0, 0, 0, 36}, low = {0, 0, 0, 4};
   pic_round(NULL, &over);
   pic_round(NULL, &beside);
+  lv_disp_get_default()->rendering_in_progress = 1;  // the probes come while LVGL draws
   pic_round(NULL, &probe);
   pic_round(NULL, &low);
+  lv_disp_get_default()->rendering_in_progress = 0;
   CHECK_EQ(over.y1, o->coords.y1);
   CHECK_EQ(over.y2, o->coords.y1 + 15);
   CHECK_EQ(over.x1, o->coords.x1 + 3);
