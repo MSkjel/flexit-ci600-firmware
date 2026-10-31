@@ -1676,8 +1676,8 @@ static void anim_one_round() {
 // half size right away.
 static void anim_two() {
   step("two animations");
-  anim::add("big", {128, 100, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {
-                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + f) % 3) * 0x405060u;
+  anim::add("big", {200, 120, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {  // a corner moves
+                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + (x < 16 && y < 16 ? f : 0)) % 3) * 0x405060u;
                     }});
   size_t big_at = log_all.size();
   anim::place("big", 0, 16, 16, false, 0);
@@ -1746,7 +1746,7 @@ static void anim_not_fitting() {
   CHECK_MSG(ar >= 0 && anim::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
             "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, l.x, l.y);
   // the panel draws 2x at most, so scale 2 can't go to half size
-  anim::add("noise2", {64, 64, 4, 100, 16, 16, 2, noise_px});
+  anim::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
   anim::clear("edge");
   anim::show("noise2");
   ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
@@ -1788,7 +1788,8 @@ static void anim_cleared_while_made() {
       "clearing kept the buffers");
 }
 
-// No room next to the others: ball and three big ones, the last one has to go at half size and is refused
+// No room next to the others: ball and three big ones at half size, the third is refused. Then two more refused the
+// same way fill the slots, and one past that doesn't get one
 static void anim_no_room() {
   step("no room for another animation");
   anim::show("ball");
@@ -1807,11 +1808,18 @@ static void anim_no_room() {
   CHECK_MSG(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
             (unsigned) anim::used_by_others(nullptr));
-  anim::add("big4", anim::sources["big"]);
-  anim::place("big4", 0, 16, 16, false, 0);  // no fifth slot
+  for (const char *name : {"big4", "big5"}) {  // refused like big3, but each takes a slot
+    anim::add(name, anim::sources["big"]);
+    anim::place(name, 0, 16, 16, false, 0);
+    ar = run_until([name] { return anim::find(name) && anim::find(name)->state != anim::WANT && settled(); }, 9000);
+    CHECK_MSG(ar >= 0 && anim::find(name)->state == anim::FAILED, "%s: '%s'", name,
+              panel_animation_status.state.c_str());
+  }
+  anim::add("big6", anim::sources["big"]);
+  anim::place("big6", 0, 16, 16, false, 0);  // no seventh slot
   run(1);
-  CHECK_MSG(!anim::find("big4") && logged("No room for animation big4: the panel holds 4 at a time"),
-            "a fifth animation: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(!anim::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
+            "a seventh animation: '%s'", panel_animation_status.state.c_str());
   anim::clear("");
   run(3);
 }
@@ -2062,26 +2070,26 @@ static void anim_without_ram() {
 // again elsewhere has its own frame back first.
 static void anim_past_pool() {
   step("animation copies past the panel's pool");
-  anim::show("ball");  // 1825 bytes, and 1152 for each frame of its own
-  for (int i = 1; i <= 4; i++)
-    anim::place("ball", i, 50 * i, 150, true, 0);
+  anim::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
+  for (int i = 1; i <= 6; i++)
+    anim::place("ball", i, 40 * i, 150, true, 0);
   run_until(anims_sent, 3000);
   anim::Anim *ball = anim::find("ball");
-  CHECK_MSG(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() &&
-                !look(4).shown,
-            "four copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
+  CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
+                !look(6).shown,
+            "six copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
             panel_animation_status.state.c_str(), pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
   size_t warned = log_all.size();
-  anim::place("ball", 4, 150, 150, true, 0);
+  anim::place("ball", 6, 150, 150, true, 0);
   anim::place("ball", 2, 100, 50, true, 0);
   run(3);
   Look l = look(ball->copies[2].place);
-  CHECK_MSG(!ball->copies[4].used && panel_animation_status.state == "Shown: ball (4 copies)" && same_pool() &&
+  CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
                 l.shown && l.x == 100 && l.y == 50 &&
-                logged("no room in the panel's 6144 bytes for a copy with a frame of its own", warned),
+                logged("no room in the panel's 8192 bytes for a copy with a frame of its own", warned),
             "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
   // all eight places taken: no slot for another
-  for (int i = 4; i < ANIM_PLACES; i++)
+  for (int i = 6; i < ANIM_PLACES; i++)
     anim::place("ball", i, 20 * i, 10, false, 0);
   warned = log_all.size();
   anim::show("noise");
