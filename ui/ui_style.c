@@ -6,8 +6,10 @@
 #include "ui_int.h"
 
 static lv_style_t text_st[N_COLOURS], bg_st[N_COLOURS];
-static const lv_font_t *const FONTS[] = {&font_f12, &font_f14, &font_f16,  &font_f20,  &font_f28, &font_n40,
-                                         &font_n64, &icons_16, &icons_22, &icons_32, &icons_48};
+static const lv_font_t *const FONTS[] = {
+    &font_f12, &font_f14, &font_f16, &font_f20, &font_f28, &font_n40,
+    &font_n64, &icons_16, &icons_22, &icons_32, &icons_48,
+};
 static lv_style_t font_st[LEN(FONTS)];
 static struct {
   uint8_t r;
@@ -118,10 +120,15 @@ void st_init(void) {
     lv_style_init(&radius_st[k].st);
     lv_style_set_radius(&radius_st[k].st, radius_st[k].r);
   }
-  lv_style_t *all[] = {&ST_OPAQUE,  &ST_CENTER,    &ST_RIGHT,     &ST_BORDER1,   &ST_BORDER2,
-                       &ST_PAD_HOR4, &ST_PAD_RIGHT8, &ST_ARC_ROUND, &ST_TEXT_OPA70};
-  for (unsigned k = 0; k < LEN(all); k++)
-    lv_style_init(all[k]);
+  lv_style_init(&ST_OPAQUE);
+  lv_style_init(&ST_CENTER);
+  lv_style_init(&ST_RIGHT);
+  lv_style_init(&ST_BORDER1);
+  lv_style_init(&ST_BORDER2);
+  lv_style_init(&ST_PAD_HOR4);
+  lv_style_init(&ST_PAD_RIGHT8);
+  lv_style_init(&ST_ARC_ROUND);
+  lv_style_init(&ST_TEXT_OPA70);
   lv_style_set_bg_opa(&ST_OPAQUE, LV_OPA_COVER);
   lv_style_set_text_align(&ST_CENTER, LV_TEXT_ALIGN_CENTER);
   lv_style_set_text_align(&ST_RIGHT, LV_TEXT_ALIGN_RIGHT);

@@ -40,6 +40,8 @@ unsigned pn_anim_used(void);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_saver(int on);
+void pn_saver_texts(int mode, int top);  // what the screensaver shows over the picture, SAVER_*, and at which edge
+int pn_texts(int *out, int max);         // the screensaver's texts, x1 y1 x2 y2 each, tight to the text
 void pn_shot(const char *dir, const char *name);
 void pn_draw(int ms);  // ms on, the panel draws as its main loop does
 

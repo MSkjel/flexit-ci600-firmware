@@ -207,6 +207,7 @@ int main(int argc, char **argv) {
        wx({.symbol = "fair_day", .cloud = 25, .temp = 14, .low = 20, .mid = 10, .high = 10, .wind = 5})},
       {"44_midsummer", utc(2026, 6, 23, 20, 30), wx({.symbol = "fair_night", .cloud = 10, .temp = 15})},
       {"45_halloween", utc(2026, 10, 31, 19, 0), wx({.symbol = "clearsky_night", .cloud = 10, .temp = 3})},
+      {"45b_halloween_day", utc(2026, 10, 31, 12, 0), wx({.symbol = "fair_day", .cloud = 20, .temp = 7})},
       {"46_valentine", utc(2026, 2, 14, 15, 0),
        wx({.symbol = "partlycloudy_day", .cloud = 50, .temp = 1, .low = 40, .mid = 20, .high = 10})},
       {"47_olsok", utc(2026, 7, 29, 12, 0),

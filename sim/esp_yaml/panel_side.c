@@ -142,15 +142,53 @@ int pn_anim(int place, pn_look_t *out) {
 }
 unsigned pn_anim_used(void) { return anim_used(); }
 
-// The picture screensaver up, so its animations play, or down again
+// The picture screensaver up, so its animations play, or down again. The picture alone unless pn_saver_texts()
+// said otherwise.
+static int saver_mode = SAVER_PIC;
 void pn_saver(int on) {
   if (on) {
-    M.screensaver = 3;
+    M.screensaver = (uint8_t) saver_mode;
     ui_value_changed(V_SCREENSAVER);
     ui_push(&SCR_SAVER, 0);
   } else {
     ui_pop();
   }
+}
+void pn_saver_texts(int mode, int top) {
+  saver_mode = mode;
+  M.saver_top = top;
+}
+
+// The visible labels with text under o, x1 y1 x2 y2 each, tight to the text when it's right-aligned in a wider label
+static int labels(lv_obj_t *o, int *out, int n, int max) {
+  if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) || n >= max)
+    return n;
+  if (lv_obj_check_type(o, &lv_label_class)) {
+    const char *t = lv_label_get_text(o);
+    if (!t || !*t)
+      return n;
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    lv_point_t size;
+    lv_txt_get_size(&size, t, lv_obj_get_style_text_font(o, 0), 0, 0, LV_COORD_MAX,
+                    lv_label_get_recolor(o) ? LV_TEXT_FLAG_RECOLOR : LV_TEXT_FLAG_NONE);
+    if (lv_obj_get_style_text_align(o, 0) == LV_TEXT_ALIGN_RIGHT)
+      a.x1 = (lv_coord_t) (a.x2 - size.x);
+    out[n * 4] = a.x1;
+    out[n * 4 + 1] = a.y1;
+    out[n * 4 + 2] = a.x2;
+    out[n * 4 + 3] = a.y2;
+    return n + 1;
+  }
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(o); i++)
+    n = labels(lv_obj_get_child(o, (int32_t) i), out, n, max);
+  return n;
+}
+int pn_texts(int *out, int max) {
+  if (ui_top() != &SCR_SAVER)
+    return 0;
+  lv_obj_update_layout(lv_scr_act());
+  return labels(lv_scr_act(), out, 0, max);
 }
 
 // Screenshot of the picture screensaver as DIR/NAME.ppm
