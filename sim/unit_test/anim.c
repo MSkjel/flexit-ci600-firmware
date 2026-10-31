@@ -133,8 +133,8 @@ static void test_anim(void) {
   CHECK_EQ(status(anim_send(0, PIC_MAX_W, n, d, 0)), PIC_BAD_SIZE);
   CHECK_EQ(status(anim_send(0, AW, ANIM_POOL, d, 0)), PIC_TOO_BIG);
   CHECK_EQ(status(anim_send(0, AW, UINT32_MAX, d, 0)), PIC_TOO_BIG);  // doesn't wrap round to fit
-  uint8_t big[ANIM_BEGIN_HEAD + PIC_PAL_LEN];                         // a frame bigger than the pool
-  int bn = sim_anim_begin(big, ++id, 1, 160, 100, 1, ANIM_OPAQUE, 4, palette());
+  uint8_t big[ANIM_BEGIN_HEAD + PIC_PAL_LEN];                         // a frame bigger than the pool, 15000 bytes
+  int bn = sim_anim_begin(big, ++id, 1, 300, 100, 1, ANIM_OPAQUE, 4, palette());
   CHECK_EQ(status(pic_msg(K_ANIM_BEGIN, big, bn)), PIC_TOO_BIG);
   big[1] = ANIM_SLOTS;  // no such slot
   CHECK_EQ(status(pic_msg(K_ANIM_BEGIN, big, bn)), PIC_BAD);

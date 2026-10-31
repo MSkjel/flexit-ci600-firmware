@@ -31,7 +31,7 @@ static void menu_build(lv_obj_t *b, intptr_t arg) {
   for (int k = 0; k < GRID_SLOTS && k < grid->n; k++) {
     lv_obj_t *t =
         mk_box(b, 8 + (k % 2) * (GRID_W + GRID_GAP), 4 + (k / 2) * (GRID_H + GRID_GAP), GRID_W, GRID_H, T.surface, 10);
-    lv_obj_set_style_border_width(t, 2, 0);  // always 2 so the content doesn't move when selected
+    lv_obj_add_style(t, &ST_BORDER2, 0);  // always 2 so the content doesn't move when selected
     grid->box[k] = t;
     grid->icon[k] = mk_disc(t, 5, 5, 30, T.surface2, &icons_16, T.text, "");
     grid->title[k] = mk_label(t, &font_f14, T.text, "");
@@ -62,13 +62,13 @@ static void menu_update(void) {
       label_text(grid->title[k], tr(it->title));
     }
     bool sel = i == f->sel;
-    lv_obj_set_style_bg_color(grid->box[k], sel ? T.accent_soft : T.surface, 0);
+    st_bg(grid->box[k], sel ? T.accent_soft : T.surface, 0);
     lv_obj_set_style_border_color(grid->box[k], sel ? T.accent : T.surface, 0);
-    lv_obj_set_style_bg_color(grid->icon[k], sel ? T.accent : T.surface2, 0);
-    lv_obj_set_style_text_color(grid->icon[k], sel ? T.on_accent : T.text, 0);
+    st_bg(grid->icon[k], sel ? T.accent : T.surface2, 0);
+    st_text(grid->icon[k], sel ? T.on_accent : T.text);
     it->fmt(buf, sizeof buf);
     lv_label_set_text(grid->status[k], buf);
-    lv_obj_set_style_text_color(grid->status[k], (it->flags & MF_ALARMS) && M.n_alarms ? T.err : T.dim, 0);
+    st_text(grid->status[k], (it->flags & MF_ALARMS) && M.n_alarms ? T.err : T.dim);
   }
   ui_help(grid->item[f->sel]->help);
 }
@@ -203,10 +203,10 @@ static bool is_on(const mitem_t *it) {
 }
 
 static void toggle_draw(lv_obj_t *sw, bool on) {
-  lv_obj_set_style_bg_color(sw, on ? T.accent : T.surface2, 0);
+  st_bg(sw, on ? T.accent : T.surface2, 0);
   lv_obj_t *knob = lv_obj_get_child(sw, 0);
   lv_obj_set_x(knob, on ? SWITCH_W - KNOB - KNOB_GAP : KNOB_GAP);
-  lv_obj_set_style_bg_color(knob, on ? T.on_accent : T.dim, 0);
+  st_bg(knob, on ? T.on_accent : T.dim, 0);
 }
 
 static bool selectable(int r) { return row_type(r) != MI_HEAD; }

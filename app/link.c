@@ -27,7 +27,7 @@ static int8_t help_asked = -1;    // the item we last asked the ESP about
 static uint8_t help_next;         // slot the next help goes in
 
 // The last few item help texts from the ESP, so moving up and down a menu doesn't ask again
-#define HELP_SLOTS 8
+#define HELP_SLOTS 4
 static struct {
   int8_t of;  // item, -1 = free
   char text[PLINK_HELP_MAX + 1];

@@ -178,9 +178,9 @@ void plat_stats(plat_stats_t *s) {
                        .full_send_us = 136900,
                        .stack_free = 5312,
                        .saves = 128,
-                       .heap_size = 16384,
-                       .heap_used = 9830,
-                       .heap_peak = 14540};
+                       .heap_size = 14336,
+                       .heap_used = 7810,
+                       .heap_peak = 9560};
 }
 
 int sim_trial_answer = -1;

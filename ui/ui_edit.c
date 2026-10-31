@@ -141,7 +141,7 @@ static void edit_update(void) {
     bool off = shown_off(it, ed.v);  // Off in a text font, the number font has no letters
     const lv_font_t *f = off ? &font_f28 : &font_n40;
     const char *unit = off ? "" : item_unit(it);
-    lv_obj_set_style_text_font(ed.val, f, 0);
+    st_font(ed.val, f);
     lv_label_set_text(ed.val, number_only(it, ed.v, a, sizeof a));
     label_text(ed.unit, unit);
     int y = 38 + (font_n40.line_height - font_n40.base_line) - (f->line_height - f->base_line);  // same baseline
@@ -157,7 +157,7 @@ static void edit_update(void) {
     for (int i = 0; i < rows; i++) {
       int o = ed.offer[ed.first + i];
       lv_label_set_text(ed.opts[i], opt_text(it, o));
-      lv_obj_set_style_text_color(ed.opts[i], o == ed.v ? T.accent : T.text, 0);
+      st_text(ed.opts[i], o == ed.v ? T.accent : T.text);
     }
     lv_obj_set_y(ed.opt_bg, EDIT_TOP - 1 + (ed.pos - ed.first) * OPT_H);
     if (now >= ed.first && now < ed.first + rows) {

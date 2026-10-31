@@ -284,10 +284,10 @@ static void notices_fill(lv_obj_t *b) {
       lv_obj_t *l = notices->l[i];
       if (!l) {
         l = notices->l[i] = lv_label_create(b);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        st_align(l, LV_TEXT_ALIGN_CENTER);
       }
-      lv_obj_set_style_text_font(l, f, 0);
-      lv_obj_set_style_text_color(l, *STYLES[n->kind].c, 0);
+      st_font(l, f);
+      st_text(l, *STYLES[n->kind].c);
       char fw[12];
       if (n->kind == N_VERSION)
         set_text(l, _(S_NOTICE_FIRMWARE), fw_text(fw));

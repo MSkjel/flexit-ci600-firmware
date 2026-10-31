@@ -70,6 +70,7 @@ static void apply_theme(void) {
 #define X(name) T.name = lv_color_hex(h->name);
   THEME_COLOURS(X)
 #undef X
+  st_theme();
 }
 
 // ---------------------------------------------------------------- stack
@@ -141,7 +142,7 @@ static void build(int i) {
     bool full = f->s->flags & SF_NOBARS;
     lv_obj_set_pos(body, 0, full ? 0 : BODY_Y);
     lv_obj_set_size(body, SCR_W, full ? SCR_H : BODY_H);
-    lv_obj_set_style_bg_color(lv_scr_act(), T.bg, 0);
+    st_bg(lv_scr_act(), T.bg, 0);  // the screensaver may have made it black
     lv_obj_add_flag(dots, LV_OBJ_FLAG_HIDDEN);
     f->s->build(body, f->arg);
   }
@@ -238,12 +239,7 @@ void ui_go_home(void) {
 
 void ui_rebuild(void) {
   rebuild_due = false;
-  apply_theme();
-  lv_obj_set_style_bg_color(lv_scr_act(), T.bg, 0);
-  lv_obj_set_style_bg_color(bar, T.bg, 0);
-  lv_obj_set_style_text_color(clock_lbl, T.text, 0);
-  lv_obj_set_style_text_color(title_lbl, T.dim, 0);
-  lv_obj_set_style_bg_color(hintbar, T.bg, 0);
+  apply_theme();  // the bars keep their objects and follow through the shared styles, but for the hint bar's line
   lv_obj_set_style_border_color(hintbar, T.line, 0);
   memset(shown_hints, 0xFF, sizeof shown_hints);  // force a redraw
   if (toast) {                                    // it isn't an overlay, so it would keep the old colours
@@ -332,13 +328,13 @@ static void draw_hints(const str_t *h) {
       mk_icon(hintbar, &icons_16, T.text, ARROWS[k]);
     } else {
       lv_obj_t *cap = mk_label(hintbar, &font_f12, T.bg, CAPS[k]);
-      lv_obj_set_style_bg_color(cap, T.dim, 0);
-      lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
-      lv_obj_set_style_radius(cap, 3, 0);
-      lv_obj_set_style_pad_hor(cap, 4, 0);
+      st_bg(cap, T.dim, 0);
+      lv_obj_add_style(cap, &ST_OPAQUE, 0);
+      st_radius(cap, 3, 0);
+      lv_obj_add_style(cap, &ST_PAD_HOR4, 0);
     }
     lv_obj_t *t = mk_label(hintbar, &font_f12, T.dim, tr(h[k]));
-    lv_obj_set_style_pad_right(t, 8, 0);
+    lv_obj_add_style(t, &ST_PAD_RIGHT8, 0);
   }
 }
 
@@ -425,6 +421,7 @@ void ui_idle(void) {
 }
 
 void ui_key(int key) {
+  lv_timer_ready(_lv_disp_get_refr_timer(NULL));  // what the key changes is drawn this tick, not up to 15 ms later
   frame_t *top = &stack[depth - 1];
   if (key == KEY_HOME) {
     ui_go_home();
@@ -529,11 +526,11 @@ const char *icon_glyph(uint8_t id) { return id < LEN(ICON_GLYPHS) ? ICON_GLYPHS[
 
 void ui_init(void) {
   anim_init();
+  st_init();
   apply_theme();
   lv_obj_t *scr = lv_scr_act();
-  lv_obj_remove_style_all(scr);
-  lv_obj_set_style_bg_color(scr, T.bg, 0);
-  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  st_bg(scr, T.bg, 0);
+  lv_obj_add_style(scr, &ST_OPAQUE, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   body = mk_group(scr, SCR_W, BODY_H);
@@ -554,7 +551,7 @@ void ui_init(void) {
 
   hintbar = mk_box(scr, 0, SCR_H - HINT_H, SCR_W, HINT_H, T.bg, 0);
   lv_obj_set_style_border_side(hintbar, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(hintbar, 1, 0);
+  lv_obj_add_style(hintbar, &ST_BORDER1, 0);
   lv_obj_set_style_border_color(hintbar, T.line, 0);
   lv_obj_set_style_pad_left(hintbar, 8, 0);
   lv_obj_set_style_pad_column(hintbar, 4, 0);

@@ -4,7 +4,7 @@
 BUILD_MK := $(MAKEFILE_LIST)
 LVGL     := $(ROOT)/lib/lvgl
 INCLUDES := -I$(ROOT)/app -I$(ROOT)/ui -I$(ROOT)/proto -I$(LVGL) -I$(ROOT)/lib
-DEFS     := -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DCI600_LV_MEM_KB=16  # LVGL heap size on the panel
+DEFS     := -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DCI600_LV_MEM_KB=14  # LVGL heap size on the panel
 WARN     := -Wall -Wextra -Werror
 # The newest vX.Y.Z tag, the next patch level on a later commit so the ESP can tell them apart, 0.0.0 without one.
 # $(BUILD)/version holds it and only changes with it, tools/mkupdate.py names the stream from hw/build/version.

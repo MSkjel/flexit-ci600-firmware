@@ -5,10 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Styles left at their defaults (a 0 position or radius, the default font) aren't set, each one takes LVGL heap
+// Styles left at their defaults (a 0 position or radius, the default font) aren't set, each one takes LVGL heap.
+// There's no LVGL theme, so a new object has no styles to take off.
 lv_obj_t *mk_group(lv_obj_t *p, int w, int h) {
   lv_obj_t *o = lv_obj_create(p);
-  lv_obj_remove_style_all(o);
   lv_obj_set_size(o, w, h);
   lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
   return o;
@@ -18,10 +18,10 @@ lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int rad
   lv_obj_t *o = mk_group(p, w, h);
   if (x || y)
     lv_obj_set_pos(o, x, y);
-  lv_obj_set_style_bg_color(o, bg, 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  st_bg(o, bg, 0);
+  lv_obj_add_style(o, &ST_OPAQUE, 0);
   if (radius)
-    lv_obj_set_style_radius(o, radius, 0);
+    st_radius(o, radius, 0);
   return o;
 }
 
@@ -29,8 +29,8 @@ lv_obj_t *mk_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t bg, int rad
 lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt) {
   lv_obj_t *l = lv_label_create(p);
   if (f != LV_FONT_DEFAULT)
-    lv_obj_set_style_text_font(l, f, 0);
-  lv_obj_set_style_text_color(l, c, 0);
+    st_font(l, f);
+  st_text(l, c);
   label_text(l, txt ? txt : "");
   return l;
 }
@@ -38,7 +38,7 @@ lv_obj_t *mk_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *tx
 lv_obj_t *mk_text(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *txt, int w, lv_text_align_t align) {
   lv_obj_t *l = mk_label(p, f, c, txt);
   lv_obj_set_width(l, w);
-  lv_obj_set_style_text_align(l, align, 0);
+  st_align(l, align);
   return l;
 }
 
@@ -70,15 +70,14 @@ lv_obj_t *mk_icon(lv_obj_t *p, const lv_font_t *f, lv_color_t c, const char *ic)
 
 lv_obj_t *mk_bar(lv_obj_t *p, int x, int y, int w, int h, int val, int max, lv_color_t c) {
   lv_obj_t *b = lv_bar_create(p);
-  lv_obj_remove_style_all(b);
   lv_obj_set_pos(b, x, y);
   lv_obj_set_size(b, w, h);
-  lv_obj_set_style_bg_color(b, T.surface2, LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_radius(b, h / 2, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(b, c, LV_PART_INDICATOR);
-  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_INDICATOR);
-  lv_obj_set_style_radius(b, h / 2, LV_PART_INDICATOR);
+  st_bg(b, T.surface2, LV_PART_MAIN);
+  lv_obj_add_style(b, &ST_OPAQUE, LV_PART_MAIN);
+  st_radius(b, h / 2, LV_PART_MAIN);
+  st_bg(b, c, LV_PART_INDICATOR);
+  lv_obj_add_style(b, &ST_OPAQUE, LV_PART_INDICATOR);
+  st_radius(b, h / 2, LV_PART_INDICATOR);
   lv_bar_set_range(b, 0, max > 0 ? max : 1);  // LVGL divides by the range
   lv_bar_set_value(b, val, LV_ANIM_OFF);
   return b;
@@ -86,17 +85,16 @@ lv_obj_t *mk_bar(lv_obj_t *p, int x, int y, int w, int h, int val, int max, lv_c
 
 lv_obj_t *mk_arc(lv_obj_t *p, int size, int width, int val, int max, lv_color_t c) {
   lv_obj_t *a = lv_arc_create(p);
-  lv_obj_remove_style_all(a);
   lv_obj_set_size(a, size, size);
   lv_arc_set_bg_angles(a, 135, 45);
   lv_arc_set_range(a, 0, max);
   lv_arc_set_value(a, val);
   lv_obj_set_style_arc_color(a, T.surface2, LV_PART_MAIN);
   lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
-  lv_obj_set_style_arc_rounded(a, true, LV_PART_MAIN);
+  lv_obj_add_style(a, &ST_ARC_ROUND, LV_PART_MAIN);
   lv_obj_set_style_arc_color(a, c, LV_PART_INDICATOR);
   lv_obj_set_style_arc_width(a, width, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
+  lv_obj_add_style(a, &ST_ARC_ROUND, LV_PART_INDICATOR);
   lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
   return a;
 }
@@ -170,7 +168,7 @@ const char *fmt_hm(char *buf, size_t n, int minutes) {
 
 lv_obj_t *mk_card(lv_obj_t *p, int x, int y, int w, int h, lv_color_t border, int border_w) {
   lv_obj_t *c = mk_box(p, x, y, w, h, T.surface, CARD_RADIUS);
-  lv_obj_set_style_border_width(c, border_w, 0);
+  st_border(c, border_w);
   lv_obj_set_style_border_color(c, border, 0);
   return c;
 }
@@ -181,10 +179,10 @@ lv_obj_t *mk_disc(lv_obj_t *p, int x, int y, int size, lv_color_t bg, const lv_f
   lv_obj_t *l = mk_icon(p, f, c, icon);
   lv_obj_set_pos(l, x, y);
   lv_obj_set_size(l, size, size);
-  lv_obj_set_style_bg_color(l, bg, 0);
-  lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(l, size / 2, 0);
-  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+  st_bg(l, bg, 0);
+  lv_obj_add_style(l, &ST_OPAQUE, 0);
+  st_radius(l, size / 2, 0);
+  st_align(l, LV_TEXT_ALIGN_CENTER);
   lv_obj_set_style_pad_top(l, (size - lv_font_get_line_height(f)) / 2, 0);
   return l;
 }
@@ -233,7 +231,6 @@ lv_obj_t *mk_pill(lv_obj_t *p, int h, lv_color_t bg, int pad_x, int pad_y, int g
 
 lv_obj_t *mk_chart(lv_obj_t *p, int w, int lines) {
   lv_obj_t *c = lv_chart_create(p);
-  lv_obj_remove_style_all(c);
   lv_obj_set_pos(c, CHART_X, CHART_Y);
   lv_obj_set_size(c, w, CHART_H);
   lv_chart_set_type(c, LV_CHART_TYPE_LINE);
@@ -327,7 +324,7 @@ char *item_text(char *buf, size_t n, const item_t *it, bool unit) {
 // ESP can be long. The font goes first, a label with dots cuts the text as it's set.
 void label_fit(lv_obj_t *l, const char *txt, int w) {
   bool fits = lv_txt_get_width(txt, (uint32_t) strlen(txt), &font_f20, 0, LV_TEXT_FLAG_NONE) <= w;
-  lv_obj_set_style_text_font(l, fits ? &font_f20 : &font_f14, 0);
+  st_font(l, fits ? &font_f20 : &font_f14);
   lv_obj_set_style_pad_top(l, fits ? 0 : lv_font_get_line_height(&font_f20) - lv_font_get_line_height(&font_f14), 0);
   lv_label_set_text(l, txt);
 }

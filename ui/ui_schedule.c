@@ -91,7 +91,7 @@ static void day_build(lv_obj_t *b, intptr_t arg) {
 static void day_update(void) {
   int sel = ui_frame()->sel;
   for (int s = 0; s < day->n; s++)
-    lv_obj_set_style_bg_color(day->row[s], s == sel ? T.surface : T.bg, 0);
+    st_bg(day->row[s], s == sel ? T.surface : T.bg, 0);
 }
 
 static bool day_key(int k) {
