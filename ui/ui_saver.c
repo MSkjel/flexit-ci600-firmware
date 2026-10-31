@@ -61,9 +61,9 @@ static void band_texts(lv_obj_t *band, lv_obj_t *l[3], lv_obj_t *lines[SAVER_LIN
   }
   for (int i = 0; shadow && i < 3; i++)
     if (l[i])
-      lv_obj_set_style_text_opa(l[i], LV_OPA_70, 0);
+      lv_obj_add_style(l[i], &ST_TEXT_OPA70, 0);
   for (int i = 0; shadow && temps && i < SAVER_LINES; i++)
-    lv_obj_set_style_text_opa(lines[i], LV_OPA_70, 0);
+    lv_obj_add_style(lines[i], &ST_TEXT_OPA70, 0);
 }
 
 // Text over the picture, top or bottom, on a shaded band, with shadows or as it is. Shadows go first so they end
@@ -106,8 +106,8 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
   if (!pic)
     mode = saver_plain(mode);  // no picture yet
   bool temps = mode == SAVER_CLOCK_TEMPS || mode == SAVER_PIC_ALL;
-  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
-  anim_show(b);  // over the picture, under the texts
+  st_bg(lv_scr_act(), lv_color_black(), 0);  // build() puts the theme's back
+  anim_show(b);                              // over the picture, under the texts
   if (pic) {
     saver->shows_pic = true;
     if (mode != SAVER_PIC && M.saver_text == SAVER_TEXT_SMALL)
@@ -189,8 +189,7 @@ static void place_lines(lv_obj_t *l[SAVER_LINES], int n, int x, int y) {
     if (i >= n)
       continue;
     const lv_font_t *f = line_font(i);
-    if (lv_obj_get_style_text_font(l[i], LV_PART_MAIN) != f)
-      lv_obj_set_style_text_font(l[i], f, 0);
+    st_font(l[i], f);
     lv_obj_set_height(l[i], lv_font_get_line_height(f));
     lv_obj_set_pos(l[i], x, y);
     set_text(l[i], "%s", M.saver_line[i]);

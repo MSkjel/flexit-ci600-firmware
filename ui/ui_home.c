@@ -174,9 +174,9 @@ static void tile_update(int i) {
     set_text(dash->tile_val[i], "%s", v);
   if (src >= TILE_ITEM)  // the ESP can rename items, a weather item's label is the current condition
     set_text(dash->tile_cap[i], "%s", tile_name(src) ? tile_name(src) : NO_VALUE);
-  lv_obj_set_style_bg_color(dash->tile_stripe[i], c, 0);
+  st_bg(dash->tile_stripe[i], c, 0);
   if (dash->tile_bar[i]) {
-    lv_obj_set_style_bg_color(dash->tile_bar[i], c, LV_PART_INDICATOR);
+    st_bg(dash->tile_bar[i], c, LV_PART_INDICATOR);
     lv_bar_set_value(dash->tile_bar[i], bar < 0 ? 0 : bar, LV_ANIM_OFF);
   }
 }
@@ -242,7 +242,7 @@ static void dash_update(void) {
   lv_color_t mc = mode_color();
   lv_arc_set_value(dash->ring, M.boost_left ? MODE_MAX : M.mode_now);
   lv_obj_set_style_arc_color(dash->ring, mc, LV_PART_INDICATOR);
-  lv_obj_set_style_text_color(dash->ring_icon, mc, 0);
+  st_text(dash->ring_icon, mc);
   set_text(dash->ring_icon, "%s", M.mode_now == MODE_STOP && !M.boost_left ? IC_FAN_OFF : IC_FAN);
   if (M.boost_left) {
     set_text(dash->ring_mode, "%s", _(S_BOOST_CAPS));
@@ -385,8 +385,8 @@ static void hud_update(void) {
                    : i == HUD_BOOST || lvl == MODE_MAX ? T.warn
                    : lvl == MODE_STOP                  ? T.faint
                                                        : T.accent;
-    lv_obj_set_style_bg_color(hud.bars[i], c, 0);
-    lv_obj_set_style_text_color(hud.names[i], i == lvl ? T.text : T.dim, 0);
+    st_bg(hud.bars[i], c, 0);
+    st_text(hud.names[i], i == lvl ? T.text : T.dim);
   }
   if (M.boost_left)
     set_text(hud.sub, _(S_BOOST_MIN_LEFT), M.boost_left);

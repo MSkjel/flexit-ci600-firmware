@@ -79,7 +79,7 @@ static void kt_reset(void) {
     place_duct(i);
   }
   kt->last = DUCTS - 1;
-  lv_obj_set_style_text_color(kt->fan, T.accent, 0);
+  st_text(kt->fan, T.accent);
   place_fan();
   lv_label_set_text(kt->score, "");
   show_msg(_(S_KEYTEST_START));
@@ -90,7 +90,7 @@ static void kt_over(void) {
   kt->over_at = lv_tick_get();
   if (kt->points > best)
     best = kt->points;
-  lv_obj_set_style_text_color(kt->fan, T.err, 0);
+  st_text(kt->fan, T.err);
   char points[24], record[24];
   lv_snprintf(points, sizeof points, _(S_KEYTEST_SCORE), kt->points);
   lv_snprintf(record, sizeof record, _(S_KEYTEST_BEST), best);
@@ -139,7 +139,7 @@ static void kt_step(lv_timer_t *t) {
 
 static lv_obj_t *mk_duct(lv_obj_t *b) {
   lv_obj_t *d = mk_card(b, 0, 0, DUCT_W, 0, T.accent, 2);
-  lv_obj_set_style_bg_color(d, T.accent_soft, 0);
+  st_bg(d, T.accent_soft, 0);
   return d;
 }
 
@@ -153,10 +153,10 @@ static void kt_build(lv_obj_t *b, intptr_t arg) {
   kt->score = mk_label(b, &font_f28, T.text, "");
   lv_obj_align(kt->score, LV_ALIGN_TOP_MID, 0, 4);
   kt->msg = mk_label(b, &font_f16, T.text, "");
-  lv_obj_set_style_text_align(kt->msg, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_bg_color(kt->msg, T.surface, 0);
-  lv_obj_set_style_bg_opa(kt->msg, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(kt->msg, CARD_RADIUS, 0);
+  st_align(kt->msg, LV_TEXT_ALIGN_CENTER);
+  st_bg(kt->msg, T.surface, 0);
+  lv_obj_add_style(kt->msg, &ST_OPAQUE, 0);
+  st_radius(kt->msg, CARD_RADIUS, 0);
   lv_obj_set_style_pad_hor(kt->msg, 18, 0);
   lv_obj_set_style_pad_ver(kt->msg, 10, 0);
   lv_obj_align(kt->msg, LV_ALIGN_CENTER, 24, 0);

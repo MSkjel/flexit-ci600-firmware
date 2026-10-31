@@ -60,7 +60,7 @@ static void line(lv_obj_t *p, const lv_point_t *pts, int n, lv_color_t c) {
 // A filter, fan or heater on the air path, with a label under it if lbl is set
 static void node(lv_obj_t *p, int cx, int cy, const char *ic, lv_color_t c, lv_obj_t **lbl) {
   lv_obj_t *n = mk_box(p, cx - 14, cy - 14, 28, 28, T.surface2, 14);
-  lv_obj_set_style_border_width(n, 2, 0);
+  lv_obj_add_style(n, &ST_BORDER2, 0);
   lv_obj_set_style_border_color(n, T.surface, 0);
   lv_obj_center(mk_icon(n, &icons_16, c, ic));
   if (lbl) {
@@ -76,8 +76,8 @@ static void port(lv_obj_t *p, int i, int x, int y, str_t cap, lv_color_t c, bool
   if (right) {  // not mk_text(): creating both labels first leaves LVGL's heap in fewer pieces
     lv_obj_set_width(l, 64);
     lv_obj_set_width(v, 66);
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
+    st_align(l, LV_TEXT_ALIGN_RIGHT);
+    st_align(v, LV_TEXT_ALIGN_RIGHT);
   }
   lv_obj_set_pos(l, x, y);
   lv_obj_set_pos(v, x - (right ? 2 : 0), y + 13);
@@ -384,9 +384,9 @@ static void comfort_update(void) {
   for (int c = 0; c < comfort->n_chips; c++) {
     bool on = item_on(&M.items[comfort->chip[c]]);
     const chip_t *ch = &comfort->chips[c];
-    lv_obj_set_style_bg_color(ch->pill, on ? T.accent : T.surface, 0);
-    lv_obj_set_style_text_color(ch->icon, on ? T.on_accent : T.dim, 0);
-    lv_obj_set_style_text_color(ch->name, on ? T.on_accent : T.dim, 0);
+    st_bg(ch->pill, on ? T.accent : T.surface, 0);
+    st_text(ch->icon, on ? T.on_accent : T.dim);
+    st_text(ch->name, on ? T.on_accent : T.dim);
   }
 }
 
@@ -449,10 +449,10 @@ static void smart_update(void) {
       lv_label_set_text(smart->val[k], item_text(buf, sizeof buf, it, false));
     if (it->type == ITEM_TOGGLE) {
       lv_color_t c = item_on(it) ? T.accent : T.faint;
-      lv_obj_set_style_text_color(smart->val[k], c, 0);
-      lv_obj_set_style_text_color(smart->icon[k], c, 0);
+      st_text(smart->val[k], c);
+      st_text(smart->icon[k], c);
     } else if (it->flags & ITEMF_LEVELS) {
-      lv_obj_set_style_text_color(smart->icon[k], item_color(it), 0);
+      st_text(smart->icon[k], item_color(it));
     }
     lv_obj_align_to(smart->unit[k], smart->val[k], LV_ALIGN_OUT_RIGHT_BOTTOM, 3, -3);
   }

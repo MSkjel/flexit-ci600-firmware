@@ -1,5 +1,5 @@
 diff --git a/src/core/lv_obj.c b/src/core/lv_obj.c
-index f0f4d55..fc41151 100644
+index f0f4d55..5e44b6a 100644
 --- a/src/core/lv_obj.c
 +++ b/src/core/lv_obj.c
 @@ -229,6 +229,7 @@ lv_obj_t * lv_obj_create(lv_obj_t * parent)
@@ -18,25 +18,279 @@ index f0f4d55..fc41151 100644
  
      bool was_on_layout = lv_obj_is_layout_positioned(obj);
      if(f & LV_OBJ_FLAG_SCROLLABLE) {
+@@ -480,6 +482,23 @@ static void lv_obj_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
+     }
+ }
+ 
++/*CI600: whether the main part draws nothing: no background, border, outline, shadow, image or corner clip. Kept
++ *in LV_OBJ_FLAG_USER_4, settled again by lv_obj_refresh_style() each time a style changes. Every strip of the
++ *screen draws every object in it, and most are labels and boxes with nothing of their own, which otherwise means a
++ *dozen style lookups each for a rectangle that draws nothing. A blank one also sends no LV_EVENT_DRAW_PART_*
++ *for the rectangle. USER_1 to USER_3 are lv_obj_pos.c's*/
++void _lv_obj_blank_refr(lv_obj_t * obj)
++{
++    bool blank = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN) <= LV_OPA_MIN &&
++                 lv_obj_get_style_border_width(obj, LV_PART_MAIN) == 0 &&
++                 lv_obj_get_style_outline_width(obj, LV_PART_MAIN) == 0 &&
++                 lv_obj_get_style_shadow_width(obj, LV_PART_MAIN) == 0 &&
++                 lv_obj_get_style_bg_img_src(obj, LV_PART_MAIN) == NULL &&
++                 !lv_obj_get_style_clip_corner(obj, LV_PART_MAIN);
++    if(blank) obj->flags |= LV_OBJ_FLAG_USER_4;
++    else obj->flags &= ~LV_OBJ_FLAG_USER_4;
++}
++
+ static void lv_obj_draw(lv_event_t * e)
+ {
+     lv_event_code_t code = lv_event_get_code(e);
+@@ -521,7 +540,7 @@ static void lv_obj_draw(lv_event_t * e)
+         info->res = LV_COVER_RES_COVER;
+ 
+     }
+-    else if(code == LV_EVENT_DRAW_MAIN) {
++    else if(code == LV_EVENT_DRAW_MAIN && !(obj->flags & LV_OBJ_FLAG_USER_4)) {  /*CI600: a blank one draws nothing*/
+         lv_draw_ctx_t * draw_ctx = lv_event_get_draw_ctx(e);
+         lv_draw_rect_dsc_t draw_dsc;
+         lv_draw_rect_dsc_init(&draw_dsc);
+diff --git a/src/core/lv_obj_pos.c b/src/core/lv_obj_pos.c
+index c50ea3a..e940925 100644
+--- a/src/core/lv_obj_pos.c
++++ b/src/core/lv_obj_pos.c
+@@ -41,10 +41,131 @@ static uint32_t layout_cnt;
+  *   GLOBAL FUNCTIONS
+  **********************/
+ 
++/*CI600: a plain pixel position or size goes straight into the object's coordinates. LVGL keeps them as properties
++ *of a local style, which costs nearly every object a style of its own, 40 bytes or more of the heap. The user
++ *flags say which of x and y, the width and the height the coordinates hold, and lv_obj_get_style_prop() answers
++ *from them through _lv_obj_pos_get(), so layouts and widgets read what the style would have said. A percentage,
++ *LV_SIZE_CONTENT, an alignment or a translation goes through the style as before, and setting one of those turns
++ *what the coordinates hold into properties first, see _lv_obj_pos_prop_set(). What differs from LVGL: a kept
++ *position is where the object is, so a change of the parent's padding or border after the fact doesn't move it,
++ *and another parent sees it where it was*/
++#define DIRECT_POS LV_OBJ_FLAG_USER_1
++#define DIRECT_W LV_OBJ_FLAG_USER_2
++#define DIRECT_H LV_OBJ_FLAG_USER_3
++
++static bool set_size_core(lv_obj_t * obj, lv_obj_t * parent, lv_coord_t w, lv_coord_t h);
++
++/*Where the object is in its parent, the x and y lv_obj_move_to() placed it with*/
++static void kept_pos(const lv_obj_t * obj, lv_coord_t * x, lv_coord_t * y)
++{
++    const lv_obj_t * parent = obj->parent;
++    lv_coord_t px = 0, py = 0;
++    if(parent) {
++        lv_coord_t border = lv_obj_get_style_border_width(parent, LV_PART_MAIN);
++        px = parent->coords.x1 + lv_obj_get_style_pad_left(parent, LV_PART_MAIN) + border;
++        py = parent->coords.y1 + lv_obj_get_style_pad_top(parent, LV_PART_MAIN) + border;
++        if(!lv_obj_has_flag(obj, LV_OBJ_FLAG_FLOATING)) {
++            px -= lv_obj_get_scroll_x(parent);
++            py -= lv_obj_get_scroll_y(parent);
++        }
++    }
++    *x = obj->coords.x1 - px;
++    *y = obj->coords.y1 - py;
++}
++
++bool _lv_obj_pos_get(const lv_obj_t * obj, lv_style_prop_t prop, lv_style_value_t * v)
++{
++    if(prop == LV_STYLE_WIDTH && (obj->flags & DIRECT_W)) {
++        v->num = lv_area_get_width(&obj->coords);
++        return true;
++    }
++    if(prop == LV_STYLE_HEIGHT && (obj->flags & DIRECT_H)) {
++        v->num = lv_area_get_height(&obj->coords);
++        return true;
++    }
++    if((prop == LV_STYLE_X || prop == LV_STYLE_Y) && (obj->flags & DIRECT_POS)) {
++        lv_coord_t x, y;
++        kept_pos(obj, &x, &y);
++        v->num = prop == LV_STYLE_X ? x : y;
++        return true;
++    }
++    return false;
++}
++
++/*prop is about to be set on the object's local style and takes over from the coordinates*/
++void _lv_obj_pos_prop_set(lv_obj_t * obj, lv_style_prop_t prop)
++{
++    bool pos = prop == LV_STYLE_X || prop == LV_STYLE_Y || prop == LV_STYLE_ALIGN || prop == LV_STYLE_TRANSLATE_X ||
++               prop == LV_STYLE_TRANSLATE_Y;
++    if(pos && (obj->flags & DIRECT_POS)) {
++        lv_coord_t x, y;
++        kept_pos(obj, &x, &y);
++        obj->flags &= ~DIRECT_POS;
++        lv_obj_set_style_x(obj, x, 0);
++        lv_obj_set_style_y(obj, y, 0);
++    }
++    if(prop == LV_STYLE_WIDTH) obj->flags &= ~DIRECT_W;
++    if(prop == LV_STYLE_HEIGHT) obj->flags &= ~DIRECT_H;
++}
++
++/*A plain pixel value, and the object placed by nothing else: no alignment, translation or property of its own*/
++static bool direct_pos(lv_obj_t * obj, lv_coord_t v)
++{
++    lv_style_value_t p;
++    return !LV_COORD_IS_SPEC(v) && obj->parent &&
++           lv_obj_get_style_align(obj, LV_PART_MAIN) == LV_ALIGN_DEFAULT &&
++           lv_obj_get_style_translate_x(obj, LV_PART_MAIN) == 0 &&
++           lv_obj_get_style_translate_y(obj, LV_PART_MAIN) == 0 &&
++           lv_obj_get_local_style_prop(obj, LV_STYLE_X, &p, 0) == LV_STYLE_RES_NOT_FOUND &&
++           lv_obj_get_local_style_prop(obj, LV_STYLE_Y, &p, 0) == LV_STYLE_RES_NOT_FOUND;
++}
++
++/*Puts the object there now. What a change of LV_STYLE_X does besides: the parent's layout or content size may
++ *depend on it*/
++static void place(lv_obj_t * obj, lv_coord_t x, lv_coord_t y)
++{
++    obj->flags |= DIRECT_POS;
++    lv_obj_move_to(obj, x, y);
++    lv_obj_mark_layout_as_dirty(obj->parent);
++}
++
++/*The other coordinate of a direct placement: the one kept, else the style's, what lv_obj_refr_pos() would use*/
++static lv_coord_t other_pos(const lv_obj_t * obj, lv_style_prop_t prop)
++{
++    lv_style_value_t v;
++    if(_lv_obj_pos_get(obj, prop, &v)) return v.num;
++    return prop == LV_STYLE_X ? lv_obj_get_style_x(obj, LV_PART_MAIN) : lv_obj_get_style_y(obj, LV_PART_MAIN);
++}
++
++static bool direct_size(lv_obj_t * obj, lv_coord_t v, lv_style_prop_t prop, bool by_layout)
++{
++    lv_style_value_t p;
++    return !LV_COORD_IS_SPEC(v) && obj->parent && !by_layout &&
++           lv_obj_get_local_style_prop(obj, prop, &p, 0) == LV_STYLE_RES_NOT_FOUND;
++}
++
++/*Sizes the object now, as lv_obj_refr_size() would from these. Then what a change of LV_STYLE_WIDTH does besides:
++ *its own layout and the parent's follow*/
++static void resize(lv_obj_t * obj, lv_coord_t w, lv_coord_t h)
++{
++    lv_obj_t * parent = obj->parent;
++    w = lv_clamp_width(w, lv_obj_get_style_min_width(obj, LV_PART_MAIN), lv_obj_get_style_max_width(obj, LV_PART_MAIN),
++                       lv_obj_get_content_width(parent));
++    h = lv_clamp_height(h, lv_obj_get_style_min_height(obj, LV_PART_MAIN),
++                        lv_obj_get_style_max_height(obj, LV_PART_MAIN), lv_obj_get_content_height(parent));
++    set_size_core(obj, parent, w, h);
++    lv_obj_mark_layout_as_dirty(obj);
++    lv_obj_mark_layout_as_dirty(parent);
++}
++
+ void lv_obj_set_pos(lv_obj_t * obj, lv_coord_t x, lv_coord_t y)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+ 
++    if(direct_pos(obj, x) && !LV_COORD_IS_SPEC(y)) {
++        place(obj, x, y);
++        return;
++    }
+     lv_obj_set_x(obj, x);
+     lv_obj_set_y(obj, y);
+ }
+@@ -53,6 +174,11 @@ void lv_obj_set_x(lv_obj_t * obj, lv_coord_t x)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+ 
++    if(direct_pos(obj, x)) {  /*CI600*/
++        place(obj, x, other_pos(obj, LV_STYLE_Y));
++        return;
++    }
++
+     lv_res_t res_x;
+     lv_style_value_t v_x;
+ 
+@@ -67,6 +193,11 @@ void lv_obj_set_y(lv_obj_t * obj, lv_coord_t y)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+ 
++    if(direct_pos(obj, y)) {  /*CI600*/
++        place(obj, other_pos(obj, LV_STYLE_X), y);
++        return;
++    }
++
+     lv_res_t res_y;
+     lv_style_value_t v_y;
+ 
+@@ -161,6 +292,12 @@ bool lv_obj_refr_size(lv_obj_t * obj)
+         lv_obj_scroll_to(obj, sl_ori, st_ori, LV_ANIM_OFF);
+     }
+ 
++    return set_size_core(obj, parent, w, h);
++}
++
++/*CI600: the rest of lv_obj_refr_size(), with the size settled, for resize() too*/
++static bool set_size_core(lv_obj_t * obj, lv_obj_t * parent, lv_coord_t w, lv_coord_t h)
++{
+     /*Do nothing if the size is not changed*/
+     /*It is very important else recursive resizing can occur without size change*/
+     if(lv_obj_get_width(obj) == w && lv_obj_get_height(obj) == h) return false;
+@@ -223,6 +360,11 @@ void lv_obj_set_size(lv_obj_t * obj, lv_coord_t w, lv_coord_t h)
+ void lv_obj_set_width(lv_obj_t * obj, lv_coord_t w)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
++    if(direct_size(obj, w, LV_STYLE_WIDTH, obj->w_layout)) {  /*CI600*/
++        obj->flags |= DIRECT_W;
++        resize(obj, w, lv_obj_get_height(obj));
++        return;
++    }
+     lv_res_t res_w;
+     lv_style_value_t v_w;
+ 
+@@ -236,6 +378,11 @@ void lv_obj_set_width(lv_obj_t * obj, lv_coord_t w)
+ void lv_obj_set_height(lv_obj_t * obj, lv_coord_t h)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
++    if(direct_size(obj, h, LV_STYLE_HEIGHT, obj->h_layout)) {  /*CI600*/
++        obj->flags |= DIRECT_H;
++        resize(obj, lv_obj_get_width(obj), h);
++        return;
++    }
+     lv_res_t res_h;
+     lv_style_value_t v_h;
+ 
 diff --git a/src/core/lv_obj_style.c b/src/core/lv_obj_style.c
-index ecffca9..274fc48 100644
+index ecffca9..50c6f32 100644
 --- a/src/core/lv_obj_style.c
 +++ b/src/core/lv_obj_style.c
-@@ -225,7 +225,10 @@ lv_style_value_t lv_obj_get_style_prop(const lv_obj_t * obj, lv_part_t part, lv_
+@@ -168,6 +168,9 @@ void lv_obj_refresh_style(lv_obj_t * obj, lv_style_selector_t selector, lv_style
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+ 
++    extern void _lv_obj_blank_refr(lv_obj_t * obj);
++    _lv_obj_blank_refr(obj);  /*CI600: whether the main part still draws nothing, see lv_obj.c*/
++
+     if(!style_refr) return;
+ 
+     lv_obj_invalidate(obj);
+@@ -223,9 +226,19 @@ void lv_obj_enable_style_refresh(bool en)
+ lv_style_value_t lv_obj_get_style_prop(const lv_obj_t * obj, lv_part_t part, lv_style_prop_t prop)
+ {
      lv_style_value_t value_act;
-     bool inheritable = lv_style_prop_has_flag(prop, LV_STYLE_PROP_INHERIT);
+-    bool inheritable = lv_style_prop_has_flag(prop, LV_STYLE_PROP_INHERIT);
      lv_style_res_t found = LV_STYLE_RES_NOT_FOUND;
 -    while(obj) {
++    /*CI600: a position or size the coordinates hold, see lv_obj_pos.c. WIDTH to Y are the first properties*/
++    extern bool _lv_obj_pos_get(const lv_obj_t * obj, lv_style_prop_t prop, lv_style_value_t * v);
++    if(prop <= LV_STYLE_Y && part == LV_PART_MAIN &&
++       (obj->flags & (LV_OBJ_FLAG_USER_1 | LV_OBJ_FLAG_USER_2 | LV_OBJ_FLAG_USER_3)) &&
++       _lv_obj_pos_get(obj, prop, &value_act)) {
++        return value_act;
++    }
 +    /*CI600: one no style has ever had is the default, without looking*/
 +    extern uint32_t _lv_style_props_set[];
 +    bool never = prop < _LV_STYLE_NUM_BUILT_IN_PROPS && !(_lv_style_props_set[prop >> 5] & (1UL << (prop & 31)));
++    bool inheritable = !never && lv_style_prop_has_flag(prop, LV_STYLE_PROP_INHERIT);
 +    while(obj && !never) {
          found = get_prop_core(obj, part, prop, &value_act);
          if(found == LV_STYLE_RES_FOUND) break;
          if(!inheritable) break;
-@@ -271,6 +274,10 @@ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_
+@@ -270,7 +283,14 @@ lv_style_value_t lv_obj_get_style_prop(const lv_obj_t * obj, lv_part_t part, lv_
+ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_value_t value,
                                   lv_style_selector_t selector)
  {
++    /*CI600: the coordinates may hold the position or size this property takes over, see lv_obj_pos.c*/
++    extern void _lv_obj_pos_prop_set(lv_obj_t * obj, lv_style_prop_t prop);
++    if(lv_obj_style_get_selector_part(selector) == LV_PART_MAIN) _lv_obj_pos_prop_set(obj, prop);
      lv_style_t * style = get_local_style(obj, selector);
 +    /*CI600: setting the value it has already doesn't repaint the object. Compares the whole union:
 +     *never "same" when it isn't, at worst "different" when it is (unused bytes of a colour)*/
@@ -45,6 +299,66 @@ index ecffca9..274fc48 100644
      lv_style_set_prop(style, prop, value);
      lv_obj_refresh_style(obj, selector, prop);
  }
+@@ -278,6 +298,8 @@ void lv_obj_set_local_style_prop(lv_obj_t * obj, lv_style_prop_t prop, lv_style_
+ void lv_obj_set_local_style_prop_meta(lv_obj_t * obj, lv_style_prop_t prop, uint16_t meta,
+                                       lv_style_selector_t selector)
+ {
++    extern void _lv_obj_pos_prop_set(lv_obj_t * obj, lv_style_prop_t prop);
++    if(lv_obj_style_get_selector_part(selector) == LV_PART_MAIN) _lv_obj_pos_prop_set(obj, prop);  /*CI600*/
+     lv_style_t * style = get_local_style(obj, selector);
+     lv_style_set_prop_meta(style, prop, meta);
+     lv_obj_refresh_style(obj, selector, prop);
+@@ -603,9 +625,21 @@ static _lv_obj_style_t * get_trans_style(lv_obj_t * obj,  lv_style_selector_t se
+ }
+ 
+ 
++/*CI600: a property's bit in prop1 of a style with several, see lv_style_set_prop_internal(). A style that can't have
++ *the property is skipped without a look through its properties. One with a single property has the property's id
++ *in prop1 and a constant one LV_STYLE_PROP_ANY, both go to lv_style_get_prop_inlined() as before*/
++#define LV_STYLE_PROP_BIT(prop) ((uint16_t)(1u << ((prop) % 15)))
++static inline bool style_may_have(const lv_style_t * style, uint8_t group, uint16_t bit)
++{
++    if((style->has_group & group) == 0) return false;
++    if(style->prop_cnt > 1 && style->prop1 != LV_STYLE_PROP_ANY && (style->prop1 & bit) == 0) return false;
++    return true;
++}
++
+ static lv_style_res_t get_prop_core(const lv_obj_t * obj, lv_part_t part, lv_style_prop_t prop, lv_style_value_t * v)
+ {
+     uint8_t group = 1 << _lv_style_get_prop_group(prop);
++    uint16_t bit = LV_STYLE_PROP_BIT(prop);
+     int32_t weight = -1;
+     lv_state_t state = obj->state;
+     lv_state_t state_inv = ~state;
+@@ -621,8 +655,8 @@ static lv_style_res_t get_prop_core(const lv_obj_t * obj, lv_part_t part, lv_sty
+         lv_part_t part_act = lv_obj_style_get_selector_part(obj->styles[i].selector);
+ 
+         if(part_act != part) continue;
+-        if((obj_style->style->has_group & group) == 0) continue;
+-        found = lv_style_get_prop(obj_style->style, prop, &value_tmp);
++        if(!style_may_have(obj_style->style, group, bit)) continue;
++        found = lv_style_get_prop_inlined(obj_style->style, prop, &value_tmp);
+         if(found == LV_STYLE_RES_FOUND) {
+             *v = value_tmp;
+             return LV_STYLE_RES_FOUND;
+@@ -633,7 +667,7 @@ static lv_style_res_t get_prop_core(const lv_obj_t * obj, lv_part_t part, lv_sty
+     }
+ 
+     for(; i < obj->style_cnt; i++) {
+-        if((obj->styles[i].style->has_group & group) == 0) continue;
++        if(!style_may_have(obj->styles[i].style, group, bit)) continue;
+         _lv_obj_style_t * obj_style = &obj->styles[i];
+         lv_part_t part_act = lv_obj_style_get_selector_part(obj->styles[i].selector);
+         lv_state_t state_act = lv_obj_style_get_selector_state(obj->styles[i].selector);
+@@ -646,7 +680,7 @@ static lv_style_res_t get_prop_core(const lv_obj_t * obj, lv_part_t part, lv_sty
+         /*Check only better candidates*/
+         if(state_act <= weight) continue;
+ 
+-        found = lv_style_get_prop(obj_style->style, prop, &value_tmp);
++        found = lv_style_get_prop_inlined(obj_style->style, prop, &value_tmp);
+ 
+         if(found == LV_STYLE_RES_FOUND) {
+             if(state_act == state) {
 diff --git a/src/draw/sw/lv_draw_sw_letter.c b/src/draw/sw/lv_draw_sw_letter.c
 index ee27bc6..621e690 100644
 --- a/src/draw/sw/lv_draw_sw_letter.c
@@ -102,20 +416,22 @@ index 78beaff..33ea77e 100644
  
      /*Check the cache first*/
 diff --git a/src/misc/lv_style.c b/src/misc/lv_style.c
-index 994be81..b9b5dfe 100644
+index 994be81..1ebb03f 100644
 --- a/src/misc/lv_style.c
 +++ b/src/misc/lv_style.c
-@@ -35,6 +35,9 @@ static void lv_style_set_prop_meta_helper(lv_style_prop_t prop, lv_style_value_t
+@@ -35,6 +35,11 @@ static void lv_style_set_prop_meta_helper(lv_style_prop_t prop, lv_style_value_t
   *  GLOBAL VARIABLES
   **********************/
  
 +/*CI600: the built-in properties any style has ever had, see lv_obj_get_style_prop()*/
 +uint32_t _lv_style_props_set[(_LV_STYLE_NUM_BUILT_IN_PROPS + 31) / 32];
++/*CI600: a property's bit in prop1 of a style with several, the same in lv_obj_style.c*/
++#define LV_STYLE_PROP_BIT(prop) ((uint16_t)(1u << ((prop) % 15)))
 +
  const uint8_t _lv_style_builtin_prop_flag_lookup_table[_LV_STYLE_NUM_BUILT_IN_PROPS] = {
      [LV_STYLE_WIDTH] =                    LV_STYLE_PROP_LAYOUT_REFR,
      [LV_STYLE_MIN_WIDTH] =                LV_STYLE_PROP_LAYOUT_REFR,
-@@ -423,6 +426,7 @@ static void lv_style_set_prop_internal(lv_style_t * style, lv_style_prop_t prop_
+@@ -423,6 +428,7 @@ static void lv_style_set_prop_internal(lv_style_t * style, lv_style_prop_t prop_
      }
  
      lv_style_prop_t prop_id = LV_STYLE_PROP_ID_MASK(prop_and_meta);
@@ -123,6 +439,23 @@ index 994be81..b9b5dfe 100644
  
      if(style->prop_cnt > 1) {
          uint8_t * tmp = style->v_p.values_and_props + style->prop_cnt * sizeof(lv_style_value_t);
+@@ -475,6 +481,7 @@ static void lv_style_set_prop_internal(lv_style_t * style, lv_style_prop_t prop_
+         props[0] = style->prop1;
+         values[0] = value_tmp;
+         value_adjustment_helper(prop_and_meta, value, &props[1], &values[1]);
++        style->prop1 = LV_STYLE_PROP_BIT(LV_STYLE_PROP_ID_MASK(props[0]));  /*CI600*/
+     }
+     else {
+         style->prop_cnt = 1;
+@@ -483,5 +490,8 @@ static void lv_style_set_prop_internal(lv_style_t * style, lv_style_prop_t prop_
+ 
+     uint8_t group = _lv_style_get_prop_group(prop_id);
+     style->has_group |= 1 << group;
++    /*CI600: with several properties prop1 is free, so it holds a bit per property modulo 15 for get_prop_core().
++     *15 keeps it under LV_STYLE_PROP_ANY, which marks a constant style. Removing a property leaves its bit*/
++    if(style->prop_cnt > 1) style->prop1 |= LV_STYLE_PROP_BIT(prop_id);
+ }
+ 
 diff --git a/src/widgets/lv_label.c b/src/widgets/lv_label.c
 index f4fbe01..f3b99f2 100644
 --- a/src/widgets/lv_label.c

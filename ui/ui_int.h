@@ -32,7 +32,24 @@ typedef struct {
   THEME_COLOURS(X)
 } theme_t;
 #undef X
+#define X(name) +1
+enum { N_COLOURS = THEME_COLOURS(X) };
+#undef X
 extern theme_t T;
+
+// Shared styles, ui_style.c. st_text(), st_bg() and st_font() set the colour or font first and change it later,
+// swapping the shared style, so an object never collects styles of its own. The ST_* ones go on with
+// lv_obj_add_style() and never change.
+void st_init(void);
+void st_theme(void);  // T changed, the colour styles follow and every object is told
+void st_text(lv_obj_t *o, lv_color_t c);
+void st_bg(lv_obj_t *o, lv_color_t c, lv_style_selector_t sel);
+void st_font(lv_obj_t *o, const lv_font_t *f);
+void st_radius(lv_obj_t *o, int r, lv_style_selector_t sel);
+void st_align(lv_obj_t *o, lv_text_align_t align);  // left is the default and sets nothing
+void st_border(lv_obj_t *o, int width);
+extern lv_style_t ST_OPAQUE, ST_CENTER, ST_RIGHT, ST_BORDER1, ST_BORDER2, ST_PAD_RIGHT8, ST_PAD_HOR4, ST_ARC_ROUND,
+    ST_TEXT_OPA70;
 extern const str_t THEME_NAMES[N_THEMES], MODE_NAMES[MODE_COUNT], DAY_NAMES[7];  // Monday first
 
 // screen_t flags
