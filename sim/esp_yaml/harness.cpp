@@ -3239,7 +3239,7 @@ static void screen_camera() {
   namespace shot = panel::shot;
   auto &cam = panel_screen;
   const int partial = (int) (shot::PARTIAL_MS * 1000 / PBUS_CYCLE_US) + 5;
-  CHECK_MSG(shot::S.quality == 80, "screen_camera.yaml didn't attach the camera, quality %d", shot::S.quality);
+  CHECK_MSG(shot::S.quality == 90, "screen_camera.yaml didn't attach the camera, quality %d", shot::S.quality);
   pn_saver(0);
   watch([] { return settled() && !panel::link::gaps.off; }, 2000);  // the gaps after polls back since earlier tests
   // The panel's loop between the windows too, so it fills both with tiles

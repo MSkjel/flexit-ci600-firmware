@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define LOW PBULK_ANSWER_MAX  // the next tile is drawn once the stream has less than this waiting
-#define BUF_SIZE (LOW + 400)  // the stream: what's waiting and the next tile. None in the sim is over 380 at q80
+#define BUF_SIZE (LOW + 720)  // the stream: what's waiting and the next tile. None in the sim is over 700 at q95
 #define AGAIN_MS 200          // a tile we asked for and that wasn't drawn by then is asked for again
 
 // pjpeg_tile()'s drop, more each time a tile doesn't fit. A block of only DC takes at most 26 bits, twice that with
