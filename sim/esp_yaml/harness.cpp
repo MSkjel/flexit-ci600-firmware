@@ -710,12 +710,8 @@ static void live_quiet(const std::string &name, size_t from) {
     CHECK_MSG(!logged(bad, from), "%s: '%s' in the log", name.c_str(), bad);
 }
 
-// The show for c's weather from its start, c.seconds of it with c.shots shots as live/WANT[_TAG]_n.ppm, and its
-// chance events due at once with chances. It's the one c wants, still on at the end, and asks the panel for no more
-// than it has.
-static void show(const Live &c, const char *tag = "", bool chances = false) {
-  size_t from = log_all.size();
-  std::string name = std::string(c.want) + (*tag ? "_" : "") + tag;
+// The weather picture for c, drawn again from its weather, time and landscape
+static void weather_of(const Live &c) {
   met::animate(false);
   met::Weather w;
   w.ok = true;
@@ -740,6 +736,15 @@ static void show(const Live &c, const char *tag = "", bool chances = false) {
   met::options.heater_pct = c.heat;
   pic::show("weather");
   met::animate(true);
+}
+
+// The show for c's weather from its start, c.seconds of it with c.shots shots as live/WANT[_TAG]_n.ppm, and its
+// chance events due at once with chances. It's the one c wants, still on at the end, and asks the panel for no more
+// than it has.
+static void show(const Live &c, const char *tag = "", bool chances = false) {
+  size_t from = log_all.size();
+  std::string name = std::string(c.want) + (*tag ? "_" : "") + tag;
+  weather_of(c);
   bool drawn = picture(name.c_str(), 6000) >= 0;
   CHECK_MSG(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
   if (chances)
@@ -2478,6 +2483,7 @@ static void met_date_line() {
 #include "live_town.inc"
 #include "live_days.inc"
 #include "live_rare.inc"
+#include "live_texts.inc"
 
 static void weather_scene() {
   step("the weather scene (packages/code/met/met_scene.h)");
@@ -3411,6 +3417,7 @@ int main(int argc, char **argv) {
   live_town();
   live_days();
   live_rare();
+  live_texts();
   live_kept();
   live_costs();
   weather_scene();
