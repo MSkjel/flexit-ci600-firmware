@@ -77,7 +77,7 @@ static void esp_got(void *u, uint16_t key, const uint8_t *b, int n) {
 // then the CX60 polls the panel 14 ms after the broadcast.
 static void cx60_cycle(void) {
   uint32_t t0 = now_us, end = t0 + PBUS_STATUS_LEN * PBUS_BYTE_US;
-  link_bus(STATUS, PBUS_STATUS_LEN, t0, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
+  link_bus(STATUS, PBUS_STATUS_LEN, true, t0, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
   uint8_t f[PBULK_FRAME_MAX], a[PBULK_ANSWER_FRAME_MAX];
   int n = pbulk_esp_window(&FL, pbus_status_left(1000, FL.end_us), f);
   if (n) {
@@ -91,7 +91,7 @@ static void cx60_cycle(void) {
                n, (unsigned) (idle - end));
     }
   }
-  link_bus(POLL, 8, end + 14000, end + 14000 + 9 * PBUS_BYTE_US, (end + 14000) / 1000);
+  link_bus(POLL, 8, true, end + 14000, end + 14000 + 9 * PBUS_BYTE_US, (end + 14000) / 1000);
   now_us += PBUS_CYCLE_US;
   sim_cycles++;
 }

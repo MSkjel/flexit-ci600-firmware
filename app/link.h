@@ -13,8 +13,9 @@ void link_action(int action);          // the user ran an action
 bool link_compatible(void);            // the ESP's HELLO had our link version
 const char *link_item_help(int item);  // item help from the ESP. Asks for it, NULL until it arrives
 
-// From the RX interrupt, a bus burst that isn't a link frame. Our own replies too. now_ms is the 1 ms tick.
-void link_bus(const uint8_t *b, int n, uint32_t start_us, uint32_t idle_us, uint32_t now_ms);
+// From the RX interrupt, a bus burst that isn't a link frame. Our own replies too. crc_ok = pbus_crc_ok(b, n),
+// now_ms is the 1 ms tick.
+void link_bus(const uint8_t *b, int n, bool crc_ok, uint32_t start_us, uint32_t idle_us, uint32_t now_ms);
 // From the RX interrupt, a frame to PBULK_ADDR. idle_us = line went idle after it. Returns answer length, 0 = none
 int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, uint8_t *answer);
 

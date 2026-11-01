@@ -38,7 +38,7 @@ void pn_poll(void) { link_poll(); }
 // A burst that isn't the link's, starting at start_us. Handed over the way the RX interrupt in hw/rs485.c does.
 void pn_bus(const uint8_t *b, int n, uint32_t start_us) {
   uint32_t idle = start_us + (uint32_t) (n + 1) * PBUS_BYTE_US;
-  link_bus(b, n, start_us, idle, idle / 1000);
+  link_bus(b, n, pbus_crc_ok(b, n), start_us, idle, idle / 1000);
 }
 // A link frame, the line going idle after it at idle_us. Returns the answer's length.
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer) {

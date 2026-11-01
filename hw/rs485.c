@@ -90,8 +90,8 @@ void USART1_IRQHandler(void) {
       }  // give the ESP's driver time to let go of the bus
       uint32_t start = board_us();
       send(r);
-      if (modbus)  // link.c needs to see our own reply on the bus too
-        link_bus(tx, r, start, start + (uint32_t) (r + 1) * PBUS_BYTE_US, board_ms());
+      if (modbus)  // link.c needs to see our own reply on the bus too. Its CRC is ours, so it's good
+        link_bus(tx, r, true, start, start + (uint32_t) (r + 1) * PBUS_BYTE_US, board_ms());
     }
   }
   board_isr_time(board_us() - entry);

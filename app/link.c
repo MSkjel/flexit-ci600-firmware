@@ -322,9 +322,9 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
     item_msg(K_ITEM_KIND(key), K_ITEM_INDEX(key), b, n);
 }
 
-void link_bus(const uint8_t *b, int n, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
+void link_bus(const uint8_t *b, int n, bool crc_ok, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
   if (ready)
-    pbus_panel_burst(&bus, b, n, start_us, idle_us, now_ms);
+    pbus_panel_burst(&bus, b, n, crc_ok, start_us, idle_us, now_ms);
 }
 
 int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, uint8_t *answer) {

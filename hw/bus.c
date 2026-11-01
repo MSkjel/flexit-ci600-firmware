@@ -14,12 +14,14 @@ int bus_burst(const uint8_t *rx, int n, uint32_t first_us, uint32_t idle_us, uin
       return link_bulk_frame(rx, n, idle_us, ms, tx);
     if (k && k < n && pbus_crc_ok(rx, k))
       skip = k;  // the CX60 sent right behind a link frame. That goes unanswered, the ESP sends it again
-    else if (pbus_is_cx60(rx + 1, n - 1))
+    else if (pbus_is_cx60(rx + 1, n - 1, pbus_crc_ok(rx + 1, n - 1)))
       skip = 1;  // a noise byte in front of a CX60 frame
     else
       return 0;  // a link frame cut short, or noise
   }
   *modbus = true;
-  link_bus(rx + skip, n - skip, first_us + (uint32_t) skip * PBUS_BYTE_US, idle_us, ms);
-  return mb_chunk(rx + skip, n - skip, tx);
+  // The CRC once, 25 us for a status frame. The checks of the burst below all go by it.
+  bool ok = pbus_crc_ok(rx + skip, n - skip);
+  link_bus(rx + skip, n - skip, ok, first_us + (uint32_t) skip * PBUS_BYTE_US, idle_us, ms);
+  return mb_chunk(rx + skip, n - skip, ok, tx);
 }

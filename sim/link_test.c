@@ -424,11 +424,11 @@ static uint8_t STATUS[PBUS_STATUS_LEN], POLL[8], POLL1[8], REPLY[13];
 // with nothing flagged, then the CX60's next frame next_us after the poll.
 static void bus_cycle(pbus_panel_t *w, uint32_t t_us, uint32_t quiet_us, uint32_t next_us) {
   uint32_t end = t_us + PBUS_STATUS_LEN * PBUS_BYTE_US;
-  pbus_panel_burst(w, STATUS, PBUS_STATUS_LEN, t_us, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
+  pbus_panel_burst(w, STATUS, PBUS_STATUS_LEN, true, t_us, end + PBUS_BYTE_US, (end + PBUS_BYTE_US) / 1000);
   uint32_t poll = end + quiet_us;
-  pbus_panel_burst(w, POLL, 8, poll, poll + 9 * PBUS_BYTE_US, poll / 1000);
-  pbus_panel_burst(w, REPLY, 13, poll + 1500, poll + 1500 + 14 * PBUS_BYTE_US, (poll + 1500) / 1000);
-  pbus_panel_burst(w, POLL1, 8, poll + next_us, poll + next_us + 9 * PBUS_BYTE_US, (poll + next_us) / 1000);
+  pbus_panel_burst(w, POLL, 8, true, poll, poll + 9 * PBUS_BYTE_US, poll / 1000);
+  pbus_panel_burst(w, REPLY, 13, true, poll + 1500, poll + 1500 + 14 * PBUS_BYTE_US, (poll + 1500) / 1000);
+  pbus_panel_burst(w, POLL1, 8, true, poll + next_us, poll + next_us + 9 * PBUS_BYTE_US, (poll + next_us) / 1000);
 }
 
 // Cycles until the panel lets the link or the gaps back in, -1 if never.
@@ -536,9 +536,9 @@ static void test_bus_order(void) {
   cx60_frames();
   pbus_gaps_t g;
   memset(&g, 0, sizeof g);
-  pbus_gaps_frame(&g, STATUS, PBUS_STATUS_LEN, 1000, 1000);
+  pbus_gaps_frame(&g, STATUS, PBUS_STATUS_LEN, true, 1000, 1000);
   uint32_t end = 1000 + PBUS_STATUS_LEN * PBUS_BYTE_NS / 1000;
-  pbus_gaps_frame(&g, POLL, 8, 0, end + 15000);  // could have started any time since 0
+  pbus_gaps_frame(&g, POLL, 8, true, 0, end + 15000);  // could have started any time since 0
   CHECK_EQ(g.step_lo_us, end);
   CHECK_EQ(g.end_lo_us, end + 8 * PBUS_BYTE_NS / 1000);
 }

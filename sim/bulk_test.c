@@ -399,12 +399,12 @@ int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, 
   return k;
 }
 
-void link_bus(const uint8_t *b, int n, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
-  pbus_panel_burst(&PBUS, b, n, start_us, idle_us, now_ms);
+void link_bus(const uint8_t *b, int n, bool crc_ok, uint32_t start_us, uint32_t idle_us, uint32_t now_ms) {
+  pbus_panel_burst(&PBUS, b, n, crc_ok, start_us, idle_us, now_ms);
 }
 
-int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
-  if (n != 8 || q[0] != 3 || !pbus_crc_ok(q, 8))  // a poll or a read for us
+int mb_chunk(const uint8_t *q, int n, bool crc_ok, uint8_t *r) {
+  if (n != 8 || q[0] != 3 || !crc_ok)  // a poll or a read for us
     return 0;
   int flags = 0;
   if (q[1] == 1 && !(q[2] << 8 | q[3])) {
@@ -475,7 +475,7 @@ static void panel(void) {
   if (panel_answer_n && now >= panel_answer_at && !TX[PANEL].on) {
     start_tx(PANEL, panel_answer, panel_answer_n, panel_answer[0] == PBULK_ADDR);
     if (panel_answer[0] != PBULK_ADDR)  // pbus sees our own replies too, like in hw/rs485.c
-      pbus_panel_burst(&PBUS, panel_answer, panel_answer_n, (uint32_t) (now / US), (uint32_t) (now / US),
+      pbus_panel_burst(&PBUS, panel_answer, panel_answer_n, true, (uint32_t) (now / US), (uint32_t) (now / US),
                        (uint32_t) (now / MS));
     panel_answer_n = 0;
   }
@@ -642,7 +642,7 @@ static void esp_frame(const uint8_t *f, int n) {
   // like frame_age_us(), the UART hands bytes over at its threshold or 2 bytes after the line goes quiet
   uint32_t age = (uint32_t) ((now - E.prev_start) / US) + ESP_ISR_US +
                  (uint32_t) (esp_threshold - 1 > 2 ? esp_threshold - 1 : 2) * PBUS_BYTE_US;
-  pbus_gaps_frame(&EG, f, n, (uint32_t) (now / US) - age - (uint32_t) n * PBUS_BYTE_US,
+  pbus_gaps_frame(&EG, f, n, pbus_crc_ok(f, n), (uint32_t) (now / US) - age - (uint32_t) n * PBUS_BYTE_US,
                   (uint32_t) (now / US) - (uint32_t) n * 86);  // a byte rounded down for the latest, like panel_link.h
   E.seen_at = now;
   if (pbus_is_status(f, n)) {
@@ -712,7 +712,8 @@ static int split(void) {
 static void esp(void) {
   esp_uart();
   if (E.own && !TX[ESP].on) {  // its frame is out, and flush() passes it to the frame callback
-    pbus_gaps_frame(&EG, TX[ESP].b, TX[ESP].n, (uint32_t) (E.tx_started / US), (uint32_t) (E.tx_started / US));
+    pbus_gaps_frame(&EG, TX[ESP].b, TX[ESP].n, pbus_crc_ok(TX[ESP].b, TX[ESP].n), (uint32_t) (E.tx_started / US),
+                    (uint32_t) (E.tx_started / US));
     E.seen_at = now;
     E.own = false;
     if (TX[ESP].bulk)

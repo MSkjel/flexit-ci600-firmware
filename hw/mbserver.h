@@ -34,7 +34,8 @@ extern mb_t MB;
 
 void mb_init(uint8_t addr, uint16_t version, uint8_t patch);
 int mb_frame(const uint8_t *req, int n, uint8_t *resp);  // returns the reply length, 0 = no reply
-int mb_chunk(const uint8_t *buf, int n, uint8_t *resp);  // one receive, which may hold several frames
+// One receive, which may hold several frames. crc_ok = pbus_crc_ok(buf, n), computed once by the caller
+int mb_chunk(const uint8_t *buf, int n, bool crc_ok, uint8_t *resp);
 
 // Main loop side. On the panel, mb_write(), mb_take_changed() and mb_load() need interrupts off, the interrupt
 // changes those words too. The rest, and reading one register or counter of MB, are single loads. Reads that must

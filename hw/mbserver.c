@@ -80,8 +80,9 @@ static int exception(const uint8_t *q, uint8_t *r, uint8_t code) {
   return pbus_put_crc(r, 3);
 }
 
-int mb_frame(const uint8_t *q, int n, uint8_t *r) {
-  if (n > MB_MAX_FRAME || !pbus_crc_ok(q, n)) {
+// A frame whose CRC checked out
+static int frame(const uint8_t *q, int n, uint8_t *r) {
+  if (n > MB_MAX_FRAME) {
     MB.errors++;
     return 0;
   }
@@ -200,9 +201,17 @@ static int frame_len(const uint8_t *q, int n) {
   return 0;
 }
 
-int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
-  if (pbus_crc_ok(q, n))
-    return mb_frame(q, n, r);  // a single frame
+int mb_frame(const uint8_t *q, int n, uint8_t *r) {
+  if (!pbus_crc_ok(q, n)) {
+    MB.errors++;
+    return 0;
+  }
+  return frame(q, n, r);
+}
+
+int mb_chunk(const uint8_t *q, int n, bool crc_ok, uint8_t *r) {
+  if (crc_ok)
+    return frame(q, n, r);  // a single frame
   int reply = 0, off = 0;
   bool junk = false;
   while (n - off >= 4) {
@@ -212,7 +221,7 @@ int mb_chunk(const uint8_t *q, int n, uint8_t *r) {
       junk = true;
       continue;
     }
-    int x = mb_frame(q + off, len, r);  // a request to us is always the last, since the CX60 then waits for us
+    int x = frame(q + off, len, r);  // a request to us is always the last, since the CX60 then waits for us
     if (x)
       reply = x;
     off += len;
