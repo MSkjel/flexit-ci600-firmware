@@ -40,17 +40,17 @@ $(BUILD)/ci600_full.bin: $(BUILD)/ci600.bin FORCE  # every time, STOCK may name 
 	@test -n "$(STOCK)" || { echo "needs STOCK=<the stock CI600 dump>"; exit 1; }
 	python3 $(ROOT)/tools/mkimage.py "$(STOCK)" $< $@
 
-# LVGL and the JPEG decoder at -O3, the pixel loops unrolled too. It costs flash, not RAM. picture.c and
-# anim_draw.c mark only their pixel loops -O3.
+# The pixel code at -O3: LVGL's software draw, masks and colors with their loops unrolled, and the JPEG decoder.
+# It costs flash, not RAM, so the rest of LVGL stays at -O2 like ours. picture.c and anim_draw.c mark only their
+# pixel loops -O3.
 # LVGL's warnings off, they aren't ours
-$(BUILD)/lib/%.o: CFLAGS += -O3 -w
+$(BUILD)/lib/%.o $(LV_COPY)/%.o: CFLAGS += -w
+PIXEL := $(BUILD)/lib/lvgl/src/draw/sw/%.o $(LV_COPY)/src/draw/sw/%.o $(BUILD)/lib/lvgl/src/draw/lv_draw_mask.o \
+         $(BUILD)/lib/lvgl/src/misc/lv_color.o
+$(PIXEL): CFLAGS += -O3 -funroll-loops
+$(BUILD)/lib/tjpgd/%.o: CFLAGS += -O3
 # or GCC turns their byte loops back into calls to themselves
 $(BUILD)/hw/mem.o: CFLAGS += -fno-tree-loop-distribute-patterns
-$(BUILD)/lib/lvgl/src/draw/sw/%.o $(LV_COPY)/src/draw/sw/%.o: CFLAGS += -funroll-loops
-$(BUILD)/lib/lvgl/src/draw/lv_draw_mask.o: CFLAGS += -funroll-loops
-$(BUILD)/lib/lvgl/src/misc/lv_color.o: CFLAGS += -funroll-loops
-# the patched LVGL files like the rest of it
-$(LV_COPY)/%.o: CFLAGS += -O3 -w
 
 flash: $(BUILD)/ci600_full.bin
 	python3 $(ROOT)/tools/flash.py $<

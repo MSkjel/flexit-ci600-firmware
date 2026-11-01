@@ -359,6 +359,26 @@ index ecffca9..50c6f32 100644
  
          if(found == LV_STYLE_RES_FOUND) {
              if(state_act == state) {
+diff --git a/src/draw/sw/lv_draw_sw.c b/src/draw/sw/lv_draw_sw.c
+index 1c0c6d4..633bb3c 100644
+--- a/src/draw/sw/lv_draw_sw.c
++++ b/src/draw/sw/lv_draw_sw.c
+@@ -48,12 +48,10 @@ void lv_draw_sw_init_ctx(lv_disp_drv_t * drv, lv_draw_ctx_t * draw_ctx)
+     draw_sw_ctx->base_draw.draw_rect = lv_draw_sw_rect;
+     draw_sw_ctx->base_draw.draw_bg = lv_draw_sw_bg;
+     draw_sw_ctx->base_draw.draw_letter = lv_draw_sw_letter;
+-    draw_sw_ctx->base_draw.draw_img_decoded = lv_draw_sw_img_decoded;
++    /*CI600: no draw_img_decoded, draw_polygon or draw_transform. The panel has no images, canvas, opacity or
++     *transformed layers, and left out here the linker drops 12 KB of flash. lv_draw_img_decoded() and
++     *lv_draw_transform() return on the NULL, lv_draw_polygon() is only called by lv_canvas, which is off*/
+     draw_sw_ctx->base_draw.draw_line = lv_draw_sw_line;
+-    draw_sw_ctx->base_draw.draw_polygon = lv_draw_sw_polygon;
+-#if LV_DRAW_COMPLEX
+-    draw_sw_ctx->base_draw.draw_transform = lv_draw_sw_transform;
+-#endif
+     draw_sw_ctx->base_draw.wait_for_finish = lv_draw_sw_wait_for_finish;
+     draw_sw_ctx->base_draw.buffer_copy = lv_draw_sw_buffer_copy;
+     draw_sw_ctx->base_draw.layer_init = lv_draw_sw_layer_create;
 diff --git a/src/draw/sw/lv_draw_sw_letter.c b/src/draw/sw/lv_draw_sw_letter.c
 index ee27bc6..621e690 100644
 --- a/src/draw/sw/lv_draw_sw_letter.c
