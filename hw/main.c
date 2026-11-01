@@ -43,6 +43,13 @@ uint32_t plat_entropy(void) { return board_entropy(); }
 
 static void flushed(void) { lv_disp_flush_ready(&drv); }
 
+// LVGL has the next strip drawn and waits for the DMA to finish the last one. Sleep instead of spinning, the DMA
+// interrupt or the 1 ms tick wakes it.
+static void wait(lv_disp_drv_t *d) {
+  (void) d;
+  board_sleep();
+}
+
 static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
   if (ui_held()) {
     lv_disp_flush_ready(d);
@@ -247,6 +254,7 @@ int main(void) {
   drv.hor_res = SCR_W;
   drv.ver_res = SCR_H;
   drv.flush_cb = flush;
+  drv.wait_cb = wait;
   drv.rounder_cb = shot_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
