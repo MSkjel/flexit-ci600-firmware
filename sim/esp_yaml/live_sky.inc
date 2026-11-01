@@ -237,7 +237,7 @@ static size_t pool_bytes(const live::Frames &sp) {
     if (anim::W.phase == anim::COUNT)
       anim::count();
     else
-      anim::make();
+      anim::make(0, true);
   }
   size_t n = anim::W.phase == anim::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
   anim::stop();

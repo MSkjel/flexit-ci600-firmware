@@ -470,6 +470,7 @@ struct Server {
   bool synced_ = true;  // a CX60 status broadcast has been heard since boot
   bool synced() const { return synced_; }
   uint32_t status_min_age_us() { return min_age_us; }
+  uint32_t until_status_end_us() { return UINT32_MAX; }  // the harness runs the loops clear of the status frames
   bool updating_ = false;  // a panel update from update.h owns the bus, the harness sets it
   bool updating() const { return updating_; }
   void send_frame(uint8_t *f, size_t len) {  // appends the Modbus CRC like the library's sendResponse()

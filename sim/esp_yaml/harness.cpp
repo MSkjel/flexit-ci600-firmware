@@ -43,13 +43,21 @@ void delayMicroseconds(uint32_t us) {
   now_us += us;
   waited_us += us;
 }
-// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap.
-static std::vector<std::pair<TaskFunction_t, void *>> tasks;
-BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
+// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap. An online
+// picture's question to its server is answered by the next loop, see run().
+static std::vector<std::pair<TaskFunction_t, void *>> tasks, asks;
+BaseType_t xTaskCreate(TaskFunction_t f, const char *name, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
   if (stack > ram_block)
     return 0;
-  tasks.push_back({f, arg});
+  (strcmp(name, "picture") ? tasks : asks).push_back({f, arg});
   return pdPASS;
+}
+static void run_asks() {
+  while (!asks.empty()) {
+    auto t = asks.front();
+    asks.erase(asks.begin());
+    t.first(t.second);
+  }
 }
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
@@ -207,6 +215,7 @@ static void run(int n) {  // n CX60 cycles of 110 ms
       now_us += 20000;
       yaml_loop();
       yaml_interval();
+      run_asks();
     }
     pn_poll();
     for (int r = 0; r < 0x200; r++)
@@ -1574,10 +1583,10 @@ static void anim_wandering() {
   const anim::Anim *ball = anim::find("ball");
   int bw = ball->w * ball->scale, bh = ball->h * ball->scale, zw = (bw * 1500 + 500) / 1000,
       zh = (bh * 1500 + 500) / 1000;
-  Look at;  // where it was last
-  auto wanders = [&](int n) {
+  Look at;                     // where it was last
+  auto wanders = [&](int n) {  // inside its area, and some way across it on x or y, wherever the random path goes
     bool inside = true;
-    int lo = 999, hi = -999;
+    int lo = 999, hi = -999, top = 999, bottom = -999;
     for (int i = 0; i < n; i++) {
       steps(50);
       at = look(2);
@@ -1585,8 +1594,10 @@ static void anim_wandering() {
       inside &= cx >= 100 && cx + zw <= 300 && cy >= 100 && cy + zh <= 230;
       lo = std::min(lo, cx);
       hi = std::max(hi, cx);
+      top = std::min(top, cy);
+      bottom = std::max(bottom, cy);
     }
-    return inside && hi - lo > 40;
+    return inside && (hi - lo > 40 || bottom - top > 40);
   };
   CHECK_MSG(wanders(200) && at.shown && at.deg == 0 && ball->copies[2].doing == ", wandering",
             "wandering in its area: at %d,%d, %d degrees", at.x, at.y, at.deg);
@@ -1785,7 +1796,7 @@ static void anim_cleared_while_made() {
   anim::start();
   while (anim::W.phase == anim::COUNT)
     anim::count();
-  anim::make();
+  anim::make(0, true);
   CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
   anim::clear("");
   CHECK_MSG(
@@ -2950,7 +2961,14 @@ static void online_fits() {
     cam_server.code = c;
     cam_server.size = n;
     cam_server.type = t;
+    o.answer = {o.url, c, n, t};
     return pic::fits("webcam", o);
+  };
+  auto download = [&] {  // asks the server, and starts the download with its answer
+    pic::download("webcam", o);
+    run_asks();
+    if (o.asking == pic::Online::ANSWERED)
+      pic::answered("webcam", o);
   };
   ram_free = 100 * 1024;
   CHECK_MSG(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
@@ -2971,13 +2989,18 @@ static void online_fits() {
   // a download that doesn't start doesn't grow the buffer
   webcam.fail = true;
   cam_server.size = 40000;
-  pic::download("webcam", o);
+  int heads = cam_server.heads;
+  pic::download("webcam", o);  // in a task of its own, the loop goes on meanwhile
+  CHECK_MSG(asks.size() == 1 && cam_server.heads == heads && o.asking == pic::Online::ASKING,
+            "the server asked in the loop: %d times, %u tasks", cam_server.heads - heads, (unsigned) asks.size());
+  run_asks();
+  pic::answered("webcam", o);
   webcam.fail = false;
   CHECK_MSG(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
-  pic::download("webcam", o);
+  download();
   int updates = webcam.updates, asked = cam_server.heads;
   cam_server.size = 50000;
-  pic::download("webcam", o);  // while that one still runs
+  download();  // while that one still runs
   webcam.decoding = false;
   CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
             "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
@@ -2987,7 +3010,7 @@ static void online_fits() {
   CHECK_MSG(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
   ram_free = 200 * 1024;
   cam_server.type = "image/png";
-  pic::download("webcam", o);
+  download();
   webcam.decoding = false;
   ram_free = 120 * 1024;
   CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
