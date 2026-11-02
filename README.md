@@ -234,7 +234,8 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
   this repo. Give it a stock flash dump with `--stock`, or set `CI600_FXUP_KEY` (64 hex digits). CI has it as a
   secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`. The newest `vX.Y.Z`
   tag is the version the panel reports, 0.0.0 without one. A build from a later commit gets the next patch level,
-  so the ESP can tell it from the release.
+  so the ESP can tell it from the release. The next release has that number too, so after flashing such a build,
+  turn Panel Firmware Force on to get that release.
 - **SWD:** see [docs/hardware.md](docs/hardware.md#swd).
 
 ### The ESP link
