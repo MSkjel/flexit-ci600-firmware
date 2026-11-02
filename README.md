@@ -131,8 +131,9 @@ from System > About.
 ## Going back to stock
 
 Needs SWD and a dump of a stock CI600's flash, which is [hard to get](docs/hardware.md#read-protection):
-`python3 tools/flash.py <the dump>`. It writes everything after the bootloader, which also clears this firmware's
-settings. Over the bus you'd need a stock update file, and that's not in here.
+`python3 tools/flash.py <the dump>`. It writes everything after the bootloader, and the bootloader too on a chip
+that has none, which also clears this firmware's settings. Over the bus you'd need a stock update file, and that's
+not in here.
 
 ## Disclaimer
 
