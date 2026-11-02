@@ -25,7 +25,8 @@ void rs485_init(void) {
 bool rs485_busy(void) { return USART1->CR1 & (USART_CR1_TXEIE | USART_CR1_TCIE); }
 
 // Early in the CX60's status broadcast, or with no CX60 at all. The rest of it and the gap after take 27 ms or
-// more, and we miss nothing there: the status comes again next cycle and the ESP sends its frame again.
+// more, and we miss nothing there: the status comes again next cycle and the ESP sends its frame again. A page
+// erase can take 40 ms, and then the CX60's first poll after the gap is lost too. It polls again next cycle.
 #define STATUS_EARLY 24  // bytes, 2 ms
 bool rs485_wait_quiet(uint32_t ms) {
   const pbus_panel_t *w = link_bus_state();
