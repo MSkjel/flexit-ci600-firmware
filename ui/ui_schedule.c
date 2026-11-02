@@ -32,7 +32,7 @@ static void week_build(lv_obj_t *b, intptr_t arg) {
   }
   week->now = mk_box(b, 0, 0, 2, WEEK_ROW - 2, T.text, 1);
   for (int m = MODE_MIN; m <= MODE_MAX; m++) {  // colour legend
-    int x = WEEK_X + (m - MODE_MIN) * 74;
+    int x = WEEK_X + (m - MODE_MIN) * 64;       // clear of the program's state on the right
     mk_box(b, x, 182, 10, 10, level_color(m), 3);
     lv_obj_set_pos(mk_label(b, &font_f12, T.dim, tr(MODE_NAMES[m])), x + 14, 179);
   }

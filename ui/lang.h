@@ -355,7 +355,6 @@
   X(SYSTEM, "System") \
   X(SYSTEM_HELP, "Versions, equipment, the bus and the keys.") \
   X(NO_CONTACT, "No contact") \
-  X(ADDRESS_CX60, "Address %d, CX60 %d.%02d") \
   X(ADDRESS, "Address %d") \
   X(ABOUT, "About") \
   X(ABOUT_HELP, "Versions and what is installed.") \
@@ -367,7 +366,7 @@
   X(EQUIP_EC_FANS, "EC fans") \
   X(EQUIP_EC_FANS_HELP, "Variable-speed fans, so each fan speed can be set as a percentage. Set by a DIP switch in " \
                         "the unit.") \
-  X(EQUIP_WATER_HEATER, "Water heater") \
+  X(EQUIP_WATER_HEATER, "Water coil") \
   X(EQUIP_WATER_HEATER_HELP, \
     "A water heating coil instead of an electric heater. Adds the return water sensor and frost protection. Set " \
     "by a DIP switch in the unit.") \
@@ -582,7 +581,7 @@
   X(ADVICE_RETURN_WATER_SENSOR, "The return water sensor is open or shorted.") \
   X(ADVICE_WATER_FROST, "The water coil was close to freezing. The supply fan stopped to protect it.") \
   X(ADVICE_ROTOR, "The rotor guard detects no rotation. Check the belt and the rotor motor.") \
-  X(ADVICE_FILTER_DUE, "Time to change the filters. Reset the timer under Filter afterwards.") \
+  X(ADVICE_FILTER_DUE, "Time to change the filters. Choose Filter > Filters changed afterwards.") \
   X(MON, "Mon") \
   X(TUE, "Tue") \
   X(WED, "Wed") \

@@ -369,9 +369,10 @@ static void hud_build(lv_obj_t *b, intptr_t arg) {
   for (int i = 0; i <= HUD_BOOST; i++) {
     int h = 10 + i * 11;
     hud.bars[i] = mk_box(card, 22 + i * 46, 104 - h, 32, h, T.surface2, 6);
+    int w = i == HUD_BOOST ? 60 : 46;  // the card has room on the right for Norwegian's Forsering
     hud.names[i] =
-        mk_text(card, &font_f12, T.dim, tr(i == HUD_BOOST ? S_BOOST : MODE_NAMES[i]), 46, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(hud.names[i], 15 + i * 46, 110);
+        mk_text(card, &font_f12, T.dim, tr(i == HUD_BOOST ? S_BOOST : MODE_NAMES[i]), w, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(hud.names[i], 38 + i * 46 - w / 2, 110);
   }
   ui_hints(S_CHANGE, S_DONE, S_DONE, S_NONE);
   ui_help(S_FAN_SPEED_HUD_HELP);

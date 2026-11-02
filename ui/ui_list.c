@@ -109,6 +109,8 @@ const char *number_only(const mitem_t *it, int32_t v, char *buf, size_t n) {
     return copy_text(buf, n, _(S_OFF));
   if (it->flags & (MF_TIME | MF_HOUR))
     return fmt_hm(buf, n, it->flags & MF_HOUR ? v * 60 : v);
+  if (it->flags & MF_MINUTE)
+    return sprint(buf, n, "%02d", (int) v), buf;
   return fmt_dec(buf, n, v, it->dec);
 }
 

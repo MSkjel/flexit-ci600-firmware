@@ -174,7 +174,9 @@ static void grid_temp(char *b, size_t n) {
 }
 static void grid_sched(char *b, size_t n) { copy_text(b, n, M.week_program ? _(S_PROGRAM_ON) : _(S_OFF)); }
 static void grid_alarms(char *b, size_t n) {
-  if (M.n_alarms)
+  if (M.bus_offline)
+    copy_text(b, n, _(S_NO_CONTACT));  // not all clear, just not known
+  else if (M.n_alarms)
     sprint(b, n, M.n_alarms == 1 ? _(S_ONE_ACTIVE) : _(S_N_ACTIVE), M.n_alarms);
   else
     copy_text(b, n, _(S_ALL_CLEAR));
@@ -197,10 +199,8 @@ static void grid_advanced(char *b, size_t n) { copy_text(b, n, _(S_INSTALLER_SET
 static void grid_system(char *b, size_t n) {
   if (M.bus_offline)
     copy_text(b, n, _(S_NO_CONTACT));
-  else if (M.cx60_version)
-    sprint(b, n, _(S_ADDRESS_CX60), M.bus_addr, M.cx60_version >> 8, M.cx60_version & 0xFF);
   else
-    sprint(b, n, _(S_ADDRESS), M.bus_addr);
+    sprint(b, n, _(S_ADDRESS), M.bus_addr);  // the CX60's version is in About
 }
 
 // ---------------------------------------------------------------- menus
@@ -319,7 +319,7 @@ MENU(m_saver, S_SCREENSAVER,
 
 MENU(m_time, S_DATE_AND_TIME,
      NUM(IC_CLOCK, S_HOUR, V_HOUR, S_HOUR_HELP),
-     NUM(IC_CLOCK, S_MINUTE, V_MINUTE, S_MINUTE_HELP),
+     NUM(IC_CLOCK, S_MINUTE, V_MINUTE, S_MINUTE_HELP, .flags = MF_MINUTE),
      NUM(IC_CALENDAR, S_DAY, V_DAY, S_DAY_HELP),
      NUM(IC_CALENDAR, S_MONTH, V_MONTH, S_MONTH_HELP),
      NUM(IC_CALENDAR, S_YEAR, V_YEAR, S_YEAR_HELP),
