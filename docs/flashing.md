@@ -20,7 +20,7 @@ know about, but I doubt it. If something's off, open an issue.
 ## From Home Assistant
 
 1. Set up the ESP with `packages/panel.yaml` and `packages/panel/update.yaml`, see
-   [the ESP docs](https://github.com/MSkjel/esphome-flexit-modbus-server/blob/panel/docs/panel.md#setup).
+   [the ESP docs](https://github.com/MSkjel/esphome-flexit-modbus-server/blob/main/docs/panel.md#setup).
 2. A stock panel is at address 1, so put the ESP at 2 (`flexit_address: "2"`). If the panel already runs this
    firmware, the ESP stays at 1.
 3. Press Flash Panel Firmware and watch Panel Firmware Update. It takes a few minutes, with the screen dark and
@@ -42,10 +42,13 @@ version you're on your own.
 ## With a USB RS-485 adapter
 
 If the ESP doesn't work out, a USB RS-485 adapter does the same thing from a PC. Grab `ci600.fxup` from the
-[latest release](https://github.com/MSkjel/flexit-ci600-firmware/releases/latest). Hook A, B and GND up to the bus
-like the ESP. The panel stays powered by the unit.
+[latest release](https://github.com/MSkjel/flexit-ci600-firmware/releases/latest), and this repo too (a clone or
+Code > Download ZIP), since the tool reads the flash layout from it. Hook A, B and GND up to the bus like the ESP,
+and unplug an ESP that's at address 1. The panel stays powered by the unit. In the repo's folder:
 
     uv run --with pyserial tools/fxupload.py --port /dev/ttyUSB0 ci600.fxup
+
+or without [uv](https://docs.astral.sh/uv/), `pip install pyserial` and `python3 tools/fxupload.py ...`.
 
 - `--port COM3` or so on Windows
 - `--panel-addr N` if the panel isn't at 1

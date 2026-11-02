@@ -171,12 +171,32 @@ static void trend_build(lv_obj_t *b, int first) {
   time_axis(b, TREND_W);
 }
 
+// A series' point k, true if it changed. The views update every second and the trends every 15 minutes, so the
+// chart is only redrawn when a point or the range changed.
+static bool set_point(lv_chart_series_t *s, int k, int v) {
+  if (s->y_points[k] == v)
+    return false;
+  s->y_points[k] = (lv_coord_t) v;
+  return true;
+}
+
+// Sets a Y axis' range, true if it changed. LVGL redraws the chart for a range set, the same or not
+static bool set_range(lv_obj_t *c, lv_chart_axis_t axis, int lo, int hi) {
+  const lv_chart_t *ch = (const lv_chart_t *) c;
+  if (ch->ymin[axis & 1] == lo && ch->ymax[axis & 1] == hi)
+    return false;
+  lv_chart_set_range(c, axis, (lv_coord_t) lo, (lv_coord_t) hi);
+  return true;
+}
+
 static void trend_update(void) {
   int lo = 1000, hi = -1000;
+  bool changed = false;
   for (int i = 0; i < 3; i++)
     for (int k = 0; k < TREND_LEN; k++) {
       int s = trend_series(i);
-      int v = trend->ser[i]->y_points[k] = (lv_coord_t) trend_value(s, M.trend[s][k]);
+      int v = trend_value(s, M.trend[s][k]);
+      changed |= set_point(trend->ser[i], k, v);
       if (v == TREND_NONE)
         continue;
       lo = v < lo ? v : lo;
@@ -190,7 +210,9 @@ static void trend_update(void) {
   hi = (hi < 0 ? hi - 49 : hi) / 50 * 50 + 50;
   if ((hi - lo) % 150)
     hi = lo + ((hi - lo) / 150 + 1) * 150;  // 3 equal steps of whole degrees
-  lv_chart_set_range(trend->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
+  bool ranged = set_range(trend->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
+  if (changed && !ranged)
+    lv_chart_refresh(trend->chart);
   for (int i = 0; i < 4; i++) {
     set_text(trend->ylbl[i], "%d" DEG, (hi - (hi - lo) * i / 3) / 10);
     lv_obj_set_pos(trend->ylbl[i], 2, CHART_Y + CHART_H * i / 3 - 8);
@@ -201,7 +223,6 @@ static void trend_update(void) {
   const str_t names[3] = {S_OUTDOOR, S_SUPPLY, panel ? S_ROOM : S_EXTRACT};
   for (int i = 0; i < 3; i++)
     set_text(trend->legend[i], "%s %s", tr(names[i]), fmt_temp(a, sizeof a, now[i], false));
-  lv_chart_refresh(trend->chart);
 }
 
 const view_t TREND_VIEW = {.build = trend_build, .update = trend_update, .help = S_TRENDS_VIEW_HELP};
@@ -254,6 +275,7 @@ static int nice_step(int n) {
 }
 
 static void sens_update(void) {
+  bool changed = false;
   for (int i = 0; i < sens->n; i++) {
     const item_trend_t *t = trend_of(sens->id[i]);
     const item_t *it = item_by_id(sens->id[i]);
@@ -276,10 +298,10 @@ static void sens_update(void) {
         break;
       step = nice_step(step + 1);
     }
-    lv_chart_set_range(sens->chart, i ? LV_CHART_AXIS_SECONDARY_Y : LV_CHART_AXIS_PRIMARY_Y, 0, 4 * SENS_STEP);
+    changed |= set_range(sens->chart, i ? LV_CHART_AXIS_SECONDARY_Y : LV_CHART_AXIS_PRIMARY_Y, 0, 4 * SENS_STEP);
     for (int k = 0; k < TREND_LEN; k++) {
       int v = t ? t->pt[k] : TREND_NONE;
-      sens->ser[i]->y_points[k] = v == TREND_NONE ? TREND_NONE : (lv_coord_t) ((v - base) * SENS_STEP / step);
+      changed |= set_point(sens->ser[i], k, v == TREND_NONE ? TREND_NONE : (v - base) * SENS_STEP / step);
     }
     int dec = it ? it->dec : 0, div = 1;
     while (dec && step % (div * 10) == 0) {  // only the decimals the step needs
@@ -288,13 +310,14 @@ static void sens_update(void) {
     }
     char a[24];
     for (int k = 0; k < 5; k++)
-      lv_label_set_text(sens->ylbl[i][k], fmt_dec(a, sizeof a, (base + (4 - k) * step) / div, (uint8_t) dec));
+      set_text(sens->ylbl[i][k], "%s", fmt_dec(a, sizeof a, (base + (4 - k) * step) / div, (uint8_t) dec));
     if (it && M.esp_online)
       set_text(sens->legend[i], "%s %s", it->label, item_text(a, sizeof a, it, true));
     else
-      lv_label_set_text(sens->legend[i], it ? it->label : "");
+      set_text(sens->legend[i], "%s", it ? it->label : "");
   }
-  lv_chart_refresh(sens->chart);
+  if (changed)
+    lv_chart_refresh(sens->chart);
 }
 
 const view_t SENSORS_VIEW = {.build = sens_build,

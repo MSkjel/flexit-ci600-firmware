@@ -229,6 +229,45 @@ static void test_bus_clock(void) {
   CHECK_EQ(M.hh, 2);
 }
 
+// ---------------------------------------------------------------- the temperatures
+// A sensor that isn't there reads about -1700, and the extract one goes with its setting once that's known. The
+// indoor temperature falls back to the panel's own sensor.
+static void test_temperatures(void) {
+  model_defaults();
+  unit_init();
+  M.t_room = 214;
+  cx60(0x0C3, 198);
+  cx60(0x0C4, 221);  // before the setting has come, as in a capture that starts late
+  cx60(0x0C5, (uint16_t) -320);
+  unit_poll();
+  CHECK_EQ(M.t_supply, 198);
+  CHECK_EQ(M.t_extract, 221);
+  CHECK_EQ(M.t_outdoor, -320);
+  CHECK_EQ(indoor_temp(), 221);
+  cx60(0x136, 1);
+  cx60(0x0C4, (uint16_t) -1687);
+  cx60(0x0C3, 1500);
+  cx60(0x0C5, (uint16_t) -450);  // a cold night, not a fault
+  unit_poll();
+  CHECK_EQ(M.t_extract, T_NONE);
+  CHECK_EQ(M.t_supply, T_NONE);
+  CHECK_EQ(M.t_outdoor, -450);
+  CHECK_EQ(indoor_temp(), 214);
+  CHECK_EQ(heat_recovery(), -1);
+  cx60(0x0C4, 221);
+  unit_poll();
+  CHECK_EQ(M.t_extract, 221);
+  cx60(0x136, 0);  // the sensor switched off in the installer's settings
+  unit_poll();
+  CHECK_EQ(M.t_extract, T_NONE);
+  cx60(0x0C4, 225);
+  unit_poll();
+  CHECK_EQ(M.t_extract, T_NONE);
+  cx60(0x136, 1);  // and on again, the last reading counts at once
+  unit_poll();
+  CHECK_EQ(M.t_extract, 225);
+}
+
 // ---------------------------------------------------------------- the installer's settings and the manual tests
 static void test_advanced(void) {
   model_defaults();
@@ -505,11 +544,8 @@ static void test_unit(void) {
 }
 
 const check_test_t UNIT_TESTS[] = {
-    {"mbserver", test_mbserver},
-    {"bus_burst", test_bus_burst},
-    {"bus_clock", test_bus_clock},
-    {"unit", test_unit},
-    {"advanced", test_advanced},
-    {"bus_values", test_bus_values},
-    {0},
+    {"mbserver", test_mbserver},         {"bus_burst", test_bus_burst},
+    {"bus_clock", test_bus_clock},       {"unit", test_unit},
+    {"temperatures", test_temperatures}, {"advanced", test_advanced},
+    {"bus_values", test_bus_values},     {0},
 };

@@ -1,12 +1,5 @@
 // The rare encounters, see met_live_rare.h
 
-// The show's own timers go ten minutes on, so an encounter has the time
-static void show_later() {
-  for (auto &t : live::R.timers)
-    if (!t.rare)
-      t.at = millis() + 600000;
-}
-
 // Encounter k over the show that's on, seconds of it with shots as live/TAG_n.ppm. It comes, takes no more than the
 // panel has, and goes again. Where it went.
 static Path rare(int k, const char *sprite, const char *tag, int seconds, int shots) {
@@ -147,6 +140,16 @@ static void live_rare() {
   }
   CHECK_MSG(off <= 2 && lo >= e.ridge_l && hi + 16 <= e.ridge_r && hi - lo >= 40,
             "the troll %d px off the ridge, from %d to %d, the ridge %d to %d", off, lo, hi, e.ridge_l, e.ridge_r);
+  // and a lynx out of the forest at the near hill, short of the cabin
+  CHECK_MSG(live::RARE[14].fits(e), "dusk: no lynx, the forest's edge at %d", e.edge.x);
+  p = rare(14, "lynx", "lynx", 26, 4);
+  lo = met::W, hi = 0;
+  for (const Look &l : p) {
+    lo = std::min(lo, (int) l.x);
+    hi = std::max(hi, (int) l.x);
+  }
+  CHECK_MSG(lo >= e.edge.x && hi + 8 < e.roof_x - 13 && hi - lo >= 26,
+            "the lynx from %d to %d, the forest to %d, the cabin at %d", lo, hi, e.edge.x, e.roof_x);
   show({"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 10, 5, 17, 10), met::G_MOUNTAINS, 0, 10, 0},
        "mountains");
   CHECK_MSG(!live::RARE[7].fits(live::SEEN), "the mountains at dusk: a troll from %d to %d", live::SEEN.ridge_l,
@@ -176,6 +179,51 @@ static void live_rare() {
   show({"Gulls over the cabin", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 8, 15, 19, 15), met::G_COAST, 0, 10, 0},
        "dusk");
   CHECK_MSG(live::RARE[4].fits(live::SEEN) && !live::RARE[6].fits(live::SEEN), "after sunset: a longship");
+  // the huldra at the forest's edge on a summer evening with the sun just down, but not by the sea
+  show({"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 7, 10, 21), met::G_HILLS, 0, 10, 0},
+       "summer_evening");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[10].fits(e), "a summer evening: no huldra, the sun at %.1f", e.at.sun_el);
+  rare(10, "huldra", "huldra", 14, 4);
+  e.coast = true;
+  CHECK_MSG(!live::RARE[10].fits(e), "the huldra by the sea");
+  // a nisse on his way to the cabin over the snow on a December night before Christmas Eve
+  show({"A cosy evening", "cloudy", 0, 70, 0, 0, 3, -5, 0, utc(2026, 12, 10, 18), met::G_HILLS, 90, 10, 0}, "advent");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[11].fits(e), "a December night: no nisse, snow lying %d", e.at.white);
+  rare(11, "nisse", "nisse", 16, 4);
+  e.at.day = 24;
+  CHECK_MSG(!live::RARE[11].fits(e), "a nisse on Christmas Eve, the day's own show");
+  // draugen on the open water on a windy night
+  show({"Lighthouse and the coastal express", "cloudy", 0, 0, 60, 0, 12, 6, 0, utc(2026, 11, 10, 20), met::G_COAST, 0,
+        10, 0},
+       "windy");
+  CHECK_MSG(live::RARE[12].fits(live::SEEN), "a windy night on the coast: no draugen, open water %d to %d",
+            live::SEEN.sea_l, live::SEEN.sea_r);
+  rare(12, "draugen", "draugen", 46, 4);
+  // orcas off the coast up north in the winter, but not in the south
+  show({"Gulls over the cabin", "cloudy", 0, 0, 60, 0, 3, 2, 0, utc(2026, 1, 12, 11), met::G_COAST, 0, 10, 0, 69.65,
+        18.96},
+       "tromso");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[13].fits(e), "Tromso in January: no orcas, open water %d to %d, light %.2f", e.sea_l, e.sea_r,
+            e.at.light);
+  rare(13, "orcas", "orcas", 16, 4);
+  e.at.north = false;
+  CHECK_MSG(!live::RARE[13].fits(e), "orcas in the south");
+  // a sea eagle's catch off the coast on a calm day
+  show({"Sailboat, glitter and eiders", "clearsky_day", 0, 0, 0, 0, 3, 14, 0, utc(2026, 9, 20, 15), met::G_COAST, 0, 10,
+        0},
+       "catch");
+  CHECK_MSG(live::RARE[15].fits(live::SEEN), "a calm day on the coast: no sea eagle");
+  rare(15, "seaeaglecatch", "seaeaglecatch", 14, 6);
+  // a ski jumper down onto the snowy hills beside the forest
+  show({"A skier, and snow off the spruces", "clearsky_day", 0, 0, 0, 0, 3, -5, 0, utc(2026, 2, 7, 11), met::G_HILLS, 0,
+        10, 0},
+       "jump");
+  CHECK_MSG(live::RARE[16].fits(live::SEEN), "a snowy day on the hills: no ski jumper, landing at %d",
+            live::SEEN.jump_x);
+  rare(16, "skijumper", "skijumper", 12, 8);
   // the rolls: in a gale something blows by before long, on a calm day nothing ever does
   show({"Light rain", "rain", 0, 70, 90, 1.5f, 19, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 0, 10, 0}, "gale_rolls");
   show_later();
@@ -215,7 +263,8 @@ static void live_rare() {
   log_level = 0;
   float most = 0;
   for (const char *n :
-       {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf", "witch"})
+       {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf", "witch", "huldra",
+        "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"})
     for (float light = 0.3f; light < 1.01f; light += 0.05f) {
       live::Frames sp;
       live::make_sprite(n, sp);

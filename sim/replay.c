@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
       ours_n = mb_frame(q, n, ours);
     } else {
       if (glued) {
-        ours_n = mb_chunk(chunk, chunk_n, ours);
+        ours_n = mb_chunk(chunk, chunk_n, pbus_crc_ok(chunk, chunk_n), ours);
         chunk_n = 0;
       }
       int n = unhex(hex, theirs, sizeof theirs);

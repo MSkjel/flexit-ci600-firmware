@@ -23,7 +23,8 @@ enum {
   MF_DANGER = 8,       // can't be undone, so OK has to be held
   MF_POP_PARENT = 16,  // the action removes what the list is about, so close the list too
   MF_HOUR = 32,        // an hour of the day, shown as a time
-  MF_ALARMS = 64       // main menu entry, its status line in the alarm colour while there are alarms
+  MF_ALARMS = 64,      // main menu entry, its status line in the alarm colour while there are alarms
+  MF_MINUTE = 128      // a minute of the hour, two digits like on a clock
 };
 
 typedef struct menu menu_t;

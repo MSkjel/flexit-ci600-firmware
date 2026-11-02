@@ -81,5 +81,5 @@ With an ST-LINK and `pip install pyocd`:
 
     make -C hw flash STOCK=<a stock flash dump>
 
-The bootloader comes from the dump, since the chip is erased once the protection is off. Leave the ST-LINK's
-3.3 V off when the unit powers the panel. SWD keeps the panel's settings.
+SWD needs the protection off, which erases the chip, so flash.py puts the dump's bootloader back when the chip has
+none. Leave the ST-LINK's 3.3 V off when the unit powers the panel. SWD keeps the panel's settings.

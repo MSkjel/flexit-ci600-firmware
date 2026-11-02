@@ -26,6 +26,14 @@
 #define R_ST_EXTRACT 0x0C4
 #define R_ST_OUTDOOR 0x0C5
 #define R_ST_WATER 0x0C6
+// A temperature from the CX60, or none: a sensor that isn't there reads about -1700, far below anything air or
+// return water can be, and the extract one counts for nothing while its setting is known to be off
+#define T_SENSOR_MIN (-600)
+#define T_SENSOR_MAX 1200
+static int16_t sensor_temp(int16_t v, bool fitted) {
+  return fitted && v >= T_SENSOR_MIN && v <= T_SENSOR_MAX ? v : T_NONE;
+}
+static bool extract_fitted(void) { return M.adv.extract_sensor || !mb_written(R_EXTRACT_SENSOR); }
 #define R_ST_COOL 0x0C7
 #define R_ST_ROTOR 0x0C8
 #define R_ST_HEAT 0x0C9
@@ -270,16 +278,16 @@ static void status_changed(uint16_t r, int16_t v) {
         M.setpoint_now = v;
       break;
     case R_ST_SUPPLY:
-      M.t_supply = v;
+      M.t_supply = sensor_temp(v, true);
       break;
     case R_ST_EXTRACT:
-      M.t_extract = v;
+      M.t_extract = sensor_temp(v, extract_fitted());
       break;
     case R_ST_OUTDOOR:
-      M.t_outdoor = v;
+      M.t_outdoor = sensor_temp(v, true);
       break;
     case R_ST_WATER:
-      M.t_water = HAS(FEAT_WATER_HEATER) ? v : T_NONE;
+      M.t_water = sensor_temp(v, HAS(FEAT_WATER_HEATER));
       break;
     case R_ST_COOL:
       M.cool_pct = (uint8_t) v;
@@ -352,6 +360,8 @@ static void reg_changed(uint16_t r) {
     val_update(id, v);
     set_fan_ext();  // in case it was a fan %
   }
+  if (id == V_EXTRACT_SENSOR && mb_written(R_ST_EXTRACT))  // the extract temperature comes and goes with it
+    M.t_extract = sensor_temp(unit_reg(R_ST_EXTRACT), extract_fitted());
 }
 
 // The CX60 sends its clock at start-up and whenever a panel writes it, which every panel does once a minute. We

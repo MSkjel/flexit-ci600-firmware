@@ -6,8 +6,9 @@
 
 Writes from the app header page, which mkimage.py copies from the stock dump, to the end of the firmware, so the
 settings pages are kept. A stock dump goes back whole, which clears our settings. The bootloader pages are left
-alone. A running panel browns out while flashing, so we turn the backlight off and reset and halt the chip first.
-More on that in swd.py.
+alone, unless the chip has none: taking the read protection off erases it, and then it comes from the image. A
+running panel browns out while flashing, so we turn the backlight off and reset and halt the chip first. More on
+that in swd.py.
 """
 
 import argparse
@@ -45,26 +46,30 @@ def main():
     end = image_end(full)
     if FLASH + end > layout.SETTINGS:  # the stock app runs past where our settings start
         end = len(full)
-    data = full[START:end]
 
     with swd.session(args.frequency) as s:
         t = s.target
         if t.read32(0xE0042000) & 0xFFF != 0x414:
             sys.exit("not an STM32F103 high-density part")
         boot = bytes(t.read_memory_block8(FLASH, START))
-        if boot != full[:START]:
+        start = START
+        if boot == b"\xff" * START:
+            print("the chip has no bootloader, so the image's goes on too")
+            start = 0
+        elif boot != full[:START]:
             print("note: the bootloader on the chip differs from the one in the image (it's left as it is)")
+        data = full[start:end]
         t.write32(TIM1_CCR1, 0)  # backlight off
         time.sleep(0.05)
         t.reset_and_halt()
         t.write32(swd.DBGMCU_CR, 0x107)  # freeze only the watchdog, see swd.py
-        print("writing 0x%08x-0x%08x (%d pages)" % (FLASH + START, FLASH + end, len(data) // PAGE))
+        print("writing 0x%08x-0x%08x (%d pages)" % (FLASH + start, FLASH + end, len(data) // PAGE))
         t0 = time.time()
-        FileProgrammer(s).program(io.BytesIO(data), file_format="bin", base_address=FLASH + START)
-        back = bytes(t.read_memory_block8(FLASH + START, len(data)))
+        FileProgrammer(s).program(io.BytesIO(data), file_format="bin", base_address=FLASH + start)
+        back = bytes(t.read_memory_block8(FLASH + start, len(data)))
         if back != data:
             bad = next(i for i in range(len(data)) if back[i] != data[i])
-            sys.exit("verify failed at 0x%08x" % (FLASH + START + bad))
+            sys.exit("verify failed at 0x%08x" % (FLASH + start + bad))
         print("written and verified in %.1f s" % (time.time() - t0))
         t.write32(RCC_CSR, 1 << 24)  # clear the reset flags so a later brown-out can be seen
         t.reset()

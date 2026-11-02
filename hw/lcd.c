@@ -27,6 +27,7 @@ static void spi_mode(uint32_t bits) {
 static uint32_t spi_speed(uint32_t want) { return SPI_CR1_BR_DIV(lcd_spi_div(board_hz(), want)); }
 // Registers and pixels, Fast display's pixels, and the pixels' now. Set by lcd_init(), which runs after the clock
 static uint32_t reg_br, fast_br, pixel_br;
+static int win_x1, win_x2;  // the column window in the controller, -1 = unknown. lcd_init() sets them
 
 // Deselecting waits until the last byte is out.
 static void cs(int on) {
@@ -148,6 +149,7 @@ bool lcd_init(void) {
   spi_mode(reg_br);
   RCC->AHBENR |= RCC_AHBENR_DMA1EN;
   irq_enable(IRQ_DMA1_CH3);
+  win_x1 = win_x2 = -1;
   return known;
 }
 
@@ -163,8 +165,12 @@ void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(v
   lcd_wait();
   wreg(0x50, (uint16_t) y1);
   wreg(0x51, (uint16_t) y2);
-  wreg(0x52, (uint16_t) x1);
-  wreg(0x53, (uint16_t) x2);
+  if (x1 != win_x1 || x2 != win_x2) {  // the strips of a redraw share their columns
+    wreg(0x52, (uint16_t) x1);
+    wreg(0x53, (uint16_t) x2);
+    win_x1 = x1;
+    win_x2 = x2;
+  }
   wreg(0x20, (uint16_t) y1);
   wreg(0x21, (uint16_t) x1);
   index_reg(0x22);  // GRAM

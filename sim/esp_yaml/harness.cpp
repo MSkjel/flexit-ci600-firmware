@@ -43,13 +43,21 @@ void delayMicroseconds(uint32_t us) {
   now_us += us;
   waited_us += us;
 }
-// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap.
-static std::vector<std::pair<TaskFunction_t, void *>> tasks;
-BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
+// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap. An online
+// picture's question to its server is answered by the next loop, see run().
+static std::vector<std::pair<TaskFunction_t, void *>> tasks, asks;
+BaseType_t xTaskCreate(TaskFunction_t f, const char *name, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
   if (stack > ram_block)
     return 0;
-  tasks.push_back({f, arg});
+  (strcmp(name, "picture") ? tasks : asks).push_back({f, arg});
   return pdPASS;
+}
+static void run_asks() {
+  while (!asks.empty()) {
+    auto t = asks.front();
+    asks.erase(asks.begin());
+    t.first(t.second);
+  }
 }
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
@@ -207,6 +215,7 @@ static void run(int n) {  // n CX60 cycles of 110 ms
       now_us += 20000;
       yaml_loop();
       yaml_interval();
+      run_asks();
     }
     pn_poll();
     for (int r = 0; r < 0x200; r++)
@@ -752,6 +761,38 @@ static void show(const Live &c, const char *tag = "", bool chances = false) {
   play(c.seconds, c.shots, name);
   live_quiet(name, from);
   CHECK_MSG(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
+}
+
+// The show's own timers go ten minutes on, so what's tried now has the time
+static void show_later() {
+  for (auto &t : live::R.timers)
+    if (!t.rare)
+      t.at = millis() + 600000;
+}
+
+// The panel's animations
+static int slots_used() {
+  int n = 0;
+  for (auto &a : anim::anims)
+    n += !a.name.empty();
+  return n;
+}
+
+// Each of the show's visitors in turn, its other timers put off, as live/TAG_K_n.ppm with shots of each. Each asks
+// the panel for no more than it has, and lets go of what it took once it's gone.
+static void visits(const char *tag, int shots = 2) {
+  for (int k = 0; k < live::R.visits; k++) {
+    show_later();
+    size_t from = log_all.size();
+    int slots = slots_used();
+    uint32_t ms = live::R.visit(k);
+    if (!ms)
+      continue;
+    std::string name = std::string(tag) + "_" + std::to_string(k);
+    play((int) (ms + 999) / 1000 + 1, shots, name);
+    live_quiet(name, from);
+    CHECK_MSG(slots_used() <= slots, "%s: %d animations after the visit, %d before", name.c_str(), slots_used(), slots);
+  }
 }
 
 // ---------------------------------------------------------------- online pictures
@@ -1574,10 +1615,10 @@ static void anim_wandering() {
   const anim::Anim *ball = anim::find("ball");
   int bw = ball->w * ball->scale, bh = ball->h * ball->scale, zw = (bw * 1500 + 500) / 1000,
       zh = (bh * 1500 + 500) / 1000;
-  Look at;  // where it was last
-  auto wanders = [&](int n) {
+  Look at;                     // where it was last
+  auto wanders = [&](int n) {  // inside its area, and some way across it on x or y, wherever the random path goes
     bool inside = true;
-    int lo = 999, hi = -999;
+    int lo = 999, hi = -999, top = 999, bottom = -999;
     for (int i = 0; i < n; i++) {
       steps(50);
       at = look(2);
@@ -1585,8 +1626,10 @@ static void anim_wandering() {
       inside &= cx >= 100 && cx + zw <= 300 && cy >= 100 && cy + zh <= 230;
       lo = std::min(lo, cx);
       hi = std::max(hi, cx);
+      top = std::min(top, cy);
+      bottom = std::max(bottom, cy);
     }
-    return inside && hi - lo > 40;
+    return inside && (hi - lo > 40 || bottom - top > 40);
   };
   CHECK_MSG(wanders(200) && at.shown && at.deg == 0 && ball->copies[2].doing == ", wandering",
             "wandering in its area: at %d,%d, %d degrees", at.x, at.y, at.deg);
@@ -1783,9 +1826,10 @@ static void anim_cleared_while_made() {
   anim::show("edge");
   anim::W.a = anim::find("edge");
   anim::start();
-  while (anim::W.phase == anim::COUNT)
+  while (anim::W.f < anim::W.a->src->frames)
     anim::count();
-  anim::make();
+  anim::palette();
+  anim::make(0, true);
   CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
   anim::clear("");
   CHECK_MSG(
@@ -1916,8 +1960,9 @@ static void anim_long_frame() {
   anim::show("long");
   anim::W.a = anim::find("long");
   anim::start();
-  while (anim::W.phase == anim::COUNT)
+  while (anim::W.f < anim::W.a->src->frames)
     anim::count();
+  anim::palette();
   anim::Anim &a = *anim::W.a;
   uint32_t seed = 5;
   for (auto &b : anim::W.frame)
@@ -2028,7 +2073,8 @@ static void anim_timing() {
 // until it's shown again or a hello.
 static void anim_without_ram() {
   step("animations without the RAM");
-  ram_free = 45 * 1024;
+  size_t tls = panel::requests * panel::REQUEST_RAM;  // met's request from boot, never run here, holds its share
+  ram_free = 45 * 1024 + tls;
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
   run_until(anims_sent, 3000);
@@ -2036,7 +2082,7 @@ static void anim_without_ram() {
                 logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
             "ball without the RAM for full size: half %d", anim::find("ball")->half);
   anim::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
-  ram_free = 30 * 1024;
+  ram_free = 30 * 1024 + tls;
   anim::show("ball2x");
   run(3);
   CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
@@ -2751,7 +2797,7 @@ static void unknown_names() {
   anim::show("nope");
   run(10);
   CHECK_MSG(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
-  CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state.rfind("Shown: dusk", 0) == 0 &&
+  CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state == "nope: no picture with that name" &&
                 panel_pic() == 2 && panel_anim_ball.state && anim_ready(),
             "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
             panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
@@ -2938,7 +2984,8 @@ static void online_downloads() {
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK_MSG(webcam.updates == 4 && panel_picture_status.state == "webcam: couldn't download it, trying again later",
+  CHECK_MSG(webcam.updates == 4 && panel_picture_status.state ==
+                                       "webcam: couldn't download it, trying again in 29 s, or when it's picked again",
             "after a failed download: %d downloads, '%s'", webcam.updates, panel_picture_status.state.c_str());
 }
 
@@ -2950,7 +2997,14 @@ static void online_fits() {
     cam_server.code = c;
     cam_server.size = n;
     cam_server.type = t;
+    o.answer = {o.url, c, n, t};
     return pic::fits("webcam", o);
+  };
+  auto download = [&] {  // asks the server, and starts the download with its answer
+    pic::download("webcam", o);
+    run_asks();
+    if (o.asking == pic::Online::ANSWERED)
+      pic::answered("webcam", o);
   };
   ram_free = 100 * 1024;
   CHECK_MSG(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
@@ -2971,13 +3025,18 @@ static void online_fits() {
   // a download that doesn't start doesn't grow the buffer
   webcam.fail = true;
   cam_server.size = 40000;
-  pic::download("webcam", o);
+  int heads = cam_server.heads;
+  pic::download("webcam", o);  // in a task of its own, the loop goes on meanwhile
+  CHECK_MSG(asks.size() == 1 && cam_server.heads == heads && o.asking == pic::Online::ASKING,
+            "the server asked in the loop: %d times, %u tasks", cam_server.heads - heads, (unsigned) asks.size());
+  run_asks();
+  pic::answered("webcam", o);
   webcam.fail = false;
   CHECK_MSG(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
-  pic::download("webcam", o);
+  download();
   int updates = webcam.updates, asked = cam_server.heads;
   cam_server.size = 50000;
-  pic::download("webcam", o);  // while that one still runs
+  download();  // while that one still runs
   webcam.decoding = false;
   CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
             "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
@@ -2987,7 +3046,7 @@ static void online_fits() {
   CHECK_MSG(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
   ram_free = 200 * 1024;
   cam_server.type = "image/png";
-  pic::download("webcam", o);
+  download();
   webcam.decoding = false;
   ram_free = 120 * 1024;
   CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
