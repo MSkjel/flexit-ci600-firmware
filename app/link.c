@@ -73,10 +73,11 @@ static void got_hello(uint32_t v) {
   pic_ack = -1;
   if (v & HELLO_ASK) {
     plink_send(&queue, K_HELLO, hello_value());  // goes ahead of the waiting values
-    if (bulk.next_full)                          // the newer first, resend_cx60() keeps the one it has
-      pbulk_parse(bulk.next, bulk.next_n, resend_cx60, NULL);
-    if (bulk.out_full)
-      pbulk_parse(bulk.out, bulk.out_n, resend_cx60, NULL);
+    uint8_t next[PBULK_ANSWER_MAX], out[PBULK_ANSWER_MAX];
+    int next_n, out_n;
+    pbulk_panel_held(&bulk, next, &next_n, out, &out_n);
+    pbulk_parse(next, next_n, resend_cx60, NULL);  // the newer first, resend_cx60() keeps the one it has
+    pbulk_parse(out, out_n, resend_cx60, NULL);
   }
   pic_reset();
   anim_clear_all();  // it sends them again
@@ -391,8 +392,8 @@ void link_second(void) {
       link_send(K_ROOM_TEMP, (uint32_t) (int32_t) M.t_room);
     }
   }
-  // Refused frames don't count, since nothing gets through while we refuse them
-  uint32_t frames = bulk.frames - bulk.bad - bulk.refused;
+  // Refused frames don't count, nor ones in the gaps while they're off, since nothing gets through
+  uint32_t frames = bulk.frames - bulk.bad - bulk.refused - bulk.no_gaps;
   if (!HAS(FEAT_ESP)) {
     frames_seen = frames;
     quiet_s = ESP_QUIET_S;  // switched off, offline until it's heard again
