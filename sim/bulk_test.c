@@ -686,8 +686,8 @@ static int split(void) {
       take = E.ring;
     E.have[id] += take;
     E.ring -= take;
-    if (E.done[id]) {
-      if (E.first == E.next)
+    if (E.done[id]) {  // its CRC checked out early, but it may still get a byte or more
+      if (E.first == E.next || E.have[id] < E.len[id])
         break;
       E.first++;
       continue;
@@ -904,8 +904,9 @@ int main(int argc, char **argv) {
   if (retries)
     printf(", asked again %ld times", retries);
   printf("%s\n", ETX.refused ? ", refused" : "");
-  printf("  panel: %u frames, %u busy, %u late, %u refused; it said %u, the ESP heard %u (%u wrong)\n", PRX.frames,
-         PRX.busy, PRX.late, PRX.refused, panel_said, esp_heard, esp_heard_wrong);
+  printf("  panel: %u frames, %u busy, %u late, %u refused, %u in gaps gone off; it said %u, the ESP heard %u (%u "
+         "wrong)\n",
+         PRX.frames, PRX.busy, PRX.late, PRX.refused, PRX.no_gaps, panel_said, esp_heard, esp_heard_wrong);
   printf("  gaps after polls: the ESP saw %u (the panel %u) and sent %ld frames in them, the panel answered %ld%s%s\n",
          EG.gaps, PBUS.gaps.gaps, E.gap_frames, panel_gap_answers, EG.off || PBUS.gaps.off ? ", turned off" : "",
          ETX.no_gaps ? ", the panel said no" : "");
@@ -929,8 +930,9 @@ int main(int argc, char **argv) {
   CHECK_MSG(worst_end <= PBUS_END_MAX_US * US, "the link was still on the bus %.2f ms after the status frame",
             worst_end / 1e6);
   // The gaps go off when the CX60 is more than PBUS_GAP_EARLY_US early, which happens when its main loop is
-  // busy that long at a step. So they only have to stay on with control_tick <= 2.5 ms.
-  CHECK_MSG(ctl_ms > 2.5 || (!EG.off && !PBUS.gaps.off), "the gaps after polls went off");
+  // busy that long at a step. So they only have to stay on with control_tick under 2.5 ms: at 2.5, the 20 us of its
+  // other step at times comes on top.
+  CHECK_MSG(ctl_ms >= 2.5 || (!EG.off && !PBUS.gaps.off), "the gaps after polls went off");
   CHECK_MSG(!pics_bad, "%ld pictures damaged", pics_bad);
   CHECK_MSG(!esp_heard_wrong, "the ESP heard %u of the panel's messages wrong", esp_heard_wrong);
   CHECK_MSG(panel_said - esp_heard < 20, "the panel said %u, the ESP heard %u", panel_said, esp_heard);
