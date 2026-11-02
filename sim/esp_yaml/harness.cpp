@@ -763,6 +763,38 @@ static void show(const Live &c, const char *tag = "", bool chances = false) {
   CHECK_MSG(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
 }
 
+// The show's own timers go ten minutes on, so what's tried now has the time
+static void show_later() {
+  for (auto &t : live::R.timers)
+    if (!t.rare)
+      t.at = millis() + 600000;
+}
+
+// The panel's animations
+static int slots_used() {
+  int n = 0;
+  for (auto &a : anim::anims)
+    n += !a.name.empty();
+  return n;
+}
+
+// Each of the show's visitors in turn, its other timers put off, as live/TAG_K_n.ppm with shots of each. Each asks
+// the panel for no more than it has, and lets go of what it took once it's gone.
+static void visits(const char *tag, int shots = 2) {
+  for (int k = 0; k < live::R.visits; k++) {
+    show_later();
+    size_t from = log_all.size();
+    int slots = slots_used();
+    uint32_t ms = live::R.visit(k);
+    if (!ms)
+      continue;
+    std::string name = std::string(tag) + "_" + std::to_string(k);
+    play((int) (ms + 999) / 1000 + 1, shots, name);
+    live_quiet(name, from);
+    CHECK_MSG(slots_used() <= slots, "%s: %d animations after the visit, %d before", name.c_str(), slots_used(), slots);
+  }
+}
+
 // ---------------------------------------------------------------- online pictures
 // A webcam, and its server: it answers with code, size and type, and counts how often it was asked
 static PickingImage webcam;
@@ -1794,8 +1826,9 @@ static void anim_cleared_while_made() {
   anim::show("edge");
   anim::W.a = anim::find("edge");
   anim::start();
-  while (anim::W.phase == anim::COUNT)
+  while (anim::W.f < anim::W.a->src->frames)
     anim::count();
+  anim::palette();
   anim::make(0, true);
   CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
   anim::clear("");
@@ -1927,8 +1960,9 @@ static void anim_long_frame() {
   anim::show("long");
   anim::W.a = anim::find("long");
   anim::start();
-  while (anim::W.phase == anim::COUNT)
+  while (anim::W.f < anim::W.a->src->frames)
     anim::count();
+  anim::palette();
   anim::Anim &a = *anim::W.a;
   uint32_t seed = 5;
   for (auto &b : anim::W.frame)
@@ -2039,7 +2073,8 @@ static void anim_timing() {
 // until it's shown again or a hello.
 static void anim_without_ram() {
   step("animations without the RAM");
-  ram_free = 45 * 1024;
+  size_t tls = panel::requests * panel::REQUEST_RAM;  // met's request from boot, never run here, holds its share
+  ram_free = 45 * 1024 + tls;
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
   run_until(anims_sent, 3000);
@@ -2047,7 +2082,7 @@ static void anim_without_ram() {
                 logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
             "ball without the RAM for full size: half %d", anim::find("ball")->half);
   anim::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
-  ram_free = 30 * 1024;
+  ram_free = 30 * 1024 + tls;
   anim::show("ball2x");
   run(3);
   CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
@@ -2762,7 +2797,7 @@ static void unknown_names() {
   anim::show("nope");
   run(10);
   CHECK_MSG(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
-  CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state.rfind("Shown: dusk", 0) == 0 &&
+  CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state == "nope: no picture with that name" &&
                 panel_pic() == 2 && panel_anim_ball.state && anim_ready(),
             "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
             panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
@@ -2949,7 +2984,8 @@ static void online_downloads() {
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK_MSG(webcam.updates == 4 && panel_picture_status.state == "webcam: couldn't download it, trying again later",
+  CHECK_MSG(webcam.updates == 4 && panel_picture_status.state ==
+                                       "webcam: couldn't download it, trying again in 29 s, or when it's picked again",
             "after a failed download: %d downloads, '%s'", webcam.updates, panel_picture_status.state.c_str());
 }
 

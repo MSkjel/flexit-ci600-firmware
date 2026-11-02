@@ -136,6 +136,7 @@ static void live_sky() {
     tick(1);
   CHECK_MSG(star && star->copies[0].placed, "no shooting star");
   play(1, 9, "starry_winter_night_shooting");
+  visits("starry", 3);  // a satellite, a fox
   show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -14, 0, utc(2026, 1, 21, 10), met::G_HILLS, 0, 30, 2,
         78.22, 15.65},
        "svalbard");
@@ -234,8 +235,10 @@ static size_t pool_bytes(const live::Frames &sp) {
   anim::W.a = &a;
   bool ok = anim::start();
   while (ok && (anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE)) {
-    if (anim::W.phase == anim::COUNT)
+    if (anim::W.phase == anim::COUNT && anim::W.f < src.frames)
       anim::count();
+    else if (anim::W.phase == anim::COUNT)
+      anim::palette();
     else
       anim::make(0, true);
   }

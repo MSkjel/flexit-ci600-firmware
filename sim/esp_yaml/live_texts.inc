@@ -21,15 +21,17 @@ static float under_texts(const char *sprite, int i) {
   return (float) under / (float) (w * h);
 }
 
-// c's show with the texts on, its chance events due at once, until copy i of sprite is placed, within wait s. Then
-// 3 s of it, under a text by a tenth at most all the while, with a shot as live/texts_TAG.ppm.
-static void beside_texts(const Live &c, const char *sprite, const char *tag, int wait = 10, int i = 0) {
+// c's show with the texts on, its chance events due at once if chances, until copy i of sprite is placed, within
+// wait s. Then 3 s of it, under a text by a tenth at most all the while, with a shot as live/texts_TAG.ppm.
+static void beside_texts(const Live &c, const char *sprite, const char *tag, int wait = 10, int i = 0,
+                         bool chances = true) {
   size_t from = log_all.size();
   std::string name = std::string("texts_") + tag;
   weather_of(c);
   bool drawn = picture(name.c_str(), 6000) >= 0;
   CHECK_MSG(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
-  chances_now();
+  if (chances)
+    chances_now();
   pn_saver(1);
   int k = 0;
   for (; k < wait * 9 && under_texts(sprite, i) < 0; k++)
@@ -76,13 +78,13 @@ static void live_texts() {
   Live xmas_town = {"Christmas Eve in town", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_CITY,
                     0,                       10,       0, 78.22, 15.65};
   beside_texts(xmas_town, "flag", "flag_town");
-  // the moose grazing in front of the cabin, the reindeer along the bottom
+  // the moose grazing in front of the cabin, the reindeer along the bottom, not away for a hiker
   Live moose = {"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 10, 5, 16, 45), met::G_HILLS, 0, 10, 0};
   beside_texts(moose, "moosegraze", "moose_hills", 150);
   Live deer = {"Reindeer and a golden eagle", "clearsky_day", 0, 0, 0, 0, 3, 18, 0, utc(2026, 6, 10, 11),
                met::G_MOUNTAINS,              0,              10, 0};
   for (int i = 0; i < 3; i++)
-    beside_texts(deer, "reindeer", (std::string("reindeer_") + std::to_string(i)).c_str(), 10, i);
+    beside_texts(deer, "reindeer", (std::string("reindeer_") + std::to_string(i)).c_str(), 10, i, false);
   // snow off the eaves
   Live ski = {"A skier, and snow off the spruces", "clearsky_day", 0, 0, 0, 0, 3, -5, 0, utc(2026, 2, 7, 11),
               met::G_HILLS,                        0,              10, 0};

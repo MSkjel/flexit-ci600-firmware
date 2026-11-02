@@ -6,6 +6,7 @@ static void live_town() {
   show({"Sailboat, glitter and eiders", "clearsky_day", 0, 0, 0, 0, 3, 14, 0, utc(2026, 9, 20, 15), met::G_COAST, 0,
         150, 5},
        "oslo");
+  visits("sail");  // a sea eagle, a sjark, a porpoise
   // July at noon up north, the sun too high for a reflection
   show({"Sailboat, glitter and eiders", "fair_day", 10, 0, 0, 0, 5, 20, 0, utc(2026, 7, 15, 11), met::G_COAST, 0, 60, 2,
         64.38, 25.4},
@@ -17,11 +18,15 @@ static void live_town() {
   // November dusk, a tram going by
   show({"Evening in town", "partlycloudy_night", 0, 30, 0, 0, 3, 4, 0, utc(2026, 11, 10, 17), met::G_CITY, 0, 90, 3},
        "oslo", true);
+  visits("street_evening");  // a tram, the night bus, a plane
   // Christmas Day in Tromso, a flag day in the polar night
   show({"Evening in town", "cloudy", 0, 0, 80, 0, 3, -6, 0, utc(2026, 12, 25, 10), met::G_CITY, 0, 30, 1, 69.65, 18.96},
        "tromso", true);
+  CHECK_MSG(live::R.visit(2), "snow lying in Tromso: no plough");
+  play(42, 3, "street_plough");
   // 7 June, a flag day, a tram going by
   show({"A day in town", "fair_day", 0, 20, 0, 0, 3, 18, 0, utc(2026, 6, 7, 12), met::G_CITY, 0, 60, 2}, "flag", true);
+  visits("street_day");  // a tram, the bus, a cyclist
   {  // and the flag to the right in an east wind, without starting again
     size_t from = log_all.size();
     met::weather.wind_from = 20;
