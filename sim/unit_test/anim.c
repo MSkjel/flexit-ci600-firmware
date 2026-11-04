@@ -418,10 +418,152 @@ static void test_anim_frames(void) {
   anim_clear_msg(ANIM_ALL);
 }
 
+// ---------------------------------------------------------------- the picture's parts in front of places
+
+static void part_msg(int k, int x0, int y0, int x1, int y1, unsigned colours, int depth) {
+  uint8_t m[PIC_PART_LEN] = {(uint8_t) k};
+  plink_put16(m + PIC_PART_X0, (uint16_t) x0);
+  plink_put16(m + PIC_PART_Y0, (uint16_t) y0);
+  plink_put16(m + PIC_PART_X1, (uint16_t) x1);
+  plink_put16(m + PIC_PART_Y1, (uint16_t) y1);
+  plink_put16(m + PIC_PART_COLOURS, (uint16_t) colours);
+  m[PIC_PART_DEPTH] = (uint8_t) depth;
+  anim_part(m, PIC_PART_LEN);
+}
+
+static void depth_msg(int p, int depth) {
+  uint8_t m[ANIM_DEPTH_LEN] = {(uint8_t) p, (uint8_t) depth};
+  anim_msg(K_ANIM_DEPTH, m, ANIM_DEPTH_LEN);
+}
+
+static int look_depth(int p) {
+  anim_look_t l;
+  return anim_look(p, &l) ? l.depth : -1;
+}
+
+// The picture's palette index at x, y on the screen, -1 off it
+static int pic_index(const lv_obj_t *pic, int x, int y) {
+  lv_area_t a = {x - pic->coords.x1, y - pic->coords.y1, x - pic->coords.x1, y - pic->coords.y1};
+  lv_color_t c;
+  if (!pic_read(&a, &c, 1))
+    return -1;
+  for (int i = 0; i < 16; i++)
+    if (c.full == lv_color_hex(rgb(i)).full)
+      return i;
+  return -2;
+}
+
+static int was[PIC_MAX_W * PIC_MAX_H];
+
+// Place k is drawn as in was, but for what's in x0..x1 - 1, y0..y1 - 1 of colours, which shows what's behind it
+static bool behind(int k, const lv_obj_t *pic, int x0, int y0, int x1, int y1, unsigned colours) {
+  static int px[PIC_MAX_W * PIC_MAX_H];
+  anim_look_t l;
+  if (!drawn(k, &l, px))
+    return false;
+  int w = lv_area_get_width(&l.box), left = 0;
+  for (int i = 0; i < (int) lv_area_get_size(&l.box); i++) {
+    int x = l.box.x1 + i % w, y = l.box.y1 + i / w, c = pic_index(pic, x, y);
+    bool in = x >= x0 && x < x1 && y >= y0 && y < y1 && (colours == PIC_ALL_COLOURS || (c >= 0 && colours >> c & 1));
+    if (px[i] != (in ? -1 : was[i]))
+      return false;
+    left += in && was[i] != -1;
+  }
+  return colours == 0 || left > 0;  // and something was left that would have been drawn
+}
+
+static bool draw_was(int k) {
+  anim_look_t l;
+  return drawn(k, &l, was);
+}
+
+static void test_anim_parts(void) {
+  no_anims();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  fill(0, H, 3);
+  CHECK_EQ(status(send_picture(16)), PIC_DONE);
+  lv_obj_t *pic = pic_show(lv_scr_act());
+  lv_obj_update_layout(pic);
+  int px0 = pic->coords.x1, py0 = pic->coords.y1;
+
+  // pic_in() against the picture's own pixels, along every row and in every colour
+  for (int y = py0 - 1; y <= py0 + H; y++)
+    for (int x1 = px0 - 2; x1 < px0 + W + 2; x1 += 3)
+      for (int x2 = x1; x2 < px0 + W + 2; x2 += 2)
+        for (unsigned colours = 1; colours < 0x10000; colours = colours * 3 + 1) {
+          uint32_t bits[2] = {0, 0}, want[2] = {0, 0};
+          pic_in(y, x1, x2, (uint16_t) colours, bits, x1);
+          for (int x = x1; x <= x2; x++) {
+            int c = pic_index(pic, x, y);
+            if (c >= 0 && colours >> c & 1)
+              want[(x - x1) / 32] |= 1u << (x - x1) % 32;
+          }
+          CHECK(bits[0] == want[0] && bits[1] == want[1]);
+        }
+
+  // A place over the whole picture, every pixel drawn
+  memset(an, 0x12, sizeof an);
+  uint8_t d[512];
+  uint32_t n = anim_records(d, 5);
+  CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  show_anims();
+  place(0, 0, px0 - 3, py0 - 1, 0, 0);
+  CHECK_EQ(look_depth(0), ANIM_NEAREST);
+  CHECK(draw_was(0));
+
+  // Nearer parts cover it once it's farther, and only there
+  unsigned colours = 1u << 3 | 1u << 7 | 1u << 9;
+  part_msg(0, px0, py0, px0 + W, py0 + H, colours, 10);
+  CHECK(behind(0, pic, 0, 0, 0, 0, 0));  // at ANIM_NEAREST nothing's in front
+  depth_msg(0, 10);
+  CHECK(behind(0, pic, 0, 0, 0, 0, 0));  // nor at the part's own depth
+  depth_msg(0, 9);
+  CHECK_EQ(look_depth(0), 9);
+  CHECK(behind(0, pic, px0, py0, px0 + W, py0 + H, colours));
+  part_msg(1, px0 + 2, py0 + 1, px0 + 5, py0 + 4, PIC_ALL_COLOURS, 200);
+  CHECK(!behind(0, pic, px0, py0, px0 + W, py0 + H, colours));
+  part_msg(0, 0, 0, 0, 0, 0, 0);  // empty, gone
+  CHECK(behind(0, pic, px0 + 2, py0 + 1, px0 + 5, py0 + 4, PIC_ALL_COLOURS));
+  part_msg(PIC_PARTS, 0, 0, PIC_MAX_W, PIC_MAX_H, PIC_ALL_COLOURS, 255);  // no such part
+  uint8_t bad[ANIM_DEPTH_LEN + 1] = {0, 0, 0};
+  anim_msg(K_ANIM_DEPTH, bad, sizeof bad);  // the wrong length
+  CHECK_EQ(look_depth(0), 9);
+  CHECK(behind(0, pic, px0 + 2, py0 + 1, px0 + 5, py0 + 4, PIC_ALL_COLOURS));
+
+  // Turned, the same
+  int deg = 30;
+  uint8_t m[16];
+  anim_msg(K_ANIM_GLIDE, m, sim_anim_glide(m, 0, 1u << ANIM_TURN, 0, 0, &deg));
+  part_msg(0, px0, py0, px0 + W, py0 + H, colours, 10);
+  part_msg(1, 0, 0, 0, 0, 0, 0);
+  depth_msg(0, ANIM_NEAREST);
+  CHECK(draw_was(0));
+  depth_msg(0, 0);
+  CHECK(behind(0, pic, px0, py0, px0 + W, py0 + H, colours));
+  anim_parts_clear();
+  CHECK(behind(0, pic, 0, 0, 0, 0, 0));
+
+  // Depth before the size map and the number, and PLACE starts it nearest
+  place(1, 0, 40, 40, 0, 0);
+  depth_msg(0, 100);
+  depth_msg(1, 50);
+  anim_look_t l[2];
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].order > l[1].order);
+  place(0, 0, 40, 40, 0, 0);
+  CHECK_EQ(look_depth(0), ANIM_NEAREST);
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].order > l[1].order);
+  depth_msg(0, 10);
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].order < l[1].order);
+
+  no_anims();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+}
+
 const check_test_t ANIM_TESTS[] = {
     {"anim", test_anim},
     {"anim_slots", test_anim_slots},
     {"anim_rounds", test_anim_rounds},
     {"anim_frames", test_anim_frames},
+    {"anim_parts", test_anim_parts},
     {0},
 };

@@ -10,7 +10,7 @@
 
 #define PROF_US 991             // between samples, prime so they don't keep step with the 1 ms tick or the 5 ms loop
 #define PROF_S 10               // seconds each report counts
-#define PROF_TOP 32             // functions counted
+#define PROF_TOP 16             // functions counted
 #define PROF_MIN_PM 5           // the least share a report lists, per mille
 #define PROF_MAGIC 0x464F5250u  // "PROF", the table's first word
 

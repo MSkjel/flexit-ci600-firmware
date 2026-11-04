@@ -1,9 +1,19 @@
 // Draws the places, see anim_int.h: their boxes, what to redraw, and the pixels through turn, size and flip.
 #include "anim_int.h"
+#include "picture.h"
+#include "plink.h"
 #include <string.h>
 
 lv_obj_t *layer;
 static uint8_t z[ANIM_PLACES];  // the places in the order they're drawn, the nearest last
+
+// The picture's parts in front of places, see K_PIC_PART
+typedef struct {
+  int16_t x0, y0, x1, y1;  // on the layer, x1 and y1 just past it. Empty for none
+  uint16_t colours;
+  uint8_t depth;
+} part_t;
+static part_t parts[PIC_PARTS];
 
 static lv_opa_t opa8(int opa) { return (lv_opa_t) ((opa * 255 + FULL / 2) / FULL); }
 static int zoom(int size, int n) { return size == FULL ? n : LV_MAX(1, (n * size + FULL / 2) / FULL); }
@@ -81,12 +91,14 @@ void hide(place_t *p) {
   p->tiles = 0;
 }
 
-// The places bigger from their size map are nearer and drawn in front, the others go by number
+// The places at more depth, then those bigger from their size map, are nearer and drawn in front. The others go by
+// number.
 void order(void) {
   uint8_t o[ANIM_PLACES];
-  int32_t near[ANIM_PLACES];
+  int64_t near[ANIM_PLACES];
   for (int k = 0; k < ANIM_PLACES; k++) {
-    int32_t d = places[k].slot == ANIM_SLOTS ? INT32_MIN : mapped(&places[k], ANIM_SIZE);
+    const place_t *p = &places[k];
+    int64_t d = p->slot == ANIM_SLOTS ? INT64_MIN : ((int64_t) p->depth << 32) + mapped(p, ANIM_SIZE);
     int i = k;
     for (; i && near[i - 1] > d; i--) {
       o[i] = o[i - 1];
@@ -100,6 +112,35 @@ void order(void) {
       z[i] = o[i];
       redraw(&places[o[i]].drawn, places[o[i]].tiles);
     }
+}
+
+void set_depth(place_t *p, uint8_t depth) {
+  if (depth != p->depth) {
+    p->depth = depth;
+    redraw(&p->drawn, p->tiles);  // other parts may be in front of it
+  }
+}
+
+// Redraws what part q covers
+static void redraw_part(const part_t *q) {
+  if (layer)
+    redraw(&(lv_area_t) {q->x0, q->y0, q->x1 - 1, q->y1 - 1}, 1);
+}
+
+void anim_part(const uint8_t *b, int n) {
+  if (n != PIC_PART_LEN || b[0] >= PIC_PARTS)
+    return;
+  part_t *q = &parts[b[0]];
+  redraw_part(q);
+  *q = (part_t) {plink_i16(b + PIC_PART_X0), plink_i16(b + PIC_PART_Y0),        plink_i16(b + PIC_PART_X1),
+                 plink_i16(b + PIC_PART_Y1), plink_get16(b + PIC_PART_COLOURS), b[PIC_PART_DEPTH]};
+  redraw_part(q);
+}
+
+void anim_parts_clear(void) {
+  for (int k = 0; k < PIC_PARTS; k++)
+    redraw_part(&parts[k]);
+  memset(parts, 0, sizeof parts);
 }
 
 // The box's px *lo..*hi, from *lo, that show frame px a..b of n when the box is m across
@@ -143,9 +184,10 @@ bool anim_look(int place, anim_look_t *l) {
                       .box = p->drawn,
                       .frame = place_frame(p),
                       .pal = slots[p->slot].pal};
+  l->depth = p->depth;
   for (int i = 0; i < ANIM_PLACES; i++)
     if (z[i] == place)
-      l->depth = (uint8_t) i;
+      l->order = (uint8_t) i;
   return true;
 }
 
@@ -182,6 +224,59 @@ __attribute__((always_inline)) static inline void pixels(lv_color_t *d, int n, c
   }
 }
 
+// Which of the n pixels from x on screen row y a part of the picture nearer than p covers: bit i of cover for x + i.
+// NULL if none do.
+static const uint32_t *covered(const place_t *p, int y, int x, int n, uint32_t *cover) {
+  bool any = false;
+  for (int k = 0; k < PIC_PARTS; k++) {
+    const part_t *q = &parts[k];
+    if (q->depth <= p->depth)
+      continue;
+    int lx = layer->coords.x1, ly = layer->coords.y1;
+    int a = LV_MAX(q->x0 + lx, x), b = LV_MIN(q->x1 + lx, x + n);  // b just past it
+    if (y < q->y0 + ly || y >= q->y1 + ly || a >= b)
+      continue;
+    if (!any)
+      memset(cover, 0, (size_t) (n + 31) / 32 * sizeof *cover);
+    any = true;
+    if (q->colours == PIC_ALL_COLOURS)
+      for (int i = a - x; i < b - x; i++)
+        cover[i / 32] |= 1u << i % 32;
+    else
+      pic_in(y, a, b - 1, q->colours, cover, x);
+  }
+  return any ? cover : NULL;
+}
+
+static bool cover_at(const uint32_t *cover, int i) { return cover[i / 32] >> i % 32 & 1; }
+
+bool anim_covered(int place, int x, int y) {
+  uint32_t cover[1];
+  if (!layer || place < 0 || place >= ANIM_PLACES || places[place].slot == ANIM_SLOTS)
+    return false;
+  const uint32_t *c = covered(&places[place], y + layer->coords.y1, x + layer->coords.x1, 1, cover);
+  return c && cover_at(c, 0);
+}
+
+// pixels() for i0..i1 of row, pixel i from u + i * du, v + i * dv. Those cover has, bit i - i0, are left as they are.
+__attribute__((always_inline)) static inline void runs(lv_color_t *row, int i0, int i1, const uint32_t *cover,
+                                                       const uint8_t *f, int rb, int32_t u, int32_t v, int32_t du,
+                                                       int32_t dv, int sh, const lv_color_t *pal, uint8_t transp,
+                                                       lv_opa_t opa) {
+  for (int i = i0; i <= i1;) {
+    int e = i1;
+    if (cover) {
+      for (; i <= i1 && cover_at(cover, i - i0); i++) {
+      }
+      for (e = i; e < i1 && !cover_at(cover, e + 1 - i0); e++) {
+      }
+    }
+    if (i <= i1)
+      pixels(row + i, e - i + 1, f, rb, u + i * du, v + i * dv, du, dv, sh, pal, transp, opa);
+    i = e + 1;
+  }
+}
+
 // p's box at a on the screen, the part in the area being drawn. Each pixel's middle goes back through the turn, the
 // size and the flip into the frame. Unturned that's the same for each row, and the step from one pixel to the next
 // is the box's, so a size that doesn't change the box looks the same.
@@ -197,6 +292,7 @@ __attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_
   lv_color_t *row = (lv_color_t *) ctx->buf + (c.y1 - ctx->buf_area->y1) * stride + (c.x1 - ctx->buf_area->x1);
   lv_opa_t opa = opa8(p->now.opa);
   bool fx = p->now.flip & ANIM_FLIP_X, fy = p->now.flip & ANIM_FLIP_Y;
+  uint32_t cover[(PIC_MAX_W + 31) / 32];
   if (!p->now.deg) {
     int32_t qy = (fh << 15) / zh, ry = (fh << 15) % zh, du = (65536 * fw) / zw;  // fh * 32768 = qy * zh + ry
     int32_t u = (int32_t) ((int64_t) (2 * x0 + 1 - zw) * 32768 * fw / zw);
@@ -214,10 +310,11 @@ __attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_
       if (v < 0 || v >= fh << 16)
         continue;
       const uint8_t *fr = f + (v >> sh) * rb;
+      const uint32_t *cv = covered(p, y, c.x1 + i0, i1 - i0 + 1, cover);
       if (opa > LV_OPA_MAX)
-        pixels(row + i0, i1 - i0 + 1, fr, 0, u + i0 * du, 0, du, 0, sh, s->pal, s->transp, LV_OPA_COVER);
+        runs(row, i0, i1, cv, fr, 0, u, 0, du, 0, sh, s->pal, s->transp, LV_OPA_COVER);
       else
-        pixels(row + i0, i1 - i0 + 1, fr, 0, u + i0 * du, 0, du, 0, sh, s->pal, s->transp, opa);
+        runs(row, i0, i1, cv, fr, 0, u, 0, du, 0, sh, s->pal, s->transp, opa);
     }
     return;
   }
@@ -239,10 +336,11 @@ __attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_
     span(v, dv, fh << 16, &i0, &i1);
     if (i0 > i1)
       continue;
+    const uint32_t *cv = covered(p, y, c.x1 + i0, i1 - i0 + 1, cover);
     if (opa > LV_OPA_MAX)
-      pixels(row + i0, i1 - i0 + 1, f, rb, u + i0 * du, v + i0 * dv, du, dv, sh, s->pal, s->transp, LV_OPA_COVER);
+      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, s->pal, s->transp, LV_OPA_COVER);
     else
-      pixels(row + i0, i1 - i0 + 1, f, rb, u + i0 * du, v + i0 * dv, du, dv, sh, s->pal, s->transp, opa);
+      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, s->pal, s->transp, opa);
   }
 }
 

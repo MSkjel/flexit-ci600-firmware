@@ -74,6 +74,7 @@ static void reset(place_t *p) {
   p->rounds = 0;
   p->leaving = STAY;
   p->held = false;
+  p->depth = ANIM_NEAREST;
 }
 
 static void drop_slot(int i);
@@ -601,12 +602,13 @@ static void frames_msg(const uint8_t *b) {
 }
 
 void anim_msg(uint16_t key, const uint8_t *b, int n) {
-  // FRAMES to ROUNDS, GLIDE and DRIFT 2 a channel more
-  static const uint8_t LEN[] = {ANIM_FRAMES_LEN, ANIM_PLACE_LEN,  ANIM_AREA_LEN,  ANIM_GLIDE_HEAD,
-                                ANIM_DRIFT_HEAD, ANIM_WANDER_LEN, ANIM_FACE_LEN,  ANIM_FLIP_LEN,
-                                ANIM_WAVE_LEN,   ANIM_MAP_LEN,    ANIM_ROUNDS_LEN};
-  _Static_assert(sizeof LEN == K_ANIM_ROUNDS - K_ANIM_FRAMES + 1, "a length for each");
-  if (key < K_ANIM_FRAMES || key > K_ANIM_ROUNDS || n < 2)
+  // FRAMES to DEPTH, GLIDE and DRIFT 2 a channel more. GONE is ours.
+  static const uint8_t LEN[] = {ANIM_FRAMES_LEN, ANIM_PLACE_LEN,  ANIM_AREA_LEN,   ANIM_GLIDE_HEAD,
+                                ANIM_DRIFT_HEAD, ANIM_WANDER_LEN, ANIM_FACE_LEN,   ANIM_FLIP_LEN,
+                                ANIM_WAVE_LEN,   ANIM_MAP_LEN,    ANIM_ROUNDS_LEN, 0,
+                                ANIM_DEPTH_LEN};
+  _Static_assert(sizeof LEN == K_ANIM_DEPTH - K_ANIM_FRAMES + 1, "a length for each");
+  if (key < K_ANIM_FRAMES || key > K_ANIM_DEPTH || n < 2)
     return;
   unsigned moves = key == K_ANIM_GLIDE   ? (1u << ANIM_CHANNELS) - 1
                    : key == K_ANIM_DRIFT ? (1u << (ANIM_TURN + 1)) - 1
@@ -656,6 +658,9 @@ void anim_msg(uint16_t key, const uint8_t *b, int n) {
       break;
     case K_ANIM_ROUNDS:
       rounds_msg(p, b);
+      break;
+    case K_ANIM_DEPTH:
+      set_depth(p, b[ANIM_DEPTH_DEPTH]);
       break;
   }
   update(p);

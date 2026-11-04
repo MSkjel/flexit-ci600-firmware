@@ -472,6 +472,31 @@ __attribute__((optimize("O3"))) bool pic_read(const lv_area_t *a, lv_color_t *bu
   return ok;
 }
 
+void pic_in(int y, int x1, int x2, uint16_t colours, uint32_t *bits, int base) {
+  if (!shown || pic.state != PIC_READY || pic.format != PIC_PALETTE)
+    return;
+  int ox = shown->coords.x1;
+  y -= shown->coords.y1;
+  x1 = LV_MAX(x1 - ox, 0);
+  x2 = LV_MIN(x2 - ox, pic.w - 1);
+  if (y < 0 || y >= pic.h || x1 > x2)
+    return;
+  const uint8_t *p = row_at((unsigned) y);
+  for (int x = 0; x <= x2;) {  // x: the run's first pixel
+    uint8_t c = *p++;
+    int n = 2 * (int) run_len(c);
+    for (int i = LV_MAX(x, x1); i < x + n && i <= x2; i++) {
+      uint8_t two = c < 128 ? p[(i - x) / 2] : *p;
+      if (colours >> (i & 1 ? two & 15 : two >> 4) & 1) {
+        int k = i + ox - base;
+        bits[k / 32] |= 1u << k % 32;
+      }
+    }
+    p += c < 128 ? n / 2 : 1;
+    x += n;
+  }
+}
+
 void pic_round(lv_disp_drv_t *d, lv_area_t *a) {
   (void) d;
   // LVGL asking how high a strip may be, only while it draws. Below 8 lines it would find none and loop forever.

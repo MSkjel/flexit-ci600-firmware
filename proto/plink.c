@@ -139,7 +139,9 @@ int plink_kind(uint16_t key) {
     case K_PIC_BEGIN:
     case K_PIC_PATCH:
     case K_PIC_DATA:
+    case K_PIC_PART:
     case K_ANIM_BEGIN:
+    case K_ANIM_DEPTH:
     case K_LOG:
       return PLINK_BYTES;
   }

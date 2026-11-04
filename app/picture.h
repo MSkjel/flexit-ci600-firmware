@@ -18,6 +18,9 @@ lv_obj_t *pic_show(lv_obj_t *parent);
 void pic_round(lv_disp_drv_t *d, lv_area_t *a);
 // Draws area a, in picture coordinates, into buf with stride pixels per line. False if no picture or a is outside.
 bool pic_read(const lv_area_t *a, lv_color_t *buf, int stride);
+// Sets bit x - base of bits for each pixel x from x1 to x2 of screen row y that has one of colours, a bit per palette
+// index. None of a JPEG, or while the picture isn't shown.
+void pic_in(int y, int x1, int x2, uint16_t colours, uint32_t *bits, int base);
 pic_state_t pic_state(void);
 uint8_t pic_format(void);   // PIC_PALETTE or PIC_JPEG
 uint8_t pic_percent(void);  // of the current transfer
