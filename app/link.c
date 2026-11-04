@@ -109,6 +109,8 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
   }
   if (was == PIC_READY && pic_state() == PIC_RECEIVING)
     ui_picture_coming();
+  if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR)
+    anim_parts_clear();  // the picture they're parts of went
   // Picture came or went, rebuild the screensaver. A new or failed picture drops the old. A patch redraws its own rows
   // and the animations show and go on their own.
   if (pic_state() != was || key == K_PIC_CLEAR)
@@ -283,8 +285,12 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if (!link_compatible())
     return;  // different link version, the message can't be trusted
-  if (key >= K_ANIM_FRAMES && key <= K_ANIM_ROUNDS) {
+  if (key >= K_ANIM_FRAMES && key <= K_ANIM_DEPTH) {
     anim_msg(key, b, n);  // a running animation's, no picture data or ack
+    return;
+  }
+  if (key == K_PIC_PART) {
+    anim_part(b, n);
     return;
   }
   if ((key >= K_PIC_BEGIN && key <= K_PIC_CLEAR) || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR) {
@@ -372,6 +378,7 @@ void link_poll(void) {
   send_settings();
   while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it
     n = plink_pack(&queue, p, PBULK_ANSWER_MAX);
+    n += plat_log(p + n, PBULK_ANSWER_MAX - n);
     n += shot_take(p + n, PBULK_ANSWER_MAX - n);
     if (!n)
       break;

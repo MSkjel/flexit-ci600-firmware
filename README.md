@@ -237,6 +237,11 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
   so the ESP can tell it from the release. The next release has that number too, so after flashing such a build,
   turn Panel Firmware Force on to get that release.
 - **SWD:** see [docs/hardware.md](docs/hardware.md#swd).
+- **Where the time goes:** `make -C hw PROF=1` builds `hw/build/prof/ci600.bin`, which looks about 1000 times a
+  second at the function the processor is in, and every 10 s logs the busiest in the ESP's log, like
+  `prof  15.0 % paint`. Asleep is the time it waits for an interrupt. Make an `.fxup` of it as above and flash it
+  with Panel Firmware Force on, since it has the same version as the build without it, and the same for going back.
+  The function names take about 28 KB of flash, the counts 136 bytes of RAM.
 
 ### The ESP link
 
@@ -246,7 +251,9 @@ Messages are numbered and resent until the other side has them. `proto/pbus.h` h
 frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a copy of `proto/`: update it with
 `make -C sim esp_sync` (`esp_test` fails if they differ). Screenshots for the ESP's camera go the other way, a 64x8
 tile at a time, JPEG-coded as it's drawn again on its way to the LCD (`app/shot.c`), so the panel keeps nothing but
-the tile being sent.
+the tile being sent. A 16-colour picture can have parts, a box and some of its colours each, in front of the
+animations farther off than them (`K_PIC_PART`, `K_ANIM_DEPTH`): the panel leaves an animation's pixels undrawn where
+a nearer part's colours are. An animation without a depth is in front of them all.
 
 ### Adding things
 

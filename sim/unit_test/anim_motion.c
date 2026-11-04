@@ -843,9 +843,9 @@ static void test_anim_map(void) {
   map_msg(1, ANIM_SIZE, 100, 100, 50, 100);
   show_anims();
   anim_look_t l[2];
-  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].depth > l[1].depth);
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].order > l[1].order);
   move_msg(100, 0, 0);
-  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].depth < l[1].depth);
+  CHECK(anim_look(0, &l[0]) && anim_look(1, &l[1]) && l[0].order < l[1].order);
   lv_obj_clean(lv_scr_act());
   anim_clear_msg(ANIM_ALL);
 }

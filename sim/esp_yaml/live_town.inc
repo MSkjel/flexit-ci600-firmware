@@ -7,6 +7,28 @@ static void live_town() {
         150, 5},
        "oslo");
   visits("sail");  // a sea eagle, a sjark, a porpoise
+  {  // the sailboat on the water, behind the cabin's pole and all of its pennant, but not where it's on the sea
+    const anim::Anim *boat = anim::find("w_boat");
+    const met::Scene &s = panel_scene();
+    int k = boat && !boat->copies.empty() ? boat->copies[0].place : -1;
+    Look l = look(k);
+    pn_saver(1);
+    bool pole = pn_anim_covered(k, s.pole_x, s.pole_top + 4), sea = !pn_anim_covered(k, l.x + 6, l.y + 7);
+    int pennant = 0, behind = 0;
+    for (int i = 0; i < s.nsprites; i++) {
+      const met::Sprite &q = s.sprite[i];
+      for (int y = 0; y < q.h && q.tag == met::L_FLAG; y++)
+        for (int x = 0; x < q.w; x++)
+          if (q.rows[y] >> (q.w - 1 - x) & 1) {
+            pennant++;
+            behind += pn_anim_covered(k, q.x + x, q.y + y);
+          }
+    }
+    pn_saver(0);
+    CHECK_MSG(l.shown && l.depth == met::D_SEA && s.pole_x >= 0 && pole && sea && pennant && behind == pennant,
+              "the sailboat at %d,%d, %d deep, behind the pole at %d %d, on the sea %d, behind %d of the pennant's %d",
+              l.x, l.y, l.depth, s.pole_x, pole, sea, behind, pennant);
+  }
   // July at noon up north, the sun too high for a reflection
   show({"Sailboat, glitter and eiders", "fair_day", 10, 0, 0, 0, 5, 20, 0, utc(2026, 7, 15, 11), met::G_COAST, 0, 60, 2,
         64.38, 25.4},

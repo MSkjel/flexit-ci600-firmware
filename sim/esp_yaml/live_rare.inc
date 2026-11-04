@@ -73,17 +73,23 @@ static void live_rare() {
   CHECK_MSG(live::RARE[5].fits(live::SEEN), "a clear night: no flying saucer");
   rare(5, "ufo", "saucer", 12, 12);
   CHECK_MSG(!live::RARE[7].fits(live::SEEN), "a dark night: a troll");
-  // a wolf howling at the full moon from the skyline under it, facing it, and a witch slowing across it
+  // a wolf up from behind the hill onto the skyline under it, howling at the full moon, facing it, and back down, and
+  // a witch slowing across it
   live::Seen e = live::SEEN;
   CHECK_MSG(live::RARE[8].fits(e) && abs(e.den_x + 8 - e.moon_x) <= 24,
             "the night before the full moon: no wolf, phase %.2f, sitting at %d, the moon at %d", e.moon_phase, e.den_x,
             e.moon_x);
   Path p = rare(8, "wolf", "wolf", 16, 4);
-  bool sat = true;
-  for (const Look &l : p)
-    sat = sat && l.x == e.den_x && l.y == e.den_y && !(l.flip & ANIM_FLIP_X) == (e.moon_x >= e.den_x + 8);
-  CHECK_MSG(sat, "the wolf at %d,%d flipped %d, its place %d,%d, the moon at %d", p.empty() ? -1 : p[0].x,
-            p.empty() ? -1 : p[0].y, p.empty() ? -1 : p[0].flip, e.den_x, e.den_y, e.moon_x);
+  bool on = !p.empty() && p.front().hidden && p.back().hidden;
+  int sat = 0;
+  for (const Look &l : p) {
+    on = on && l.x == e.den_x && l.y >= e.den_y && l.y <= e.den_y + 15 && l.depth == e.den_depth &&
+         !(l.flip & ANIM_FLIP_X) == (e.moon_x >= e.den_x + 8);
+    sat += l.y == e.den_y && !l.hidden;
+  }
+  CHECK_MSG(on && sat * 4 >= (int) p.size() * 3, "the wolf at %d,%d flipped %d, %d of %zu cycles up, its place %d,%d, "
+            "the moon at %d", p.empty() ? -1 : p[0].x, p.empty() ? -1 : p[0].y, p.empty() ? -1 : p[0].flip, sat,
+            p.size(), e.den_x, e.den_y, e.moon_x);
   p = rare(9, "witch", "witch", 14, 6);
   int over = 0;
   for (const Look &l : p)
@@ -140,16 +146,22 @@ static void live_rare() {
   }
   CHECK_MSG(off <= 2 && lo >= e.ridge_l && hi + 16 <= e.ridge_r && hi - lo >= 40,
             "the troll %d px off the ridge, from %d to %d, the ridge %d to %d", off, lo, hi, e.ridge_l, e.ridge_r);
-  // and a lynx out of the forest at the near hill, short of the cabin
+  // and a lynx out of the forest from behind the spruce at its edge, short of the cabin, and back into it
   CHECK_MSG(live::RARE[14].fits(e), "dusk: no lynx, the forest's edge at %d", e.edge.x);
-  p = rare(14, "lynx", "lynx", 26, 4);
+  int x0 = live::in_forest(e, "lynx", 6);
+  p = rare(14, "lynx", "lynx", 30, 4);
   lo = met::W, hi = 0;
+  bool near = !p.empty() && p.front().hidden && p.back().hidden && p.front().x == x0 && p.back().x <= x0 + 3;
+  int seen = 0;
   for (const Look &l : p) {
     lo = std::min(lo, (int) l.x);
     hi = std::max(hi, (int) l.x);
+    near = near && l.depth == met::D_NEAR_ON && (!l.hidden || l.x < e.edge.x);
+    seen += !l.hidden;
   }
-  CHECK_MSG(lo >= e.edge.x && hi + 8 < e.roof_x - 13 && hi - lo >= 26,
-            "the lynx from %d to %d, the forest to %d, the cabin at %d", lo, hi, e.edge.x, e.roof_x);
+  CHECK_MSG(near && seen * 2 >= (int) p.size() && lo == x0 && hi + 12 < e.roof_x - 13 && hi - lo >= 26,
+            "the lynx from %d to %d, behind the spruce at %d, the forest to %d, the cabin at %d", lo, hi, x0, e.edge.x,
+            e.roof_x);
   show({"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 10, 5, 17, 10), met::G_MOUNTAINS, 0, 10, 0},
        "mountains");
   CHECK_MSG(!live::RARE[7].fits(live::SEEN), "the mountains at dusk: a troll from %d to %d", live::SEEN.ridge_l,
@@ -168,7 +180,7 @@ static void live_rare() {
   bool afloat = true;
   lo = met::W, hi = 0;
   for (const Look &l : p) {
-    afloat = afloat && l.y == e.sea_y - 16 && l.x >= e.sea_l && l.x + 32 <= e.sea_r + 1;
+    afloat = afloat && l.y == e.sea_y - 16 && l.x >= e.sea_l && l.x + 32 <= e.sea_r + 1 && l.depth == met::D_SEA;
     lo = std::min(lo, (int) l.x);
     hi = std::max(hi, (int) l.x);
   }
@@ -184,14 +196,20 @@ static void live_rare() {
        "summer_evening");
   e = live::SEEN;
   CHECK_MSG(live::RARE[10].fits(e), "a summer evening: no huldra, the sun at %.1f", e.at.sun_el);
-  rare(10, "huldra", "huldra", 14, 4);
+  p = rare(10, "huldra", "huldra", 14, 4);
+  CHECK_MSG(!p.empty() && !p.front().hidden && p.back().hidden && p.back().x < e.edge.x,
+            "the huldra from %d, hidden %d, to %d, hidden %d, the forest to %d", p.empty() ? -1 : p.front().x,
+            !p.empty() && p.front().hidden, p.empty() ? -1 : p.back().x, !p.empty() && p.back().hidden, e.edge.x);
   e.coast = true;
   CHECK_MSG(!live::RARE[10].fits(e), "the huldra by the sea");
   // a nisse on his way to the cabin over the snow on a December night before Christmas Eve
   show({"A cosy evening", "cloudy", 0, 70, 0, 0, 3, -5, 0, utc(2026, 12, 10, 18), met::G_HILLS, 90, 10, 0}, "advent");
   e = live::SEEN;
   CHECK_MSG(live::RARE[11].fits(e), "a December night: no nisse, snow lying %d", e.at.white);
-  rare(11, "nisse", "nisse", 16, 4);
+  p = rare(11, "nisse", "nisse", 16, 4);
+  CHECK_MSG(!p.empty() && !p.front().hidden && p.back().hidden, "the nisse hidden %d at %d,%d, %d at %d,%d",
+            !p.empty() && p.front().hidden, p.empty() ? -1 : p.front().x, p.empty() ? -1 : p.front().y,
+            !p.empty() && p.back().hidden, p.empty() ? -1 : p.back().x, p.empty() ? -1 : p.back().y);
   e.at.day = 24;
   CHECK_MSG(!live::RARE[11].fits(e), "a nisse on Christmas Eve, the day's own show");
   // draugen on the open water on a windy night

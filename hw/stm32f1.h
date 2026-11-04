@@ -52,6 +52,7 @@ typedef struct {
 #define SPI1 ((spi_t *) 0x40013000)
 #define TIM1 ((tim_t *) 0x40012C00)
 #define TIM2 ((tim_t *) 0x40000000)
+#define TIM3 ((tim_t *) 0x40000400)
 #define ADC1 ((adc_t *) 0x40012400)
 #define RTC ((rtc_t *) 0x40002800)
 #define IWDG ((iwdg_t *) 0x40003000)
@@ -65,6 +66,7 @@ typedef struct {
 #define IRQ_USART1 37
 #define IRQ_DMA1_CH3 13
 #define IRQ_TIM2 28
+#define IRQ_TIM3 29
 #define SCB_SHPR3 REG(0xE000ED20)  // SysTick priority in bits 31:24
 #define DHCSR REG(0xE000EDF0)      // bit 0 is set while a debugger is attached
 #define DBGMCU_CR REG(0xE0042004)  // bit 0 DBG_SLEEP keeps the clocks on while the core sleeps
@@ -102,6 +104,7 @@ typedef struct {
 #define RCC_APB2ENR_SPI1EN (1u << 12)
 #define RCC_APB2ENR_USART1EN (1u << 14)
 #define RCC_APB1ENR_TIM2EN (1u << 0)
+#define RCC_APB1ENR_TIM3EN (1u << 1)
 #define RCC_APB1ENR_BKPEN (1u << 27)
 #define RCC_APB1ENR_PWREN (1u << 28)
 #define RCC_BDCR_LSEON (1u << 0)

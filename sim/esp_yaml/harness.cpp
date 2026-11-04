@@ -2,6 +2,7 @@
 // micros() and millis() run on simulated time.
 //   build/esp_test OUTDIR [PICTURE.ppm]
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <tuple>
@@ -88,8 +89,10 @@ esp_err_t esp_http_client_open(esp_http_client_handle_t c, int) {
   return c->c ? ESP_OK : ESP_FAIL;
 }
 int64_t esp_http_client_fetch_headers(esp_http_client_handle_t c) {
-  for (const char *h : {"Last-Modified", "Expires"}) {  // as servers write them
-    std::string k = h, v = c->c->get_response_header(h[0] == 'L' ? "last-modified" : "expires");
+  for (const char *h : {"Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
+    std::string k = h, v = c->c->get_response_header(h[0] == 'L'   ? "last-modified"
+                                                     : h[0] == 'E' ? "expires"
+                                                                   : "retry-after");
     esp_http_client_event_t e = {HTTP_EVENT_ON_HEADER, c->config.user_data, k.data(), v.data()};
     if (!v.empty())
       c->config.event_handler(&e);
@@ -281,6 +284,7 @@ static uint16_t value_key(const char *name) { return (uint16_t) (K_ITEM_VALUE + 
 // Place p of the animations as the panel has it, not shown if there's no such place
 struct Look : pn_look_t {
   bool shown;
+  bool hidden;  // a part of the picture in front of its middle, see follow()
 };
 static Look look(int p) {
   Look l{};
@@ -692,15 +696,35 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
   pn_saver(0);
 }
 
-// Where copy 0 of a weather sprite has been on the panel, a place each cycle it showed
+// Copy 0 of a weather sprite as the panel has it, or where the ESP placed it, as the panel may have moved it on
+// already, or where the ESP last moved it to, as the panel here only moves it on once a second. False if the panel
+// hasn't it.
+enum At { NOW, PLACED, AIMED };
+static bool where(const char *sprite, Look &l, At at = NOW) {
+  const anim::Anim *a = anim::find(std::string("w_") + sprite);
+  if (!a || a->state != anim::SENT || a->copies.empty() || !a->copies[0].used)
+    return false;
+  const anim::Copy &c = a->copies[0];
+  l = look(c.place);
+  if (at == PLACED) {
+    l.x = c.x;
+    l.y = c.y;
+  }
+  if (at == AIMED)
+    for (const anim::Copy::Told &t : c.told)
+      if (t.key == K_ANIM_GLIDE && t.ch == (1 << ANIM_X | 1 << ANIM_Y)) {  // a move
+        l.x = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD]);
+        l.y = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD + 2]);
+      }
+  l.hidden = l.shown && pn_anim_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
+  return l.shown;
+}
+// Where copy 0 of a weather sprite has been on the panel, from where the ESP placed it, a place each cycle it showed
 using Path = std::vector<Look>;
 static void follow(const char *sprite, Path &p) {
-  const anim::Anim *a = anim::find(std::string("w_") + sprite);
-  if (a && a->state == anim::SENT && !a->copies.empty() && a->copies[0].used) {
-    Look l = look(a->copies[0].place);
-    if (l.shown && l.opa > 0)
-      p.push_back(l);
-  }
+  Look l;
+  if (where(sprite, l, p.empty() ? PLACED : NOW) && l.opa > 0)
+    p.push_back(l);
 }
 // Its row where it crossed column x, between the places either side, -1 if it didn't. The panel here only moves it
 // on once a second.
@@ -779,8 +803,9 @@ static int slots_used() {
 }
 
 // Each of the show's visitors in turn, its other timers put off, as live/TAG_K_n.ppm with shots of each. Each asks
-// the panel for no more than it has, and lets go of what it took once it's gone.
-static void visits(const char *tag, int shots = 2) {
+// the panel for no more than it has, and lets go of what it took once it's gone. Those of walkers come from out of
+// sight and go out of it, off the screen or behind the picture's parts, rather than fading in and out in the open.
+static void visits(const char *tag, int shots = 2, std::initializer_list<const char *> walkers = {}) {
   for (int k = 0; k < live::R.visits; k++) {
     show_later();
     size_t from = log_all.size();
@@ -789,9 +814,26 @@ static void visits(const char *tag, int shots = 2) {
     if (!ms)
       continue;
     std::string name = std::string(tag) + "_" + std::to_string(k);
-    play((int) (ms + 999) / 1000 + 1, shots, name);
+    std::map<std::string, Path> paths;  // each walker where it's placed, faded in or not, and where it went
+    play((int) (ms + 999) / 1000 + 1, shots, name, [&] {
+      for (const char *w : walkers) {
+        Path &p = paths[w];
+        Look l;
+        if (where(w, l, p.empty() ? PLACED : AIMED))
+          p.resize(std::min<size_t>(p.size(), 1)), p.push_back(l);
+      }
+    });
     live_quiet(name, from);
     CHECK_MSG(slots_used() <= slots, "%s: %d animations after the visit, %d before", name.c_str(), slots_used(), slots);
+    for (auto &[w, p] : paths) {
+      if (p.empty())
+        continue;
+      const live::Frames *f = live::frames_of(w);
+      auto away = [&](const Look &l) { return l.hidden || l.x + f->w <= 0 || l.x >= met::W; };
+      CHECK_MSG(away(p.front()) && away(p.back()), "%s: the %s from %d,%d, hidden %d, to %d,%d, hidden %d",
+                name.c_str(), w.c_str(), p.front().x, p.front().y, p.front().hidden, p.back().x, p.back().y,
+                p.back().hidden);
+    }
   }
 }
 
@@ -1527,8 +1569,9 @@ static void anim_copies() {
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
   int ar = until_anim_status("Shown: ball (3 copies)", 100);
   CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
-  Look a = look(1), b = look(2);
-  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150, "copies at %d,%d and %d,%d", a.x, a.y, b.x, b.y);
+  Look a = look(1), b = look(2);  // in front of anything a picture has in front of the weather's animations
+  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == ANIM_NEAREST && b.depth == ANIM_NEAREST,
+            "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
   const anim::Anim *ball = anim::find("ball");
   CHECK_MSG(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
@@ -2290,7 +2333,33 @@ static void met_requests() {
   ask();
   CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && met::not_before == 1792411200,
             "a 304: %s, next at %u", met_status.c_str(), (unsigned) met::not_before);
+  // a server error keeps the forecast and asks again a minute later, at once rather than at met.yaml's next check,
+  // then two, and Retry-After makes it wait longer
+  panel_http.status = 503;
+  met::not_before = 0;
+  ask();
+  uint32_t t0 = (uint32_t) flexit_panel_time.t.timestamp;
+  CHECK_MSG(met::weather.ok && met_status == "Kept the last forecast (HTTP 503)" && met::not_before == t0 + 60 &&
+                met::retry_soon,
+            "a 503: '%s', next in %d s", met_status.c_str(), (int) (met::not_before - t0));
+  flexit_panel_time.t.timestamp += 60;
+  yaml_every(1000);
+  CHECK_MSG(met::fetching && !tasks.empty(), "not asked again a minute after a 503");
+  panel_http.status = 502;
+  panel_http.retry_after = "600";
+  run_task();
+  yaml_every(1000);
+  t0 = (uint32_t) flexit_panel_time.t.timestamp;
+  CHECK_MSG(met::weather.ok && met::backoff_s == 120 && met::not_before == t0 + 600,
+            "a 502 with Retry-After 600: back-off %u, next in %d s", (unsigned) met::backoff_s,
+            (int) (met::not_before - t0));
+  panel_http.retry_after.clear();
   panel_http.status = 200;
+  met::not_before = 0;
+  ask();
+  CHECK_MSG(met::weather.ok && met::backoff_s == 0 && !met::retry_soon, "the forecast after the errors: '%s'",
+            met_status.c_str());
+  flexit_panel_time.t.timestamp -= 60;
   // a 301 is followed, three times at most
   panel_http.location = std::string(met::url) + "&moved=1";
   panel_http.moves = 1;
@@ -2301,8 +2370,8 @@ static void met_requests() {
   panel_http.moves = 9;
   met::not_before = 0;
   ask();
-  CHECK_MSG(panel_http.moves == 5 && met_status == "No forecast (HTTP 301)", "moved on and on: %d requests, '%s'",
-            9 - panel_http.moves, met_status.c_str());
+  CHECK_MSG(panel_http.moves == 5 && met_status == "Kept the last forecast (HTTP 301)",
+            "moved on and on: %d requests, '%s'", 9 - panel_http.moves, met_status.c_str());
   panel_http.moves = 0;
   // A cut-off answer counts as none, wherever it's cut: the forecast and its Last-Modified stay, and it's asked
   // again in minutes
@@ -2426,8 +2495,9 @@ static void met_picture() {
   CHECK_MSG(picture("weather, with the RAM back", 3000) >= 0 && !met::drawing, "not drawn with the RAM back");
 }
 
-// Refusals back off an hour, then twice as long, and an answer starts over. No answer at all is ten minutes and twice
-// that up to an hour, after a refusal still an hour.
+// A server error keeps the forecast and asks again a minute later, then twice as long up to half an hour. Refusals
+// back off an hour, then twice as long, and an answer starts over. No answer at all is ten minutes and twice that up
+// to an hour, after a refusal still an hour. Retry-After can only make it longer.
 static void met_answers() {
   step("MET Norway's answers");
   const met::Weather sample = met::weather;                                    // the forecast as read from the sample
@@ -2441,13 +2511,24 @@ static void met_answers() {
   fetched(304, {}, "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
   CHECK_MSG(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
   CHECK_MSG(met::not_before == 1792414800, "the 304's Expires not kept");
-  fetched(500, {}, "");
-  CHECK_MSG(met::weather.ok && met_status.find("HTTP 500") != std::string::npos, "an error lost the forecast: %s",
-            met_status.c_str());
   uint32_t now = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK_MSG(met::not_before == now + 3600, "no back-off after an error");
+  for (uint32_t want : {60, 120, 240, 480, 960, 1800, 1800}) {
+    fetched(want == 60 ? 500 : 503, {}, "");
+    CHECK_MSG(
+        met::weather.ok && met::not_before == now + want && met::retry_soon &&
+            met_status == (want == 60 ? "Kept the last forecast (HTTP 500)" : "Kept the last forecast (HTTP 503)"),
+        "a server error: '%s', next in %d s, not %u", met_status.c_str(), (int) (met::not_before - now),
+        (unsigned) want);
+  }
+  fetched(429, {}, "");
+  CHECK_MSG(met::not_before == now + 3600 && !met::retry_soon, "a 429 after server errors waited %d s",
+            (int) (met::not_before - now));
   fetched(429, {}, "");
   CHECK_MSG(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
+  CHECK_MSG(
+      met::retry_after_s("120", now) == 120 && met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792414500) == 300 &&
+          met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792415000) == 0 && met::retry_after_s("", now) == 0,
+      "Retry-After read wrong");
   met::unreachable();
   CHECK_MSG(met::backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) met::backoff_s);
   flexit_panel_time.t.timestamp += 7200;

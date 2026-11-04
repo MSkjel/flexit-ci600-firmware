@@ -59,6 +59,7 @@ typedef struct {
   uint8_t leaving;   // STAY, or fading out to go
   bool held;         // its own frame stays at the last one
   uint8_t tag;       // ANIM_ROUNDS's, for ANIM_GONE
+  uint8_t depth;     // K_ANIM_DEPTH's
   uint16_t frame;    // a frame of its own in pool, NO_OFF = the slot's
   uint16_t next;     // the next record of its own frame
   uint32_t due;      // tick for that record. A still picture's ms left of its round instead
@@ -135,5 +136,6 @@ lv_area_t box(const place_t *p);
 void refresh(place_t *p, const look_t *was, const lv_area_t *b);
 void hide(place_t *p);
 void order(void);
+void set_depth(place_t *p, uint8_t depth);
 void changed(const place_t *p, const lv_area_t *a);
 void draw_init(void);

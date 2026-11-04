@@ -192,6 +192,11 @@ uint32_t plat_entropy(void) {
   return ++starts * 0x9E3779B9u;
 }
 
+int plat_log(uint8_t *out, int room) {
+  (void) out, (void) room;
+  return 0;  // no debug build here
+}
+
 // ---- a JPEG of the screen against the screen
 static uint32_t jpeg_rgb[W * H];
 

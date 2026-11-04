@@ -137,9 +137,10 @@ int pn_anim(int place, pn_look_t *out) {
   anim_look_t l;
   if (!anim_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa};
+  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth};
   return 1;
 }
+int pn_anim_covered(int place, int x, int y) { return anim_covered(place, x, y); }
 unsigned pn_anim_used(void) { return anim_used(); }
 
 // The picture screensaver up, so its animations play, or down again. The picture alone unless pn_saver_texts()
