@@ -362,12 +362,16 @@ inline HttpReadLoopResult http_read_loop_result(int r, uint32_t &, uint32_t, boo
 struct HttpContainer {
   int status_code = 200;
   size_t content_length = 0;
-  std::string type, body, last_modified, expires, location;
+  std::string type, body, last_modified, expires, retry_after, location;
   size_t at = 0;          // of body
   size_t cut = SIZE_MAX;  // the connection drops after this much of the body, and read() gives cut_with
   int cut_with = 0;
   std::string get_response_header(const std::string &h) const {
-    return h == "last-modified" ? last_modified : h == "expires" ? expires : h == "content-type" ? type : "";
+    return h == "last-modified"  ? last_modified
+           : h == "expires"      ? expires
+           : h == "retry-after"  ? retry_after
+           : h == "content-type" ? type
+                                 : "";
   }
   int read(uint8_t *buf, size_t n) {  // 512 at a time, like a real one
     if (at >= cut)
@@ -385,13 +389,14 @@ struct HttpRequest {
   std::string type;                          // and its Content-Type
   int status = 200;                          // and its HTTP status
   std::string body, last_modified, expires;  // what it answers with
-  bool down = false;                         // no answer at all
-  size_t cut = SIZE_MAX;                     // the connection drops after this much of the body
-  int cut_with = 0;                          // what read() gives then: 0 it closed, -1 an error
-  int moves = 0;                             // answers this many requests with a 301 first
-  std::string location;                      // to here
-  std::vector<http_request::Header> sent;    // the last request's headers
-  std::string url;                           // and its URL
+  std::string retry_after;
+  bool down = false;                       // no answer at all
+  size_t cut = SIZE_MAX;                   // the connection drops after this much of the body
+  int cut_with = 0;                        // what read() gives then: 0 it closed, -1 an error
+  int moves = 0;                           // answers this many requests with a 301 first
+  std::string location;                    // to here
+  std::vector<http_request::Header> sent;  // the last request's headers
+  std::string url;                         // and its URL
   uint32_t get_timeout() const { return 4500; }
   std::shared_ptr<HttpContainer> get(const std::string &u, const std::vector<http_request::Header> &h,
                                      const std::vector<std::string> &) {
@@ -412,6 +417,7 @@ struct HttpRequest {
     c->body = body;
     c->last_modified = last_modified;
     c->expires = expires;
+    c->retry_after = retry_after;
     c->cut = cut;
     c->cut_with = cut_with;
     return c;
