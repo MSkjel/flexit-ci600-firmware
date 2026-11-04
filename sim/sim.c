@@ -137,9 +137,9 @@ static bool ball_in(int x0, int y0) {
 }
 
 // Where the animation's place 0 is
-static void anim_pos(int16_t *x, int16_t *y) {
-  anim_look_t l = {0};
-  anim_look(0, &l);
+static void overlay_pos(int16_t *x, int16_t *y) {
+  overlay_look_t l = {0};
+  overlay_look(0, &l);
   *x = l.x;
   *y = l.y;
 }
@@ -593,21 +593,21 @@ static void animation(void) {
   sim_run(300);  // three frames later
   shot("58c_saver_animation_later");
   // drifting left at 60 px/s, it goes round the edge like on a torus: half of it on each side for a while
-  sim_esp_move_animation(K_ANIM_DRIFT, -60, 0, 0);
+  sim_esp_move_animation(K_OVERLAY_DRIFT, -60, 0, 0);
   settle();
   int16_t ax, ay;
   int stale = 0;  // pixels a step missed, against a full redraw
   for (int i = 0; i < 200; i++) {
     run(50);
     stale += sim_stale();
-    anim_pos(&ax, &ay);
+    overlay_pos(&ax, &ay);
     if (ax > 250 && ax <= 296)
       break;
   }
   check(ax > 250 && ax <= 296 && ay == 20, "the animation didn't drift round the left edge");
   check(ball_at(316, 20) && ball_at(4, 20) && !ball_at(160, 20), "the ball isn't drawn at both edges while wrapping");
   shot("58d_saver_animation_wrap");
-  sim_esp_move_animation(K_ANIM_DRIFT, 0, -60, 0);  // round the top edge too, so it shows in all four corners
+  sim_esp_move_animation(K_OVERLAY_DRIFT, 0, -60, 0);  // round the top edge too, so it shows in all four corners
   settle();
   for (int i = 0; i < 80; i++) {
     run(50);
@@ -615,20 +615,20 @@ static void animation(void) {
   }
   check(!stale, "the part wrapped round an edge isn't redrawn as it moves");
   // a glide lands on the target, the frames keep playing
-  sim_esp_move_animation(K_ANIM_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
+  sim_esp_move_animation(K_OVERLAY_GLIDE, 100, 100, 1000);  // above the clock band, which dims it
   settle();
   run(500);
-  anim_pos(&ax, &ay);
+  overlay_pos(&ax, &ay);
   check(ax > 100 && ay < 100, "the animation isn't on its way");
   run(600);
-  anim_pos(&ax, &ay);
+  overlay_pos(&ax, &ay);
   check(ax == 100 && ay == 100 && ball_in(100, 100), "the glide didn't land on 100,100");
   unsigned long px = sim_px;
   run(300);
-  anim_pos(&ax, &ay);
+  overlay_pos(&ax, &ay);
   check(ax == 100 && sim_px > px, "the frames stopped after the glide");
   // the motion pauses with the backlight: idle at night with the night idle brightness 0
-  sim_esp_move_animation(K_ANIM_DRIFT, 60, 0, 0);
+  sim_esp_move_animation(K_OVERLAY_DRIFT, 60, 0, 0);
   settle();
   ui_pop();
   int idle_after = M.idle_after;
@@ -639,19 +639,19 @@ static void animation(void) {
   M.night_from = 0;
   M.night_to = 23;
   run(16000);  // idle, the screensaver comes up by itself, dark
-  anim_pos(&ax, &ay);
+  overlay_pos(&ax, &ay);
   int16_t bx;
   run(1000);
-  anim_pos(&bx, &ay);
+  overlay_pos(&bx, &ay);
   check(bx == ax, "the animation drifts while the backlight is off");
   M.night = false;
   run(1000);
-  anim_pos(&bx, &ay);
+  overlay_pos(&bx, &ay);
   check(bx == ax + 60, "the animation didn't drift on when the backlight came back");
   key(KEY_OK);
   M.idle_after = (uint8_t) idle_after;
   M.go_home = go_home;
-  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
+  sim_esp_set(K_OVERLAY_CLEAR, OVERLAY_ALL);
   settle();
 }
 
@@ -1638,7 +1638,7 @@ static void screenshots(void) {
   tiles = take_shot("the photo screensaver at 80 again", true, 3000, &err);
   sim_esp_send_animation(250, 20);
   settle();
-  sim_esp_move_animation(K_ANIM_DRIFT, 60, 0, 0);
+  sim_esp_move_animation(K_OVERLAY_DRIFT, 60, 0, 0);
   settle();
   tiles = take_shot("an animation drifting over it", false, 3000, &err);
   check(tiles > 0, "a screenshot over a moving animation didn't end");
@@ -1656,7 +1656,7 @@ static void screenshots(void) {
     cycle();
   sim_esp_shot_done(&bytes, &bad);
   check(bytes == before, "the panel sent tiles after the screenshot was stopped");
-  sim_esp_set(K_ANIM_CLEAR, ANIM_ALL);
+  sim_esp_set(K_OVERLAY_CLEAR, OVERLAY_ALL);
   settle();
   ui_go_home();
 }

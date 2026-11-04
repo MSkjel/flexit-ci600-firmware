@@ -15,7 +15,7 @@
 
 namespace panel = flexit::panel;
 namespace pic = flexit::panel::picture;
-namespace anim = flexit::panel::anim;
+namespace overlay = flexit::panel::overlay;
 namespace met = flexit::panel::met;
 namespace live = flexit::panel::met::live;
 
@@ -291,30 +291,30 @@ static Look look(int p) {
   l.shown = pn_anim(p, &l);
   return l;
 }
-static bool anim_ready() {  // the panel shows an animation somewhere
-  for (int p = 0; p < ANIM_PLACES; p++)
+static bool overlay_ready() {  // the panel shows an animation somewhere
+  for (int p = 0; p < OVERLAY_PLACES; p++)
     if (look(p).shown)
       return true;
   return false;
 }
 static std::string places() {  // what the panel shows where
   std::string s;
-  for (int p = 0; p < ANIM_PLACES; p++) {
+  for (int p = 0; p < OVERLAY_PLACES; p++) {
     Look l = look(p);
     if (l.shown)
       s += "[" + std::to_string(p) + " " + std::to_string(l.x) + "," + std::to_string(l.y) + "]";
   }
   return s;
 }
-static bool same_pool() { return pn_anim_used() == anim::used_by_others(nullptr); }
+static bool same_pool() { return pn_overlay_used() == overlay::used_by_others(nullptr); }
 
 // The animations play for ms, in the panel's motion steps
 static void steps(int ms) {
   for (int t = 0; t < ms; t += 50)
-    pn_anim_step(50);
+    pn_overlay_step(50);
 }
 
-static bool anim_shown() { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }
+static bool overlay_shown() { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }
 
 // Runs until the ESP says the animations are want and the link is quiet. The cycles it took, -1 if never.
 static int until_anim_status(const char *want, int max = 3000) {
@@ -323,8 +323,8 @@ static int until_anim_status(const char *want, int max = 3000) {
 
 // Every animation the ESP wants is on the panel
 static bool anims_sent() {
-  for (auto &a : anim::anims)
-    if (!a.name.empty() && a.state == anim::WANT)
+  for (auto &a : overlay::overlays)
+    if (!a.name.empty() && a.state == overlay::WANT)
       return false;
   return settled();
 }
@@ -557,9 +557,9 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
 }
 
 // The delays of animation name's records, as the panel plays them
-static std::vector<int> anim_delays(const char *name) {
+static std::vector<int> overlay_delays(const char *name) {
   std::vector<int> d;
-  const anim::Anim *a = anim::find(name);
+  const overlay::Overlay *a = overlay::find(name);
   for (size_t at = 0; a && at + 5 <= a->data.size();) {
     const uint8_t *r = a->data.data() + at;
     uint32_t n =
@@ -576,22 +576,22 @@ static std::vector<int> anim_delays(const char *name) {
 // Whether the panel draws frame f of animation `name` at place p as the ESP made it: transparent in the same
 // places and palette colours elsewhere. Says where not unless quiet.
 static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
-  anim::Anim *a = anim::find(name);
+  overlay::Overlay *a = overlay::find(name);
   if (!a)
     return false;
   auto &A = *a;
-  anim::Anim *was = anim::W.a;
-  anim::W.a = a;  // px() goes by it
+  overlay::Overlay *was = overlay::W.a;
+  overlay::W.a = a;  // px() goes by it
   struct Back {
-    anim::Anim *was;
-    ~Back() { anim::W.a = was; }
+    overlay::Overlay *was;
+    ~Back() { overlay::W.a = was; }
   } back{was};
   // its colour map, made again as count() makes it, since the ESP frees it
   std::vector<uint32_t> hist(4096);
   for (int g = 0; g < A.src->frames; g++)
     for (int y = 0; y < A.h; y++)
       for (int x = 0; x < A.w; x++) {
-        uint32_t c = anim::px(g, x, y);
+        uint32_t c = overlay::px(g, x, y);
         if (c >> 24 >= 128)
           hist[panel::bin(c)]++;
       }
@@ -605,10 +605,10 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
     lut[i] = (uint8_t) panel::nearest(panel::bin_rgb(i), A.pal, colours);
   for (int y = 0; y < A.h * A.scale; y++) {
     uint8_t line[320 * 3];
-    if (pn_anim_line(p, y, A.w, A.scale, A.transp, line) != A.w * A.scale)
+    if (pn_overlay_line(p, y, A.w, A.scale, A.transp, line) != A.w * A.scale)
       return false;
     for (int x = 0; x < A.w * A.scale; x++) {
-      uint32_t c = anim::px(f, x / A.scale, y / A.scale);
+      uint32_t c = overlay::px(f, x / A.scale, y / A.scale);
       uint16_t want = sim_rgb565(A.pal[lut[panel::bin(c)]]), got = line[3 * x] | line[3 * x + 1] << 8;
       bool see = c >> 24 < 128;
       if (see != (line[3 * x + 2] == 0) || (!see && got != want)) {
@@ -701,22 +701,22 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
 // hasn't it.
 enum At { NOW, PLACED, AIMED };
 static bool where(const char *sprite, Look &l, At at = NOW) {
-  const anim::Anim *a = anim::find(std::string("w_") + sprite);
-  if (!a || a->state != anim::SENT || a->copies.empty() || !a->copies[0].used)
+  const overlay::Overlay *a = overlay::find(std::string("w_") + sprite);
+  if (!a || a->state != overlay::SENT || a->copies.empty() || !a->copies[0].used)
     return false;
-  const anim::Copy &c = a->copies[0];
+  const overlay::Copy &c = a->copies[0];
   l = look(c.place);
   if (at == PLACED) {
     l.x = c.x;
     l.y = c.y;
   }
   if (at == AIMED)
-    for (const anim::Copy::Told &t : c.told)
-      if (t.key == K_ANIM_GLIDE && t.ch == (1 << ANIM_X | 1 << ANIM_Y)) {  // a move
-        l.x = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD]);
-        l.y = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD + 2]);
+    for (const overlay::Copy::Told &t : c.told)
+      if (t.key == K_OVERLAY_GLIDE && t.ch == (1 << OVERLAY_X | 1 << OVERLAY_Y)) {  // a move
+        l.x = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD]);
+        l.y = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD + 2]);
       }
-  l.hidden = l.shown && pn_anim_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
+  l.hidden = l.shown && pn_overlay_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
   return l.shown;
 }
 // Where copy 0 of a weather sprite has been on the panel, from where the ESP placed it, a place each cycle it showed
@@ -797,7 +797,7 @@ static void show_later() {
 // The panel's animations
 static int slots_used() {
   int n = 0;
-  for (auto &a : anim::anims)
+  for (auto &a : overlay::overlays)
     n += !a.name.empty();
   return n;
 }
@@ -874,9 +874,9 @@ static void boot() {
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
   yaml_time_sync();  // Home Assistant's time, right after boot
-  CHECK_MSG(pic::S.want == "dusk" && anim::find("ball"),
+  CHECK_MSG(pic::S.want == "dusk" && overlay::find("ball"),
             "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
-            anim::find("ball") != nullptr);
+            overlay::find("ball") != nullptr);
   pic::clear();
   panel_clear_animation.execute("");
   CHECK_MSG(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
@@ -1516,18 +1516,18 @@ static void pictures_jpeg() {
 static void animations() {
   step("animations");
   panel_anim_ball.turn_on();  // the switch
-  int ar = run_until(anim_shown, 2000);
+  int ar = run_until(overlay_shown, 2000);
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), ar);
   CHECK_MSG(ar >= 0 && same_anim("ball", 0), "the panel's first frame isn't the ESP's");
   for (int f = 1; f <= 8; f++) {
-    pn_anim_step(100);
+    pn_overlay_step(100);
     CHECK_MSG(same_anim("ball", f % 8), "frame %d isn't the ESP's", f % 8);
   }
   pn_shot(outdir, "esp_animation");
 }
 
-// The actions reach the panel, pn_anim_step(100) is two steps of the panel's motion timer
-static void anim_moving() {
+// The actions reach the panel, pn_overlay_step(100) is two steps of the panel's motion timer
+static void overlay_moving() {
   step("animations moved and drifting");
   Look l = look(0);
   CHECK_MSG(l.x == 250 && l.y == 20, "ball at %d,%d, not where the yaml put it", l.x, l.y);
@@ -1548,13 +1548,13 @@ static void anim_moving() {
             "no warning about the glide time");
   panel_drift_animation.execute("ball", 0, -20, 0);
   ar = until_anim_status("Shown: ball, drifting", 100);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98 && l.y == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
             panel_animation_status.state.c_str(), l.x, l.y);
   panel_drift_animation.execute("ball", 0, 0, 0);
   ar = until_anim_status("Shown: ball", 100);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), l.x);
   panel_move_animation.execute("ball", 1, 0, 0, 0, "none");  // no such copy
@@ -1563,22 +1563,23 @@ static void anim_moving() {
 }
 
 // More places: a copy in step, and one with a frame of its own two frames ahead
-static void anim_copies() {
+static void overlay_copies() {
   step("animation copies");
   panel_place_animation.execute("ball", 1, 10, 150, false, 0);
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
   int ar = until_anim_status("Shown: ball (3 copies)", 100);
   CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
   Look a = look(1), b = look(2);  // in front of anything a picture has in front of the weather's animations
-  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == ANIM_NEAREST && b.depth == ANIM_NEAREST,
-            "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
-  const anim::Anim *ball = anim::find("ball");
-  CHECK_MSG(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
-            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+  CHECK_MSG(
+      a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == OVERLAY_NEAREST && b.depth == OVERLAY_NEAREST,
+      "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
+  const overlay::Overlay *ball = overlay::find("ball");
+  CHECK_MSG(pn_overlay_used() == ball->frame_bytes() * 2 + ball->data.size(),
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
             (unsigned) (ball->frame_bytes() * 2 + ball->data.size()));
   // copy 1 shows what copy 0 shows, copy 2 started on frame 5 when it was placed, so it's out of step
   int apart = 0;
-  for (int i = 0; i < 8; i++, pn_anim_step(100))
+  for (int i = 0; i < 8; i++, pn_overlay_step(100))
     for (int f = 0; f < 8; f++)
       if (same_anim("ball", f, 0)) {
         CHECK_MSG(same_anim("ball", f, 1), "copy 1 isn't in step at frame %d", f);
@@ -1588,7 +1589,7 @@ static void anim_copies() {
   CHECK_MSG(apart, "copy 2 is in step with copy 0");
   panel_drift_animation.execute("ball", 2, 0, 30);
   run(3);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   a = look(0);
   b = look(2);
   CHECK_MSG(b.x == 200 && b.y == 153 && a.x == 98 && a.y == 40, "only copy 2 drifts: %d,%d and %d,%d", b.x, b.y, a.x,
@@ -1598,13 +1599,13 @@ static void anim_copies() {
 
 // Copy 2 turned and flipped as it drifts, a flip keeps a turn going, a spin and a stop, and a panel restart puts it
 // back as it was. The panel turns it while it's shown.
-static void anim_turning() {
+static void overlay_turning() {
   step("an animation turned and flipped");
   panel_glide_animation.execute("ball", 2, "turn", 450, 0, "none");  // 90
   panel_flip_animation.execute("ball", 2, true, false);
   run(3);
   Look l = look(2), l0 = look(0);
-  CHECK_MSG(l.shown && l.deg == 90 && l.flip == ANIM_FLIP_X && l0.shown && !l0.deg && !l0.flip,
+  CHECK_MSG(l.shown && l.deg == 90 && l.flip == OVERLAY_FLIP_X && l0.shown && !l0.deg && !l0.flip,
             "turned and flipped: %d degrees, flip %d", l.deg, l.flip);
   panel_glide_animation.execute("ball", 2, "turn", 0, 2000, "none");
   run(3);
@@ -1615,7 +1616,7 @@ static void anim_turning() {
   run(3);
   steps(2100);
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 0 && l.flip == ANIM_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
+  CHECK_MSG(l.shown && l.deg == 0 && l.flip == OVERLAY_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
             l.flip);
   panel_spin_animation.execute("ball", 2, -180);
   run(3);
@@ -1632,7 +1633,7 @@ static void anim_turning() {
   run(3);
   restart_panel();
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 180 && l.flip == ANIM_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.deg == 180 && l.flip == OVERLAY_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
   CHECK_MSG(l.shown && l.opa == 0, "placed again it fades in: opacity %d", l.opa);
   steps(400);
   l = look(2);
@@ -1640,7 +1641,7 @@ static void anim_turning() {
 }
 
 // Copy 2 sized, faded and wandering, and back as it was after a restart
-static void anim_wandering() {
+static void overlay_wandering() {
   step("an animation sized, faded and wandering");
   panel_glide_animation.execute("ball", 2, "size", 150, 0, "none");
   panel_glide_animation.execute("ball", 2, "opacity", 50, 1000, "none");
@@ -1655,7 +1656,7 @@ static void anim_wandering() {
   panel_wander_animation.execute("ball", 2, 20, 60, 0, 180, 300, 900, 0, 0);
   panel_face_animation.execute("ball", 2, 0, true, 0, 0, false);
   run(3);
-  const anim::Anim *ball = anim::find("ball");
+  const overlay::Overlay *ball = overlay::find("ball");
   int bw = ball->w * ball->scale, bh = ball->h * ball->scale, zw = (bw * 1500 + 500) / 1000,
       zh = (bh * 1500 + 500) / 1000;
   Look at;                     // where it was last
@@ -1684,9 +1685,9 @@ static void anim_wandering() {
 }
 
 // Copy 1 waved, mapped and its frames paused, and all of it back after a panel restart
-static void anim_waved() {
+static void overlay_waved() {
   step("an animation waved, mapped and paused");
-  int p1 = anim::find("ball")->copies[1].place;
+  int p1 = overlay::find("ball")->copies[1].place;
   panel_wave_animation.execute("ball", 1, "x", 5, 5, 0, 0, 0, 0, 0, false, "none");
   panel_map_animation.execute("ball", 1, "opacity", 50, 50, 100, 100);
   panel_frame_rate_animation.execute("ball", 0);
@@ -1709,28 +1710,28 @@ static void anim_waved() {
   CHECK_MSG(same_anim("ball", 0, p1), "the frames went on after a restart");
 }
 
-static void anim_turned_down() {
+static void overlay_turned_down() {
   step("animation actions the ESP turns down");
-  const anim::Anim *ball = anim::find("ball");
+  const overlay::Overlay *ball = overlay::find("ball");
   int p1 = ball->copies[1].place;
   size_t warned = log_all.size();
   panel_wave_animation.execute("ball", 1, "colour", 0, 1, 0, 0, 0, 0, 0, false, "none");
   panel_glide_animation.execute("ball", 1, "size", 500, 0, "none");
   panel_map_animation.execute("ball", 1, "x", 0, 0, 0, 0);
-  for (int i = 0; i < ANIM_WAVES; i++)  // small ones, a pixel, a degree or 99 %
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[i % ANIM_CHANNELS],
-                                 anim::no_change(i % ANIM_CHANNELS) ? 99 : 1,
-                                 anim::no_change(i % ANIM_CHANNELS) ? 99 : 1, 0, 0, 0, 0, 0, false, "none");
+  for (int i = 0; i < OVERLAY_WAVES; i++)  // small ones, a pixel, a degree or 99 %
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[i % OVERLAY_CHANNELS],
+                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1,
+                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1, 0, 0, 0, 0, 0, false, "none");
   panel_wave_animation.execute("ball", 2, "size", 90, 90, 0, 0, 0, 0, 0, false, "none");
   run(3);
   for (const char *w :
        {"'colour' isn't one of x, y, turn, size, opacity, speed", "size 500 over 0 ms, it takes 10..400",
         "x and y don't follow where it is", "the panel runs 12 waves at most"})
     CHECK_MSG(logged(w, warned), "no warning '%s'", w);
-  for (int i = 0; i < ANIM_WAVES; i++) {
-    int c = i % ANIM_CHANNELS;
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[c], anim::no_change(c), anim::no_change(c),
-                                 0, 0, 0, 0, 0, false, "none");
+  for (int i = 0; i < OVERLAY_WAVES; i++) {
+    int c = i % OVERLAY_CHANNELS;
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c),
+                                 overlay::no_change(c), 0, 0, 0, 0, 0, false, "none");
   }
   panel_map_animation.execute("ball", 1, "opacity", 100, 100, 100, 100);
   panel_frame_rate_animation.execute("ball", 100);
@@ -1745,7 +1746,7 @@ static void anim_turned_down() {
 }
 
 // Copy 3 plays one round from its first frame and goes, and the ESP hears so
-static void anim_one_round() {
+static void overlay_one_round() {
   step("an animation copy that plays one round");
   panel_place_animation.execute("ball", 3, 20, 20, true, 0);
   panel_rounds_animation.execute("ball", 3, 1);
@@ -1754,293 +1755,296 @@ static void anim_one_round() {
             panel_animation_status.state.c_str());
   steps(3000);
   run(5);
-  CHECK_MSG(
-      !look(3).shown && !anim::find("ball")->copies[3].used && panel_animation_status.state == "Shown: ball (3 copies)",
-      "after its round: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(!look(3).shown && !overlay::find("ball")->copies[3].used &&
+                panel_animation_status.state == "Shown: ball (3 copies)",
+            "after its round: '%s'", panel_animation_status.state.c_str());
   panel_glide_animation.execute("ball", 2, "size", 100, 0, "none");
   panel_glide_animation.execute("ball", 2, "opacity", 100, 0, "none");
   panel_move_animation.execute("ball", 2, 200, 150, 0, "none");  // still, for what follows
   run(3);
 }
 
-// A second animation alongside, placed by the action. A frame alone is over ANIM_POOL at full size, so it's made at
+// A second animation alongside, placed by the action. A frame alone is over OVERLAY_POOL at full size, so it's made at
 // half size right away.
-static void anim_two() {
+static void overlay_two() {
   step("two animations");
-  anim::add("big", {200, 120, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {  // a corner moves
-                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + (x < 16 && y < 16 ? f : 0)) % 3) * 0x405060u;
-                    }});
+  overlay::add("big", {200, 120, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {  // a corner moves
+                         return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + (x < 16 && y < 16 ? f : 0)) % 3) * 0x405060u;
+                       }});
   size_t big_at = log_all.size();
-  anim::place("big", 0, 16, 16, false, 0);
+  overlay::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball (3 copies), big");
   CHECK_MSG(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
-  CHECK_MSG(anim::find("big")->half && !logged("making it at half size", big_at),
-            "big: half %d, tried at full size first: %d", anim::find("big") && anim::find("big")->half,
+  CHECK_MSG(overlay::find("big")->half && !logged("making it at half size", big_at),
+            "big: half %d, tried at full size first: %d", overlay::find("big") && overlay::find("big")->half,
             logged("making it at half size", big_at));
-  unsigned used = pn_anim_used();
-  CHECK_MSG(used == anim::used_by_others(nullptr) && used <= ANIM_POOL,
-            "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) anim::used_by_others(nullptr));
+  unsigned used = pn_overlay_used();
+  CHECK_MSG(used == overlay::used_by_others(nullptr) && used <= OVERLAY_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) overlay::used_by_others(nullptr));
   panel_remove_animation.execute("ball", 2);
   run(3);
-  CHECK_MSG(!look(2).shown && pn_anim_used() == used - anim::find("ball")->frame_bytes() &&
+  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - overlay::find("ball")->frame_bytes() &&
                 panel_animation_status.state == "Shown: ball (2 copies), big",
-            "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_anim_used());
+            "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_overlay_used());
   panel_clear_animation.execute("big");
   run(3);
-  CHECK_MSG(
-      !anim::find("big") && look(0).shown && !look(3).shown && panel_animation_status.state == "Shown: ball (2 copies)",
-      "clearing one animation: '%s'", panel_animation_status.state.c_str());
-  anim::clear("");
+  CHECK_MSG(!overlay::find("big") && look(0).shown && !look(3).shown &&
+                panel_animation_status.state == "Shown: ball (2 copies)",
+            "clearing one animation: '%s'", panel_animation_status.state.c_str());
+  overlay::clear("");
   run(3);
-  CHECK_MSG(!anim_ready() && !pn_anim_used() && !panel_anim_ball.state,
+  CHECK_MSG(!overlay_ready() && !pn_overlay_used() && !panel_anim_ball.state,
             "the animations are still there after clearing");
 }
 
-static void anim_half_size() {
+static void overlay_half_size() {
   step("an animation at half size");
   panel_anim_noise.turn_on();
-  int ar = run_until(anim_shown, 3000);
-  CHECK_MSG(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
+  int ar = run_until(overlay_shown, 3000);
+  CHECK_MSG(ar >= 0 && overlay::find("noise")->half && overlay::find("noise")->scale == 2 && same_anim("noise", 0),
             "noise not shown at half size: %s", panel_animation_status.state.c_str());
   // its drift_x from the yaml, 10 px/s left: half a pixel a step
-  pn_anim_step(100);
+  pn_overlay_step(100);
   Look l = look(0);
   CHECK_MSG(panel_animation_status.state == "Shown: noise, drifting" && l.x == 15 && l.y == 16,
             "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), l.x, l.y);
-  CHECK_MSG(anim::find("noise")->data.capacity() == anim::find("noise")->data.size(), "%u bytes kept for %u",
-            (unsigned) anim::find("noise")->data.capacity(), (unsigned) anim::find("noise")->data.size());
+  CHECK_MSG(overlay::find("noise")->data.capacity() == overlay::find("noise")->data.size(), "%u bytes kept for %u",
+            (unsigned) overlay::find("noise")->data.capacity(), (unsigned) overlay::find("noise")->data.size());
   pn_restart();
-  ar = run_until([] { return anim_ready() && anim_shown(); }, 3000);
+  ar = run_until([] { return overlay_ready() && overlay_shown(); }, 3000);
   CHECK_MSG(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
   l = look(0);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   CHECK_MSG(l.x == 16 && l.y == 16 && panel_animation_status.state == "Shown: noise, drifting",
             "after the restart: at %d,%d, status '%s'", l.x, l.y, panel_animation_status.state.c_str());
   l = look(0);
   CHECK_MSG(l.x == 15, "the drift wasn't sent again after a panel restart: at %d", l.x);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
   panel_anim_noise.turn_off();
-  anim::show("big");  // no yaml, no switch
+  overlay::show("big");  // no yaml, no switch
   ar = until_anim_status("Shown: big");
-  CHECK_MSG(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
-            panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
+  CHECK_MSG(ar >= 0 && overlay::find("big")->half && same_anim("big", 0) && !overlay::find("noise"), "big: %s, half %d",
+            panel_animation_status.state.c_str(), overlay::find("big") && overlay::find("big")->half);
 }
 
-static void anim_not_fitting() {
+static void overlay_not_fitting() {
   step("animations that don't fit");
   // flush with the right and bottom edges, half size rounds up, so it moves in
-  anim::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
-  anim::clear("big");
-  anim::show("edge");
+  overlay::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
+  overlay::clear("big");
+  overlay::show("edge");
   int ar = until_anim_status("Shown: edge");
   Look l = look(0);
-  CHECK_MSG(ar >= 0 && anim::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
-            "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, l.x, l.y);
+  CHECK_MSG(ar >= 0 && overlay::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
+            "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), overlay::find("edge")->half, l.x, l.y);
   // the panel draws 2x at most, so scale 2 can't go to half size
-  anim::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
-  anim::clear("edge");
-  anim::show("noise2");
-  ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
+  overlay::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
+  overlay::clear("edge");
+  overlay::show("noise2");
+  ar = run_until([] { return overlay::find("noise2") && overlay::find("noise2")->state == overlay::FAILED; }, 100);
   CHECK_MSG(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
-                anim::find("noise2")->scale == 2,
-            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
-  anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
-  anim::clear("noise2");
-  anim::show("scale3");
+                overlay::find("noise2")->scale == 2,
+            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), overlay::find("noise2")->scale);
+  overlay::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
+  overlay::clear("noise2");
+  overlay::show("scale3");
   run(1);
   CHECK_MSG(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
             panel_animation_status.state.c_str());
-  anim::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
-  anim::clear("scale3");
-  anim::show("left");
+  overlay::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
+  overlay::clear("scale3");
+  overlay::show("left");
   run(1);
   CHECK_MSG(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
             panel_animation_status.state.c_str());
   size_t slow_at = log_all.size();
-  anim::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
-  CHECK_MSG(anim::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
-            "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
+  overlay::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
+  CHECK_MSG(overlay::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
+            "frame_ms 5000 taken as %d", overlay::sources["slow"].frame_ms);
 }
 
 // Clearing it while it's being made frees its buffers
-static void anim_cleared_while_made() {
+static void overlay_cleared_while_made() {
   step("an animation cleared while it's made");
-  anim::clear("left");
-  anim::show("edge");
-  anim::W.a = anim::find("edge");
-  anim::start();
-  while (anim::W.f < anim::W.a->src->frames)
-    anim::count();
-  anim::palette();
-  anim::make(0, true);
-  CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
-  anim::clear("");
-  CHECK_MSG(
-      !anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
-      "clearing kept the buffers");
+  overlay::clear("left");
+  overlay::show("edge");
+  overlay::W.a = overlay::find("edge");
+  overlay::start();
+  while (overlay::W.f < overlay::W.a->src->frames)
+    overlay::count();
+  overlay::palette();
+  overlay::make(0, true);
+  CHECK_MSG(overlay::W.phase == overlay::MAKE && overlay::W.prev.capacity(), "edge isn't being made");
+  overlay::clear("");
+  CHECK_MSG(!overlay::W.hist.capacity() && !overlay::W.frame.capacity() && !overlay::W.prev.capacity() &&
+                !overlay::W.first.capacity(),
+            "clearing kept the buffers");
 }
 
 // No room next to the others: ball and three big ones at half size, the third is refused. Then two more refused the
 // same way fill the slots, and one past that doesn't get one
-static void anim_no_room() {
+static void overlay_no_room() {
   step("no room for another animation");
-  anim::show("ball");
-  anim::place("big", 0, 16, 16, false, 0);
+  overlay::show("ball");
+  overlay::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball, big", 6000);
   CHECK_MSG(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
-  anim::add("big2", anim::sources["big"]);
-  anim::add("big3", anim::sources["big"]);
-  anim::place("big2", 0, 16, 16, false, 0);
-  anim::place("big3", 0, 16, 16, false, 0);
-  ar = run_until([] { return anim::find("big3") && anim::find("big3")->state != anim::WANT && settled(); }, 9000);
+  overlay::add("big2", overlay::sources["big"]);
+  overlay::add("big3", overlay::sources["big"]);
+  overlay::place("big2", 0, 16, 16, false, 0);
+  overlay::place("big3", 0, 16, 16, false, 0);
+  ar = run_until([] { return overlay::find("big3") && overlay::find("big3")->state != overlay::WANT && settled(); },
+                 9000);
   CHECK_MSG(
-      ar >= 0 && anim::find("big2")->state == anim::SENT && anim::find("big3")->state == anim::FAILED &&
+      ar >= 0 && overlay::find("big2")->state == overlay::SENT && overlay::find("big3")->state == overlay::FAILED &&
           panel_animation_status.state.rfind("Shown: ball, big, big2; big3: too big even at half size (over ", 0) == 0,
       "four animations: '%s'", panel_animation_status.state.c_str());
-  CHECK_MSG(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
-            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
-            (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(pn_overlay_used() == overlay::used_by_others(nullptr) && pn_overlay_used() <= OVERLAY_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
+            (unsigned) overlay::used_by_others(nullptr));
   for (const char *name : {"big4", "big5"}) {  // refused like big3, but each takes a slot
-    anim::add(name, anim::sources["big"]);
-    anim::place(name, 0, 16, 16, false, 0);
-    ar = run_until([name] { return anim::find(name) && anim::find(name)->state != anim::WANT && settled(); }, 9000);
-    CHECK_MSG(ar >= 0 && anim::find(name)->state == anim::FAILED, "%s: '%s'", name,
+    overlay::add(name, overlay::sources["big"]);
+    overlay::place(name, 0, 16, 16, false, 0);
+    ar = run_until([name] { return overlay::find(name) && overlay::find(name)->state != overlay::WANT && settled(); },
+                   9000);
+    CHECK_MSG(ar >= 0 && overlay::find(name)->state == overlay::FAILED, "%s: '%s'", name,
               panel_animation_status.state.c_str());
   }
-  anim::add("big6", anim::sources["big"]);
-  anim::place("big6", 0, 16, 16, false, 0);  // no seventh slot
+  overlay::add("big6", overlay::sources["big"]);
+  overlay::place("big6", 0, 16, 16, false, 0);  // no seventh slot
   run(1);
-  CHECK_MSG(!anim::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
+  CHECK_MSG(!overlay::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
             "a seventh animation: '%s'", panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
   run(3);
 }
 
 // A GIF that repeats itself goes once round, and a frame shown twice in a row goes as one twice as long
-static void anim_repeats() {
+static void overlay_repeats() {
   step("animation frames that repeat");
-  anim::add("cycle", {16, 16, 9, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f % 3, x, y); }});
-  anim::add("held", {16, 16, 4, 100, 0, 40, 1, [](int f, int x, int y) { return noise_px(f == 2 ? 1 : f, x, y); }});
+  overlay::add("cycle", {16, 16, 9, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f % 3, x, y); }});
+  overlay::add("held", {16, 16, 4, 100, 0, 40, 1, [](int f, int x, int y) { return noise_px(f == 2 ? 1 : f, x, y); }});
   size_t made = log_all.size();
-  anim::show("cycle");
-  anim::show("held");
+  overlay::show("cycle");
+  overlay::show("held");
   int ar = until_anim_status("Shown: cycle, held");
   CHECK_MSG(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
-                anim_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
-            "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) anim_delays("cycle").size());
-  CHECK_MSG(ar >= 0 && anim_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
-            "held: %u records", (unsigned) anim_delays("held").size());
-  anim::clear("");
+                overlay_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
+            "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) overlay_delays("cycle").size());
+  CHECK_MSG(ar >= 0 && overlay_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
+            "held: %u records", (unsigned) overlay_delays("held").size());
+  overlay::clear("");
   run(3);
 }
 
 // ---- what the panel shows is what the ESP thinks it shows
 // The ESP restarts. The panel drops what it had for the old one, the copies Home Assistant placed too, and shows what
 // the switches do.
-static void anim_esp_restart() {
+static void overlay_esp_restart() {
   step("animations after the ESP restarts");
-  anim::add("a1", {16, 16, 2, 100, 10, 10, 1, noise_px});
-  anim::add("a2", {16, 16, 2, 100, 100, 10, 1, noise_px});
-  anim::show("a1");
-  anim::show("a2");
-  anim::place("a2", 1, 100, 100, false, 0);
+  overlay::add("a1", {16, 16, 2, 100, 10, 10, 1, noise_px});
+  overlay::add("a2", {16, 16, 2, 100, 100, 10, 1, noise_px});
+  overlay::show("a1");
+  overlay::show("a2");
+  overlay::place("a2", 1, 100, 100, false, 0);
   run_until(anims_sent, 3000);
-  anim::clear("a1");  // so a2 gets another slot and place after the restart
+  overlay::clear("a1");  // so a2 gets another slot and place after the restart
   run(3);
-  anim::stop();
-  for (auto &a : anim::anims)
-    a = anim::Anim();
+  overlay::stop();
+  for (auto &a : overlay::overlays)
+    a = overlay::Overlay();
   // what panel::setup() sends, and on_boot shows what the switches have on
   panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);
-  anim::show("a2");
+  overlay::show("a2");
   int r = run_until(anims_sent, 3000);
   CHECK_MSG(r >= 0 && places() == "[0 100,10]" && same_pool(),
             "after an ESP restart the panel shows %s in %u bytes, the ESP has a2 at 100,10 in %u", places().c_str(),
-            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
-  anim::clear("");
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  overlay::clear("");
 }
 
 // A hello while one is made: it's made again from the start, not sent half made. A loop makes a few rows, and a
 // frame's record on its own.
-static void anim_hello_while_made() {
+static void overlay_hello_while_made() {
   step("a hello while an animation is made");
   static int reads;
-  anim::add("six", {128, 40, 6, 100, 50, 50, 1, [](int f, int x, int y) -> uint32_t {
-                      reads++;
-                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 4 + 2 * f) % 7) * 0x203040u;
-                    }});
-  anim::show("six");
-  anim::Anim *six = anim::find("six");
+  overlay::add("six", {128, 40, 6, 100, 50, 50, 1, [](int f, int x, int y) -> uint32_t {
+                         reads++;
+                         return 0xFF000000u | (uint32_t) ((x / 8 + y / 4 + 2 * f) % 7) * 0x203040u;
+                       }});
+  overlay::show("six");
+  overlay::Overlay *six = overlay::find("six");
   micros_step = 1000;  // 4 calls in a loop's 5 ms
   int most = 0;
   bool moved = false;  // the records, which have their RAM from the start
   const uint8_t *at = nullptr;
-  for (int k = 0; k < 1000 && !(anim::W.phase == anim::MAKE && anim::W.f == 2); k++) {
+  for (int k = 0; k < 1000 && !(overlay::W.phase == overlay::MAKE && overlay::W.f == 2); k++) {
     reads = 0;
-    anim::loop(micros() + panel::SLICE_US);
+    overlay::loop(micros() + panel::SLICE_US);
     most = std::max(most, reads);
-    if (anim::W.phase == anim::MAKE) {
+    if (overlay::W.phase == overlay::MAKE) {
       moved |= at && six->data.data() != at;
       at = six->data.data();
     }
   }
   micros_step = 0;
-  CHECK_MSG(anim::W.f == 2 && most == 4 * anim::ROWS_PX && !moved && six->data.capacity() == anim::data_max(),
+  CHECK_MSG(overlay::W.f == 2 && most == 4 * overlay::ROWS_PX && !moved && six->data.capacity() == overlay::data_max(),
             "%d pixels read in a loop, the records moved %d, %u bytes for them", most, moved,
             (unsigned) six->data.capacity());
   pn_restart();  // its hello comes before the next loop
-  int r = run_until([&] { return six->state == anim::SENT && settled(); }, 3000);
-  CHECK_MSG(r >= 0 && anim_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
-            (unsigned) anim_delays("six").size());
-  anim::clear("");
+  int r = run_until([&] { return six->state == overlay::SENT && settled(); }, 3000);
+  CHECK_MSG(r >= 0 && overlay_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
+            (unsigned) overlay_delays("six").size());
+  overlay::clear("");
 }
 
 // A long frame goes on in empty records. Past the end of the pool they must fit the records' capacity, or the
 // records move, a peak the RAM check doesn't count. The animation is refused there anyway.
-static void anim_long_frame() {
+static void overlay_long_frame() {
   step("an animation's long frame past the end of the pool");
-  anim::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
-  anim::show("long");
-  anim::W.a = anim::find("long");
-  anim::start();
-  while (anim::W.f < anim::W.a->src->frames)
-    anim::count();
-  anim::palette();
-  anim::Anim &a = *anim::W.a;
+  overlay::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
+  overlay::show("long");
+  overlay::W.a = overlay::find("long");
+  overlay::start();
+  while (overlay::W.f < overlay::W.a->src->frames)
+    overlay::count();
+  overlay::palette();
+  overlay::Overlay &a = *overlay::W.a;
   uint32_t seed = 5;
-  for (auto &b : anim::W.frame)
+  for (auto &b : overlay::W.frame)
     b = (uint8_t) (lcg(seed) >> 24);  // noise, so each record is a frame's size
   const uint8_t *at = a.data.data();
   size_t room = a.data.capacity(), past;
-  while ((past = a.data.size()) + a.frame_bytes() <= ANIM_POOL)
-    anim::record(nullptr, anim::W.frame, 100);
-  bool ok = anim::record(&anim::W.prev, anim::W.frame, 20000);  // 8 records of 2.55 s
-  CHECK_MSG(anim::W.phase == anim::MAKE && room == anim::data_max() && ok && a.data.data() == at &&
+  while ((past = a.data.size()) + a.frame_bytes() <= OVERLAY_POOL)
+    overlay::record(nullptr, overlay::W.frame, 100);
+  bool ok = overlay::record(&overlay::W.prev, overlay::W.frame, 20000);  // 8 records of 2.55 s
+  CHECK_MSG(overlay::W.phase == overlay::MAKE && room == overlay::data_max() && ok && a.data.data() == at &&
                 a.data.capacity() == room && a.data.size() == past,
             "a long frame past the pool: the records moved %d, %u bytes of %u", a.data.data() != at,
             (unsigned) a.data.size(), (unsigned) a.data.capacity());
-  anim::clear("");
+  overlay::clear("");
 }
 
 // A copy can start off the screen, to come in from there. One that isn't a copy takes nothing.
-static void anim_off_screen() {
+static void overlay_off_screen() {
   step("an animation copy off the screen");
   size_t warned = log_all.size();
-  anim::place("ball", 8, 10, 10, false, 0);
+  overlay::place("ball", 8, 10, 10, false, 0);
   run(5);
-  CHECK_MSG(!anim::find("ball") && !anim_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
-            "copy 8: ball %d, the panel shows %s", anim::find("ball") != nullptr, places().c_str());
-  anim::place("ball", 1, -40, 300, false, 0);
+  CHECK_MSG(!overlay::find("ball") && !overlay_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
+            "copy 8: ball %d, the panel shows %s", overlay::find("ball") != nullptr, places().c_str());
+  overlay::place("ball", 1, -40, 300, false, 0);
   bool sent =
-      run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::SENT && settled(); }, 3000) >= 0;
-  Look l = sent ? look(anim::find("ball")->copies[1].place) : Look{};
+      run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::SENT && settled(); },
+                3000) >= 0;
+  Look l = sent ? look(overlay::find("ball")->copies[1].place) : Look{};
   CHECK_MSG(sent && l.shown && l.x == -40 && l.y == 300, "a copy off the screen: the panel shows %s", places().c_str());
-  anim::clear("");
+  overlay::clear("");
   run(5);
 }
 
 // panel_show_animation puts copy 0 back where the yaml has it, drifting, once it was removed or played its rounds
-static void anim_shown_again() {
+static void overlay_shown_again() {
   step("an animation shown again");
   auto back = [] {  // at 16,16 or just left of it, and going left
     Look was = look(0);
@@ -2053,7 +2057,7 @@ static void anim_shown_again() {
   run_until(anims_sent, 3000);
   panel_remove_animation.execute("noise", 0);
   run(3);
-  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
+  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
             places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
@@ -2062,42 +2066,42 @@ static void anim_shown_again() {
   run(3);
   steps(2000);
   run(5);
-  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
+  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
             places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
   CHECK_MSG(back(), "shown again after its round: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
 }
 
-static void anim_timing() {
+static void overlay_timing() {
   step("animation timing");
   // A GIF that ends on its first frame. The record back to it stays its own, so a round ends there.
-  anim::add("aba", {16, 16, 3, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f == 1, x, y); }});
-  anim::show("aba");
-  anim::place("aba", 1, 100, 100, true, 0);
-  anim::rounds("aba", 1, 1);
+  overlay::add("aba", {16, 16, 3, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f == 1, x, y); }});
+  overlay::show("aba");
+  overlay::place("aba", 1, 100, 100, true, 0);
+  overlay::rounds("aba", 1, 1);
   run_until(anims_sent, 3000);
   std::string seen;  // the frames it shows, 2 is like 0
-  for (int t = 0; t < 100 && look(1).shown; t++, pn_anim_step(10)) {
+  for (int t = 0; t < 100 && look(1).shown; t++, pn_overlay_step(10)) {
     char f = same_anim("aba", 0, 1, true) ? '0' : same_anim("aba", 1, 1, true) ? '1' : '?';
     if (seen.empty() || seen.back() != f)
       seen += f;
   }
-  CHECK_MSG(anim_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
-            "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) anim_delays("aba").size());
-  anim::clear("");
+  CHECK_MSG(overlay_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
+            "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) overlay_delays("aba").size());
+  overlay::clear("");
 
   // Each frame its own time, past a record's 2550 ms in empty records after it: F0 4 s, F1 0.1 s, F2 3 s. In a
   // loop F0 shows for the record back to it and the empty one after the first record.
-  anim::Source slow{16, 16, 3, 100, 0, 0, 1, noise_px};
+  overlay::Source slow{16, 16, 3, 100, 0, 0, 1, noise_px};
   slow.delays = {4000, 100, 3000};
-  anim::add("slow", slow);
-  anim::show("slow");
+  overlay::add("slow", slow);
+  overlay::show("slow");
   run_until(anims_sent, 3000);
   std::vector<std::pair<int, int>> turns;  // when the panel shows another frame, and which
   int was = 0;
-  for (int t = 0; t <= 16000; t += 10, pn_anim_step(10)) {
+  for (int t = 0; t <= 16000; t += 10, pn_overlay_step(10)) {
     int f = same_anim("slow", 0, 0, true) ? 0 : same_anim("slow", 1, 0, true) ? 1 : 2;
     if (f != was)
       turns.push_back({t, f});
@@ -2106,27 +2110,27 @@ static void anim_timing() {
   int want[3] = {4000, 100, 3000}, timed = 0;  // how long each frame shows, every time it's seen whole
   for (size_t i = 0; i + 1 < turns.size(); i++)
     timed += abs(turns[i + 1].first - turns[i].first - want[turns[i].second]) <= 60 ? 1 : -100;
-  CHECK_MSG(anim_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
+  CHECK_MSG(overlay_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
             "frames of 4 s, 0.1 s and 3 s: %u records, %u changes, %d timed right",
-            (unsigned) anim_delays("slow").size(), (unsigned) turns.size(), timed);
-  anim::clear("");
+            (unsigned) overlay_delays("slow").size(), (unsigned) turns.size(), timed);
+  overlay::clear("");
 }
 
 // What making one takes, pdeflate and all. Short of it at full size it's made at half size, short of that too it fails
 // until it's shown again or a hello.
-static void anim_without_ram() {
+static void overlay_without_ram() {
   step("animations without the RAM");
   size_t tls = panel::requests * panel::REQUEST_RAM;  // met's request from boot, never run here, holds its share
   ram_free = 45 * 1024 + tls;
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
   run_until(anims_sent, 3000);
-  CHECK_MSG(anim::find("ball")->half && same_anim("ball", 0) &&
+  CHECK_MSG(overlay::find("ball")->half && same_anim("ball", 0) &&
                 logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
-            "ball without the RAM for full size: half %d", anim::find("ball")->half);
-  anim::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
+            "ball without the RAM for full size: half %d", overlay::find("ball")->half);
+  overlay::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
   ram_free = 30 * 1024 + tls;
-  anim::show("ball2x");
+  overlay::show("ball2x");
   run(3);
   CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
             panel_animation_status.state.c_str());
@@ -2137,45 +2141,45 @@ static void anim_without_ram() {
             panel_animation_status.state.c_str());
   // panel_place_animation tries a failed one again too
   ram_free = 30 * 1024;
-  anim::clear("ball2x");
-  anim::show("ball2x");
+  overlay::clear("ball2x");
+  overlay::show("ball2x");
   run(3);
   ram_free = 200 * 1024;
-  anim::place("ball2x", 1, 200, 100, false, 0);
+  overlay::place("ball2x", 1, 200, 100, false, 0);
   r = run_until(anims_sent, 3000);
   CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x (2 copies)", "placed after it failed: '%s'",
             panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
   // one that would only fail again isn't made again after a hello, until it's shown again
   static int making;
   panel_animation_status.add_on_state_callback([](const std::string &s) { making += s == "Making noise2"; });
-  anim::show("noise2");
+  overlay::show("noise2");
   run(3);
   restart_panel();
-  CHECK_MSG(making == 1 && anim::find("noise2")->state == anim::FAILED, "noise2 made %d times, through a hello",
+  CHECK_MSG(making == 1 && overlay::find("noise2")->state == overlay::FAILED, "noise2 made %d times, through a hello",
             making);
-  anim::show("noise2");
+  overlay::show("noise2");
   run(3);
   CHECK_MSG(making == 2, "noise2 not tried again when shown");
-  anim::clear("");
+  overlay::clear("");
 }
 
 // Copies with a frame of their own past the panel's pool aren't kept, placed before it's sent or after. One placed
 // again elsewhere has its own frame back first.
-static void anim_past_pool() {
+static void overlay_past_pool() {
   step("animation copies past the panel's pool");
-  anim::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
+  overlay::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
   for (int i = 1; i <= 6; i++)
-    anim::place("ball", i, 40 * i, 150, true, 0);
+    overlay::place("ball", i, 40 * i, 150, true, 0);
   run_until(anims_sent, 3000);
-  anim::Anim *ball = anim::find("ball");
+  overlay::Overlay *ball = overlay::find("ball");
   CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
                 !look(6).shown,
             "six copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
-            panel_animation_status.state.c_str(), pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+            panel_animation_status.state.c_str(), pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
   size_t warned = log_all.size();
-  anim::place("ball", 6, 150, 150, true, 0);
-  anim::place("ball", 2, 100, 50, true, 0);
+  overlay::place("ball", 6, 150, 150, true, 0);
+  overlay::place("ball", 2, 100, 50, true, 0);
   run(3);
   Look l = look(ball->copies[2].place);
   CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
@@ -2183,25 +2187,25 @@ static void anim_past_pool() {
                 logged("no room in the panel's 8192 bytes for a copy with a frame of its own", warned),
             "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
   // all eight places taken: no slot for another
-  for (int i = 6; i < ANIM_PLACES; i++)
-    anim::place("ball", i, 20 * i, 10, false, 0);
+  for (int i = 6; i < OVERLAY_PLACES; i++)
+    overlay::place("ball", i, 20 * i, 10, false, 0);
   warned = log_all.size();
-  anim::show("noise");
-  CHECK_MSG(!anim::find("noise") && logged("the panel shows 8 copies at most", warned),
+  overlay::show("noise");
+  CHECK_MSG(!overlay::find("noise") && logged("the panel shows 8 copies at most", warned),
             "a slot taken with no place for it");
-  anim::clear("");
+  overlay::clear("");
 }
 
 // The panel lets a wave that's settling go for a new one, so only those that aren't count
-static void anim_waves_settling() {
+static void overlay_waves_settling() {
   step("animation waves let go for new ones");
-  anim::show("ball");
-  anim::place("ball", 1, 10, 150, false, 0);
-  anim::place("ball", 2, 100, 150, false, 0);
-  for (int i = 0; i < ANIM_WAVES; i++) {
-    int c = i % ANIM_CHANNELS;
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[c], anim::no_change(c) ? 50 : 1,
-                                 anim::no_change(c) ? 90 : 9, 2000, 2000, 0, 0, 0, false, "none");
+  overlay::show("ball");
+  overlay::place("ball", 1, 10, 150, false, 0);
+  overlay::place("ball", 2, 100, 150, false, 0);
+  for (int i = 0; i < OVERLAY_WAVES; i++) {
+    int c = i % OVERLAY_CHANNELS;
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c) ? 50 : 1,
+                                 overlay::no_change(c) ? 90 : 9, 2000, 2000, 0, 0, 0, false, "none");
   }
   run_until(anims_sent, 3000);
   steps(500);
@@ -2210,33 +2214,33 @@ static void anim_waves_settling() {
   panel_wave_animation.execute("ball", 2, "x", 30, 30, 0, 0, 0, 0, 0, false, "none");
   run(3);
   steps(100);
-  int x = look(anim::find("ball")->copies[2].place).x;
+  int x = look(overlay::find("ball")->copies[2].place).x;
   CHECK_MSG(x == 130 && !logged("waves at most", warned), "a wave in place of one stopped: copy 2 at %d", x);
   panel_wave_animation.execute("ball", 2, "y", 5, 5, 0, 0, 0, 0, 0, false, "none");
   CHECK_MSG(logged("the panel runs 12 waves at most", warned), "a 13th wave");
 }
 
 // Taking a copy off or clearing another while one is on its way: it goes on, and the panel has what the ESP thinks
-static void anim_on_its_way() {
+static void overlay_on_its_way() {
   step("animations changed while one is on its way");
-  anim::add("mid", {32, 32, 6, 100, 200, 100, 1, noise_px});
-  anim::show("mid");
-  run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
-  CHECK_MSG(anim::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u", pn_anim_used(),
-            (unsigned) anim::used_by_others(nullptr));
+  overlay::add("mid", {32, 32, 6, 100, 200, 100, 1, noise_px});
+  overlay::show("mid");
+  run_until([] { return overlay::W.t.head && overlay::W.t.pos > 512; }, 3000);
+  CHECK_MSG(overlay::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u",
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
   size_t warned = log_all.size();
-  anim::remove("ball", 1);
+  overlay::remove("ball", 1);
   int r = run_until(anims_sent, 3000);
-  CHECK_MSG(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, anim::find("mid")->copies[0].place),
+  CHECK_MSG(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, overlay::find("mid")->copies[0].place),
             "mid sent again after a copy of ball went");
-  anim::clear("mid");
-  anim::show("mid");
-  run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
-  anim::clear("mid");
+  overlay::clear("mid");
+  overlay::show("mid");
+  run_until([] { return overlay::W.t.head && overlay::W.t.pos > 512; }, 3000);
+  overlay::clear("mid");
   run(5);
-  CHECK_MSG(same_pool() && !anim::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
-            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
-  anim::clear("");
+  CHECK_MSG(same_pool() && !overlay::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  overlay::clear("");
   run(3);
 }
 
@@ -2736,14 +2740,15 @@ static void picture_cleared_mid_anim() {
   panel_picture.control(1);
   CHECK_MSG(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
   panel_anim_noise.turn_on();  // big enough to take a while
-  int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
+  int r = run_until(
+      [] { return overlay::W.t.head && overlay::W.t.pos > 0 && overlay::W.t.pos < overlay::W.a->data.size(); }, 3000);
   CHECK_MSG(r >= 0, "the animation never went out");
   panel_picture.control(0);
-  r = run_until(anim_shown, 3000);
+  r = run_until(overlay_shown, 3000);
   run(3);
-  CHECK_MSG(r >= 0 && anim_ready() && panel_pic() == 0,
+  CHECK_MSG(r >= 0 && overlay_ready() && panel_pic() == 0,
             "after clearing the picture on the animation's way: '%s', animation %d, picture %d",
-            panel_animation_status.state.c_str(), anim_ready(), panel_pic());
+            panel_animation_status.state.c_str(), overlay_ready(), panel_pic());
   panel_picture.control(1);
   CHECK_MSG(picture("dusk again", 3000) >= 0, "the picture is stuck behind the animation");
 }
@@ -2775,12 +2780,12 @@ static void end_lost() {
   panel_anim_ball.turn_off();
   run(3);
   panel_anim_ball.turn_on();
-  r = run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::FAILED; }, 3000);
+  r = run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::FAILED; }, 3000);
   CHECK_MSG(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
             panel_animation_status.state.c_str());
   pn_restart();
   r = until_anim_status("Shown: ball");
-  CHECK_MSG(r >= 0 && anim_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
+  CHECK_MSG(r >= 0 && overlay_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
             panel_animation_status.state.c_str());
   h = real;
 }
@@ -2836,12 +2841,12 @@ static void refused() {
   want = "ball: the panel didn't take it (" + bad + ")";
   int r = until_anim_status(want.c_str());
   run(50);
-  CHECK_MSG(r >= 0 && !turn && went() == 1 && anim::find("ball")->state == anim::FAILED,
+  CHECK_MSG(r >= 0 && !turn && went() == 1 && overlay::find("ball")->state == overlay::FAILED,
             "an animation the panel can't take: %d transfers, '%s'", went(), panel_animation_status.state.c_str());
   st = PIC_BAD_CRC;
   turn = 1;
   ids = panel::transfer_ids;
-  anim::show("ball");  // tried again
+  overlay::show("ball");  // tried again
   r = until_anim_status("Shown: ball");
   CHECK_MSG(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
             went(), panel_animation_status.state.c_str());
@@ -2849,19 +2854,20 @@ static void refused() {
 }
 
 // An animation on its way while the panel is away: no DATA goes until it's back
-static void anim_while_away() {
+static void overlay_while_away() {
   step("an animation on its way while the panel is away");
   panel_anim_ball.turn_off();
   panel_anim_noise.turn_on();
-  int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
+  int r = run_until(
+      [] { return overlay::W.t.head && overlay::W.t.pos > 0 && overlay::W.t.pos < overlay::W.a->data.size(); }, 3000);
   cx60_cycle();  // the panel takes what's queued, so there's room for more
-  uint32_t pos = anim::W.t.pos;
+  uint32_t pos = overlay::W.t.pos;
   unsigned queued = panel::link::waiting();
   server->updating_ = true;  // update.cpp has the bus
   for (int k = 0; k < 20; k++)
     panel::loop();
-  CHECK_MSG(r >= 0 && !panel::link::connected && anim::W.t.pos == pos && panel::link::waiting() == queued,
-            "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (anim::W.t.pos - pos),
+  CHECK_MSG(r >= 0 && !panel::link::connected && overlay::W.t.pos == pos && panel::link::waiting() == queued,
+            "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (overlay::W.t.pos - pos),
             panel::link::waiting() - queued);
   server->updating_ = false;
   r = until_anim_status("Shown: noise, drifting");
@@ -2875,19 +2881,19 @@ static void anim_while_away() {
 static void unknown_names() {
   step("names that aren't there, and none");
   pic::show("nope");
-  anim::show("nope");
+  overlay::show("nope");
   run(10);
   CHECK_MSG(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
   CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state == "nope: no picture with that name" &&
-                panel_pic() == 2 && panel_anim_ball.state && anim_ready(),
+                panel_pic() == 2 && panel_anim_ball.state && overlay_ready(),
             "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
             panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
-  anim::clear("");  // panel_clear_animation without a name
+  overlay::clear("");  // panel_clear_animation without a name
   pic::show("");
   run(20);
   CHECK_MSG(panel_picture.state == "None" && panel_picture_status.state == "None" && panel_pic() == 0,
             "picture '%s' '%s' after no name", panel_picture.state.c_str(), panel_picture_status.state.c_str());
-  CHECK_MSG(!panel_anim_ball.state && panel_animation_status.state == "None" && !anim_ready(),
+  CHECK_MSG(!panel_anim_ball.state && panel_animation_status.state == "None" && !overlay_ready(),
             "animation %d '%s' after no name", panel_anim_ball.state, panel_animation_status.state.c_str());
   panel_picture.control(1);
   CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
@@ -3197,7 +3203,7 @@ static void actions_kept() {
   pic::show("dusk");
   CHECK_MSG(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept",
             panel_picture.saved.c_str());
-  anim::show("ball");
+  overlay::show("ball");
   CHECK_MSG(panel_anim_ball.state, "animation: the switch isn't on");
   panel_clear_animation.execute("");
   CHECK_MSG(!panel_anim_ball.state, "animation cleared: the switch is still on");
@@ -3264,11 +3270,11 @@ static void notes_while_away() {
   run(10);
   CHECK_MSG(!panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
   // nothing made for it meanwhile
-  anim::clear("");
+  overlay::clear("");
   pic::show("weather");
   panel_anim_ball.turn_on();
   run(50);
-  CHECK_MSG(pic::S.phase == pic::START && !met::drawing && anim::W.phase == anim::IDLE &&
+  CHECK_MSG(pic::S.phase == pic::START && !met::drawing && overlay::W.phase == overlay::IDLE &&
                 panel_picture_status.state == "weather: waiting for the panel",
             "made for a panel that's away: '%s', '%s'", panel_picture_status.state.c_str(),
             panel_animation_status.state.c_str());
@@ -3276,9 +3282,9 @@ static void notes_while_away() {
   restart_panel();
   const char *away = pn_note(&icon, &level, &fresh);
   CHECK_MSG(fresh && !strcmp(away, "Door open") && panel::note.empty(), "note while away: '%s', fresh %d", away, fresh);
-  CHECK_MSG(
-      picture("weather, the panel back", 6000) >= 0 && anim::find("ball") && anim::find("ball")->state == anim::SENT,
-      "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(picture("weather, the panel back", 6000) >= 0 && overlay::find("ball") &&
+                overlay::find("ball")->state == overlay::SENT,
+            "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
   panel::notify("Washer done", "washer", "info");
   restart_panel();  // before it went out
   const char *restart = pn_note(&icon, &level, &fresh);
@@ -3291,23 +3297,23 @@ static void bootloader_away() {
     delayMicroseconds(1);  // about a frame a slice, so it's made over many loops
     return noise_px(f, x, y);
   };
-  anim::clear("");
+  overlay::clear("");
   run(5);
-  anim::add("slow", {64, 64, 6, 100, 16, 16, 1, slow});
-  anim::show("slow");
+  overlay::add("slow", {64, 64, 6, 100, 16, 16, 1, slow});
+  overlay::show("slow");
   panel::loop();
-  bool making = anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE;
+  bool making = overlay::W.phase == overlay::COUNT || overlay::W.phase == overlay::MAKE;
   server->updating_ = true;  // update.h has the bus
   panel::loop();
-  CHECK_MSG(making && !panel::link::connected && anim::W.phase == anim::IDLE &&
-                anim::find("slow")->state == anim::WANT && anim::find("slow")->data.empty(),
+  CHECK_MSG(making && !panel::link::connected && overlay::W.phase == overlay::IDLE &&
+                overlay::find("slow")->state == overlay::WANT && overlay::find("slow")->data.empty(),
             "still made for a panel in its bootloader: making %d, connected %d, phase %d", making,
-            panel::link::connected, anim::W.phase);
+            panel::link::connected, overlay::W.phase);
   run(50);
-  CHECK_MSG(anim::W.phase == anim::IDLE, "made again while in its bootloader: phase %d", anim::W.phase);
+  CHECK_MSG(overlay::W.phase == overlay::IDLE, "made again while in its bootloader: phase %d", overlay::W.phase);
   server->updating_ = false;
   restart_panel();  // the new firmware
-  CHECK_MSG(run_until([] { return anim::find("slow")->state == anim::SENT && settled(); }, 3000) >= 0,
+  CHECK_MSG(run_until([] { return overlay::find("slow")->state == overlay::SENT && settled(); }, 3000) >= 0,
             "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
 }
 
@@ -3523,29 +3529,29 @@ int main(int argc, char **argv) {
   pictures();
   pictures_jpeg();
   animations();
-  anim_moving();
-  anim_copies();
-  anim_turning();
-  anim_wandering();
-  anim_waved();
-  anim_turned_down();
-  anim_one_round();
-  anim_two();
-  anim_half_size();
-  anim_not_fitting();
-  anim_cleared_while_made();
-  anim_no_room();
-  anim_repeats();
-  anim_esp_restart();
-  anim_hello_while_made();
-  anim_long_frame();
-  anim_off_screen();
-  anim_shown_again();
-  anim_timing();
-  anim_without_ram();
-  anim_past_pool();
-  anim_waves_settling();
-  anim_on_its_way();
+  overlay_moving();
+  overlay_copies();
+  overlay_turning();
+  overlay_wandering();
+  overlay_waved();
+  overlay_turned_down();
+  overlay_one_round();
+  overlay_two();
+  overlay_half_size();
+  overlay_not_fitting();
+  overlay_cleared_while_made();
+  overlay_no_room();
+  overlay_repeats();
+  overlay_esp_restart();
+  overlay_hello_while_made();
+  overlay_long_frame();
+  overlay_off_screen();
+  overlay_shown_again();
+  overlay_timing();
+  overlay_without_ram();
+  overlay_past_pool();
+  overlay_waves_settling();
+  overlay_on_its_way();
   met_requests();
   met_reading();
   met_picture();
@@ -3564,7 +3570,7 @@ int main(int argc, char **argv) {
   picture_cleared_mid_anim();
   end_lost();
   refused();
-  anim_while_away();
+  overlay_while_away();
   unknown_names();
   cleared_and_shown();
   online_again();

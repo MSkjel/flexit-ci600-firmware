@@ -8,12 +8,12 @@ static void live_town() {
        "oslo");
   visits("sail");  // a sea eagle, a sjark, a porpoise
   {  // the sailboat on the water, behind the cabin's pole and all of its pennant, but not where it's on the sea
-    const anim::Anim *boat = anim::find("w_boat");
+    const overlay::Overlay *boat = overlay::find("w_boat");
     const met::Scene &s = panel_scene();
     int k = boat && !boat->copies.empty() ? boat->copies[0].place : -1;
     Look l = look(k);
     pn_saver(1);
-    bool pole = pn_anim_covered(k, s.pole_x, s.pole_top + 4), sea = !pn_anim_covered(k, l.x + 6, l.y + 7);
+    bool pole = pn_overlay_covered(k, s.pole_x, s.pole_top + 4), sea = !pn_overlay_covered(k, l.x + 6, l.y + 7);
     int pennant = 0, behind = 0;
     for (int i = 0; i < s.nsprites; i++) {
       const met::Sprite &q = s.sprite[i];
@@ -21,7 +21,7 @@ static void live_town() {
         for (int x = 0; x < q.w; x++)
           if (q.rows[y] >> (q.w - 1 - x) & 1) {
             pennant++;
-            behind += pn_anim_covered(k, q.x + x, q.y + y);
+            behind += pn_overlay_covered(k, q.x + x, q.y + y);
           }
     }
     pn_saver(0);
@@ -56,10 +56,10 @@ static void live_town() {
     CHECK_MSG(picture("A day in town, an east wind", 6000) >= 0, "the east wind's picture not shown");
     play(4, 1, "a_day_in_town_east");
     CHECK_MSG(!logged("Weather animation:", from), "the east wind started the show again");
-    const anim::Anim *flag = anim::find("w_flag");
+    const overlay::Overlay *flag = overlay::find("w_flag");
     Look l = flag ? look(flag->copies[0].place) : Look{};
     int pole = panel_scene().pole_x;
-    CHECK_MSG(l.shown && l.x == pole && l.flip == ANIM_FLIP_X,
+    CHECK_MSG(l.shown && l.x == pole && l.flip == OVERLAY_FLIP_X,
               "the flag in an east wind: at %d, flip %d, the pole at %d", l.x, l.flip, pole);
   }
   show({"A day in town", "partlycloudy_day", 0, 40, 30, 0, 6, 12, 0, utc(2026, 9, 20, 10), met::G_CITY, 0, 30, 1},

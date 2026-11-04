@@ -80,7 +80,7 @@ static void live_days() {
   Path witch;
   play(16, 0, "moonrise", [&] { follow("witch", witch); });
   int row = row_at(witch, night.moon_x - 10);
-  CHECK_MSG(abs(row - (night.moon_y - 6)) <= 3 && !anim::find("w_witch")->copies[0].used,
+  CHECK_MSG(abs(row - (night.moon_y - 6)) <= 3 && !overlay::find("w_witch")->copies[0].used,
             "Halloween's witch at row %d by the moon at %d,%d", row, night.moon_x, night.moon_y);
   // Valentine's Day, hearts from the chimney by day and by night
   show({"Valentine's Day", "cloudy", 0, 0, 80, 0, 3, -2, 0, utc(2026, 2, 14, 19), met::G_MOUNTAINS, 0, 30, 1},

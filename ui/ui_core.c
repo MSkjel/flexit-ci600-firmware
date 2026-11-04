@@ -525,7 +525,7 @@ static const char *const ICON_GLYPHS[] = {
 const char *icon_glyph(uint8_t id) { return id < LEN(ICON_GLYPHS) ? ICON_GLYPHS[id] : IC_CIRCLE; }
 
 void ui_init(void) {
-  anim_init();
+  overlay_init();
   st_init();
   apply_theme();
   lv_obj_t *scr = lv_scr_act();

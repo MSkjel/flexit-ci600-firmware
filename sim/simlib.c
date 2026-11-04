@@ -125,27 +125,27 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
   return plink_pic_patch(b, id, (uint16_t) y, (uint16_t) count, len, pal);
 }
 
-int sim_anim_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
-                   const uint32_t *pal) {
-  return plink_anim_begin(b, id, (uint8_t) slot, (uint16_t) w, (uint16_t) h, (uint8_t) scale, (uint8_t) transp, len,
-                          pal);
+int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
+                      const uint32_t *pal) {
+  return plink_overlay_begin(b, id, (uint8_t) slot, (uint16_t) w, (uint16_t) h, (uint8_t) scale, (uint8_t) transp, len,
+                             pal);
 }
 
-int sim_anim_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade) {
-  b[ANIM_MSG_PLACE] = (uint8_t) place;
-  b[ANIM_PLACE_SLOT] = (uint8_t) slot;
-  plink_put16(b + ANIM_PLACE_X, (uint16_t) x);
-  plink_put16(b + ANIM_PLACE_Y, (uint16_t) y);
-  b[ANIM_PLACE_OWN] = (uint8_t) own;
-  b[ANIM_PLACE_START] = (uint8_t) start;
-  plink_put16(b + ANIM_PLACE_FADE, (uint16_t) fade);
-  return ANIM_PLACE_LEN;
+int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade) {
+  b[OVERLAY_MSG_PLACE] = (uint8_t) place;
+  b[OVERLAY_PLACE_SLOT] = (uint8_t) slot;
+  plink_put16(b + OVERLAY_PLACE_X, (uint16_t) x);
+  plink_put16(b + OVERLAY_PLACE_Y, (uint16_t) y);
+  b[OVERLAY_PLACE_OWN] = (uint8_t) own;
+  b[OVERLAY_PLACE_START] = (uint8_t) start;
+  plink_put16(b + OVERLAY_PLACE_FADE, (uint16_t) fade);
+  return OVERLAY_PLACE_LEN;
 }
 
 // The channels, then from at a value for each of them, times k
 static int values(uint8_t *b, int at, unsigned channels, const int *v, int k) {
-  b[ANIM_GLIDE_CHANNELS] = (uint8_t) channels;  // DRIFT's too
-  for (int c = 0; c < ANIM_CHANNELS; c++)
+  b[OVERLAY_GLIDE_CHANNELS] = (uint8_t) channels;  // DRIFT's too
+  for (int c = 0; c < OVERLAY_CHANNELS; c++)
     if (channels >> c & 1) {
       plink_put16(b + at, (uint16_t) (*v++ * k));
       at += 2;
@@ -153,16 +153,16 @@ static int values(uint8_t *b, int at, unsigned channels, const int *v, int k) {
   return at;
 }
 
-int sim_anim_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to) {
-  b[ANIM_MSG_PLACE] = (uint8_t) place;
-  plink_put16(b + ANIM_GLIDE_MS, (uint16_t) ms);
-  b[ANIM_GLIDE_EASE] = (uint8_t) ease;
-  return values(b, ANIM_GLIDE_HEAD, channels, to, 1);
+int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to) {
+  b[OVERLAY_MSG_PLACE] = (uint8_t) place;
+  plink_put16(b + OVERLAY_GLIDE_MS, (uint16_t) ms);
+  b[OVERLAY_GLIDE_EASE] = (uint8_t) ease;
+  return values(b, OVERLAY_GLIDE_HEAD, channels, to, 1);
 }
 
-int sim_anim_drift(uint8_t *b, int place, unsigned channels, const int *v) {
-  b[ANIM_MSG_PLACE] = (uint8_t) place;
-  return values(b, ANIM_DRIFT_HEAD, channels, v, 10);  // in tenths
+int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v) {
+  b[OVERLAY_MSG_PLACE] = (uint8_t) place;
+  return values(b, OVERLAY_DRIFT_HEAD, channels, v, 10);  // in tenths
 }
 
 // True for string literals. They're in read-only data like on the panel, so writing to one crashes here too.

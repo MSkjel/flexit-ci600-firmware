@@ -45,7 +45,7 @@ $(BUILD)/ci600_full.bin: $(BUILD)/ci600.bin FORCE  # every time, STOCK may name 
 	python3 $(ROOT)/tools/mkimage.py "$(STOCK)" $< $@
 
 # The pixel code at -O3: LVGL's software draw, masks and colors with their loops unrolled, and the JPEG decoder.
-# It costs flash, not RAM, so the rest of LVGL stays at -O2 like ours. picture.c and anim_draw.c mark only their
+# It costs flash, not RAM, so the rest of LVGL stays at -O2 like ours. picture.c and overlay_draw.c mark only their
 # pixel loops -O3.
 # LVGL's warnings off, they aren't ours
 $(BUILD)/lib/%.o $(LV_COPY)/%.o: CFLAGS += -w

@@ -14,8 +14,8 @@ static void live_sky() {
   // No rain or snow over a middle or low cloud: the scene the panel has, and where the tiles are on it
   auto under = [](const char *what) {
     const met::Scene &sc = panel_scene();
-    auto *a = anim::find("w_prec");
-    CHECK_MSG(a && a->state == anim::SENT, "%s: no rain or snow", what);
+    auto *a = overlay::find("w_prec");
+    CHECK_MSG(a && a->state == overlay::SENT, "%s: no rain or snow", what);
     if (!a)
       return;
     int tiles = 0, over = 0;
@@ -87,9 +87,9 @@ static void live_sky() {
   live::flash();
   tick(9);
   play(1, 9, "thunderstorm_flash");
-  CHECK_MSG(anim::find("w_bolt"), "thunder: no bolt");
+  CHECK_MSG(overlay::find("w_bolt"), "thunder: no bolt");
   play(16, 1, "thunderstorm_after");
-  CHECK_MSG(!anim::find("w_bolt"), "thunder: the bolt stayed");
+  CHECK_MSG(!overlay::find("w_bolt"), "thunder: the bolt stayed");
   show({"Light rain", "heavyrain", 0, 60, 100, 5, 12, 8, 0, utc(2026, 10, 20, 12), met::G_COAST, 0, 40, 2}, "heavy");
   under("heavy rain");
   show({"Thunderstorm", "heavyrainandthunder", 0, 90, 100, 6, 10, 20, 0, utc(2026, 7, 10, 15), met::G_CITY, 0, 40, 2},
@@ -131,7 +131,7 @@ static void live_sky() {
   show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 60, 2},
        "moon");
   live::shoot();
-  auto *star = anim::find("w_shooting");
+  auto *star = overlay::find("w_shooting");
   for (int k = 0; k < 60 && star && !star->copies[0].placed; k++)
     tick(1);
   CHECK_MSG(star && star->copies[0].placed, "no shooting star");
@@ -168,7 +168,7 @@ static void live_sky() {
 // flag's light) and the heater's smoke
 static void live_kept() {
   step("the weather animations: the rain's frame, the flag's light and the heater (packages/code/met/met_live.h)");
-  // The rain tile's whole frame for animation.h is freed once the tile is made. Without the RAM for it the tile's
+  // The rain tile's whole frame for overlay.h is freed once the tile is made. Without the RAM for it the tile's
   // frames are empty, nothing worse.
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
   tick(1);
@@ -178,15 +178,15 @@ static void live_kept() {
     size_t need = (size_t) tile.w * tile.h * 4, from = log_all.size();
     live::unload("prec");
     live::add("prec", tile);
-    ram_block = need - 1;  // what animation.h takes still fits
+    ram_block = need - 1;  // what overlay.h takes still fits
     live::prec_place(panel_scene(), false);
     int r = run_until(
         [] {
-          auto *a = anim::find("w_prec");
-          return a && a->state != anim::WANT;
+          auto *a = overlay::find("w_prec");
+          return a && a->state != overlay::WANT;
         },
         3000);
-    CHECK_MSG(r >= 0 && anim::find("w_prec")->state == anim::SENT && logged("No RAM to draw the frames of a", from),
+    CHECK_MSG(r >= 0 && overlay::find("w_prec")->state == overlay::SENT && logged("No RAM to draw the frames of a", from),
               "the rain without %u bytes for its frame: %s", (unsigned) need, panel_animation_status.state.c_str());
     ram_block = 100 * 1024;
   }
@@ -216,11 +216,11 @@ static void live_kept() {
   met::animate(false);
 }
 
-// What sp takes of the panel's pool as animation.h makes it, its frame and records. 0 if it didn't make it whole.
+// What sp takes of the panel's pool as overlay.h makes it, its frame and records. 0 if it didn't make it whole.
 static size_t pool_bytes(const live::Frames &sp) {
   std::vector<uint32_t> px;
   int drawn = -1;
-  anim::Source src{sp.w, sp.h, sp.count(), 100, 0, 0, 1, [&](int f, int x, int y) {
+  overlay::Source src{sp.w, sp.h, sp.count(), 100, 0, 0, 1, [&](int f, int x, int y) {
                      if (f != drawn) {
                        px.assign((size_t) sp.w * sp.h, 0);
                        sp.draw(f, live::Canvas{sp.w, sp.h, px.data()});
@@ -229,21 +229,21 @@ static size_t pool_bytes(const live::Frames &sp) {
                      return px[(size_t) y * sp.w + x];
                    }};
   src.delays = sp.delays;
-  anim::Anim a;
+  overlay::Overlay a;
   a.name = "cost";
   a.src = &src;
-  anim::W.a = &a;
-  bool ok = anim::start();
-  while (ok && (anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE)) {
-    if (anim::W.phase == anim::COUNT && anim::W.f < src.frames)
-      anim::count();
-    else if (anim::W.phase == anim::COUNT)
-      anim::palette();
+  overlay::W.a = &a;
+  bool ok = overlay::start();
+  while (ok && (overlay::W.phase == overlay::COUNT || overlay::W.phase == overlay::MAKE)) {
+    if (overlay::W.phase == overlay::COUNT && overlay::W.f < src.frames)
+      overlay::count();
+    else if (overlay::W.phase == overlay::COUNT)
+      overlay::palette();
     else
-      anim::make(0, true);
+      overlay::make(0, true);
   }
-  size_t n = anim::W.phase == anim::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
-  anim::stop();
+  size_t n = overlay::W.phase == overlay::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
+  overlay::stop();
   return n;
 }
 
@@ -290,8 +290,8 @@ struct Costs {
 static void live_costs() {
   step("the weather animations' sizes, measured (packages/code/met/met_live_sky.h)");
   run(30);
-  CHECK_MSG(anim::W.phase == anim::IDLE && !anim::used_by_others(nullptr), "animations on: %u bytes",
-            (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(overlay::W.phase == overlay::IDLE && !overlay::used_by_others(nullptr), "animations on: %u bytes",
+            (unsigned) overlay::used_by_others(nullptr));
   int level = log_level;
   log_level = 0;
   // rain, snow and sleet tiles, as wide as the shows make them, short and tall, upright and slanting, as dense as
@@ -316,9 +316,9 @@ static void live_costs() {
             live::SKY.slant = slant;
             live::SKY.dens = d;
             float per = (float) (c.slant * abs(slant) / 2), frame = (float) (w / 2 * h);
-            float most = ((float) ANIM_POOL - frame - (float) (c.start + c.row * h)) / ((float) c.each + per),
+            float most = ((float) OVERLAY_POOL - frame - (float) (c.start + c.row * h)) / ((float) c.each + per),
                   n = d * met::clamp01(most / (d * (float) (w * h))) * (float) (w * h);  // as prec_tile() thins it
-            float m = (float) pool_bytes(live::prec_tile(s, ANIM_POOL));
+            float m = (float) pool_bytes(live::prec_tile(s, OVERLAY_POOL));
             CHECK_MSG(
                 m, "met_live_sky.h's TILE_COST[%d] is too small: a %dx%d tile with %.0f streaks or flakes didn't fit",
                 k, w, h, n);
@@ -409,5 +409,5 @@ static void live_costs() {
   CHECK_MSG(most >= live::SKY_POOL / 2, "met_live_sky.h's AUR_HIGH_W and AUR_LOW_W are far too narrow: %.0f bytes",
             most);
   log_level = level;
-  anim::status(anim::shown());
+  overlay::status(overlay::shown());
 }

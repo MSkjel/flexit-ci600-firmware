@@ -8,7 +8,7 @@ struct Facing {
   std::vector<Look> was;
   explicit Facing(const char *sprite) : sprite(sprite) {}
   void operator()() {
-    const anim::Anim *a = anim::find(std::string("w_") + sprite);
+    const overlay::Overlay *a = overlay::find(std::string("w_") + sprite);
     if (!a || cycle++ % 9)
       return;
     was.resize(a->copies.size());
@@ -18,9 +18,9 @@ struct Facing {
       int dx = l.x - was[i].x, dy = l.y - was[i].y;
       if (in(l) && in(was[i]) && abs(dx) >= 2 && abs(dx) >= abs(dy)) {
         moves++;
-        wrong += (dx < 0) != (bool) (l.flip & ANIM_FLIP_X);
+        wrong += (dx < 0) != (bool) (l.flip & OVERLAY_FLIP_X);
       }
-      turns += was[i].shown && ((l.flip ^ was[i].flip) & ANIM_FLIP_X);
+      turns += was[i].shown && ((l.flip ^ was[i].flip) & OVERLAY_FLIP_X);
       was[i] = l;
     }
   }

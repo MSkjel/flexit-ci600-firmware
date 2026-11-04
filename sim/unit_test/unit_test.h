@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern const check_test_t PICTURE_TESTS[], ANIM_TESTS[], ANIM_MOTION_TESTS[], VALUES_TESTS[], CLOCK_TESTS[],
+extern const check_test_t PICTURE_TESTS[], OVERLAY_TESTS[], OVERLAY_MOTION_TESTS[], VALUES_TESTS[], CLOCK_TESTS[],
     UNIT_TESTS[], SETTINGS_TESTS[], UI_TESTS[], LINK_TESTS[];
 
 // board_stub.c
@@ -52,25 +52,25 @@ void fill(int y, int count, uint8_t seed);
 int32_t send_picture(unsigned piece);
 bool shows(void);
 
-// anim.c: AW x AH frames, sent as the ESP sends them, and the places that show them
+// overlay.c: AW x AH frames, sent as the ESP sends them, and the places that show them
 #define AW 8
 #define AH 4
 extern uint8_t an[4][AH][AW / 2];  // the frames, colour 15 is transparent
-extern lv_obj_t *anims;            // anim_show()'s, at the top left of the screen
-void no_anims(void);               // none, and nothing on the screen
+extern lv_obj_t *overlays;         // overlay_show()'s, at the top left of the screen
+void no_overlays(void);            // none, and nothing on the screen
 void dot_frames(bool moves);       // a dot that moves, and stays put for a frame unless moves
-uint32_t anim_records(uint8_t *d, int delay);
-int32_t anim_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc);
+uint32_t overlay_records(uint8_t *d, int delay);
+int32_t overlay_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc);
 void place_in(int p, int slot, int x, int y, int own, int start, int fade);
 void place(int p, int slot, int x, int y, int own, int start);
-void anim_clear_msg(unsigned v);
+void overlay_clear_msg(unsigned v);
 void frames_msg(int slot, int rate);
-lv_obj_t *show_anims(void);
+lv_obj_t *show_overlays(void);
 bool placed(void);
-bool anim_pos(int k, int16_t *x, int16_t *y);
+bool overlay_pos(int k, int16_t *x, int16_t *y);
 int look_opa(int place);
-bool drawn(int k, anim_look_t *l, int *px);
-bool anim_shows(int k, int f);
+bool drawn(int k, overlay_look_t *l, int *px);
+bool overlay_shows(int k, int f);
 
 // unit.c: the CX60's frames
 void relay(uint16_t reg, uint16_t v);

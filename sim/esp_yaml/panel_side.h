@@ -29,15 +29,15 @@ const char *pn_item_help(int i);
 int pn_pic(int *w, int *h);
 int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
-// A place of the animations as the panel has it, see anim_look_t
+// A place of the animations as the panel has it, see overlay_look_t
 typedef struct {
   int x, y, deg, flip, size, opa, depth;
 } pn_look_t;
 int pn_anim(int place, pn_look_t *l);
-int pn_anim_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
-int pn_anim_line(int place, int y, int w, int scale, int transp, uint8_t *out);
-void pn_anim_step(int ms);
-unsigned pn_anim_used(void);
+int pn_overlay_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
+int pn_overlay_line(int place, int y, int w, int scale, int transp, uint8_t *out);
+void pn_overlay_step(int ms);
+unsigned pn_overlay_used(void);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer);
 void pn_saver(int on);

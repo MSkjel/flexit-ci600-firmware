@@ -1,7 +1,7 @@
 // ESP link, see link.h
 #include "link.h"
 #include "ui.h"
-#include "anim.h"
+#include "overlay.h"
 #include "clock.h"
 #include "input.h"
 #include "picture.h"
@@ -80,7 +80,7 @@ static void got_hello(uint32_t v) {
     pbulk_parse(out, out_n, resend_cx60, NULL);
   }
   pic_reset();
-  anim_clear_all();  // it sends them again
+  overlay_clear_all();  // it sends them again
   memset(M.saver_line, 0, sizeof M.saver_line);
   shot_reset();      // and asks for a screenshot again
   val_forget_esp();  // its items may have changed, it sends them all again
@@ -110,9 +110,9 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
   if (was == PIC_READY && pic_state() == PIC_RECEIVING)
     ui_picture_coming();
   if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR)
-    anim_parts_clear();  // the picture they're parts of went
+    overlay_parts_clear();  // the picture they're parts of went
   // Picture came or went, rebuild the screensaver. A new or failed picture drops the old. A patch redraws its own rows
-  // and the animations show and go on their own.
+  // and the overlays show and go on their own.
   if (pic_state() != was || key == K_PIC_CLEAR)
     ui_value_changed(V_SCREENSAVER);
   else if (key == K_PIC_BEGIN || key == K_PIC_PATCH)
@@ -285,15 +285,15 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if (!link_compatible())
     return;  // different link version, the message can't be trusted
-  if (key >= K_ANIM_FRAMES && key <= K_ANIM_DEPTH) {
-    anim_msg(key, b, n);  // a running animation's, no picture data or ack
+  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_DEPTH) {
+    overlay_msg(key, b, n);  // a slot's or place's, no picture data or ack
     return;
   }
   if (key == K_PIC_PART) {
-    anim_part(b, n);
+    overlay_part(b, n);
     return;
   }
-  if ((key >= K_PIC_BEGIN && key <= K_PIC_CLEAR) || key == K_ANIM_BEGIN || key == K_ANIM_CLEAR) {
+  if ((key >= K_PIC_BEGIN && key <= K_PIC_CLEAR) || key == K_OVERLAY_BEGIN || key == K_OVERLAY_CLEAR) {
     pic_answer(key, b, n);
     return;
   }
@@ -371,9 +371,9 @@ void link_poll(void) {
   while ((n = pbulk_panel_take(&bulk, p)) > 0)
     pbulk_parse(p, n, got_msg, NULL);
   send_pic_ack();
-  int32_t gone = link_compatible() && plink_room(&queue) ? anim_gone() : -1;
+  int32_t gone = link_compatible() && plink_room(&queue) ? overlay_gone() : -1;
   if (gone >= 0)
-    plink_send(&queue, K_ANIM_GONE, (uint32_t) gone);
+    plink_send(&queue, K_OVERLAY_GONE, (uint32_t) gone);
   send_sync();
   send_settings();
   while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it

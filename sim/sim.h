@@ -27,11 +27,11 @@ const uint32_t *sim_jpeg_rgb(void);  // the pixels it decoded, 0xRRGGBB
 // 16 colours, NULL for none.
 int sim_pic_begin(uint8_t *b, uint8_t id, int format, int w, int h, uint32_t len, const uint32_t *pal);
 int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const uint32_t *pal);
-int sim_anim_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
-                   const uint32_t *pal);
-int sim_anim_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade);
-int sim_anim_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
-int sim_anim_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second
+int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
+                      const uint32_t *pal);
+int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade);
+int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
+int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second
 
 // ppm.c, doesn't need LVGL
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error

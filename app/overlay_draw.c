@@ -1,11 +1,11 @@
-// Draws the places, see anim_int.h: their boxes, what to redraw, and the pixels through turn, size and flip.
-#include "anim_int.h"
+// Draws the places, see overlay_int.h: their boxes, what to redraw, and the pixels through turn, size and flip.
+#include "overlay_int.h"
 #include "picture.h"
 #include "plink.h"
 #include <string.h>
 
 lv_obj_t *layer;
-static uint8_t z[ANIM_PLACES];  // the places in the order they're drawn, the nearest last
+static uint8_t z[OVERLAY_PLACES];  // the places in the order they're drawn, the nearest last
 
 // The picture's parts in front of places, see K_PIC_PART
 typedef struct {
@@ -94,11 +94,11 @@ void hide(place_t *p) {
 // The places at more depth, then those bigger from their size map, are nearer and drawn in front. The others go by
 // number.
 void order(void) {
-  uint8_t o[ANIM_PLACES];
-  int64_t near[ANIM_PLACES];
-  for (int k = 0; k < ANIM_PLACES; k++) {
+  uint8_t o[OVERLAY_PLACES];
+  int64_t near[OVERLAY_PLACES];
+  for (int k = 0; k < OVERLAY_PLACES; k++) {
     const place_t *p = &places[k];
-    int64_t d = p->slot == ANIM_SLOTS ? INT64_MIN : ((int64_t) p->depth << 32) + mapped(p, ANIM_SIZE);
+    int64_t d = p->slot == OVERLAY_SLOTS ? INT64_MIN : ((int64_t) p->depth << 32) + mapped(p, OVERLAY_SIZE);
     int i = k;
     for (; i && near[i - 1] > d; i--) {
       o[i] = o[i - 1];
@@ -107,7 +107,7 @@ void order(void) {
     o[i] = (uint8_t) k;
     near[i] = d;
   }
-  for (int i = 0; i < ANIM_PLACES; i++)
+  for (int i = 0; i < OVERLAY_PLACES; i++)
     if (o[i] != z[i]) {
       z[i] = o[i];
       redraw(&places[o[i]].drawn, places[o[i]].tiles);
@@ -127,7 +127,7 @@ static void redraw_part(const part_t *q) {
     redraw(&(lv_area_t) {q->x0, q->y0, q->x1 - 1, q->y1 - 1}, 1);
 }
 
-void anim_part(const uint8_t *b, int n) {
+void overlay_part(const uint8_t *b, int n) {
   if (n != PIC_PART_LEN || b[0] >= PIC_PARTS)
     return;
   part_t *q = &parts[b[0]];
@@ -137,7 +137,7 @@ void anim_part(const uint8_t *b, int n) {
   redraw_part(q);
 }
 
-void anim_parts_clear(void) {
+void overlay_parts_clear(void) {
   for (int k = 0; k < PIC_PARTS; k++)
     redraw_part(&parts[k]);
   memset(parts, 0, sizeof parts);
@@ -156,36 +156,36 @@ static void cover(int a, int b, int n, int m, bool flip, lv_coord_t *lo, lv_coor
   *hi = (lv_coord_t) (at + (flip ? m - 1 - a : b));
 }
 
-// Redraws what a record changed of the frame p shows, a in animation pixels. All of it when it's turned.
+// Redraws what a record changed of the frame p shows, a in frame pixels. All of it when it's turned.
 void changed(const place_t *p, const lv_area_t *a) {
   lv_area_t r = p->drawn;
   if (!p->now.deg) {
     const slot_t *s = &slots[p->slot];
     int k = s->scale;
-    cover(a->x1 * k, (a->x2 + 1) * k - 1, s->w * k, lv_area_get_width(&p->drawn), p->now.flip & ANIM_FLIP_X, &r.x1,
+    cover(a->x1 * k, (a->x2 + 1) * k - 1, s->w * k, lv_area_get_width(&p->drawn), p->now.flip & OVERLAY_FLIP_X, &r.x1,
           &r.x2);
-    cover(a->y1 * k, (a->y2 + 1) * k - 1, s->h * k, lv_area_get_height(&p->drawn), p->now.flip & ANIM_FLIP_Y, &r.y1,
+    cover(a->y1 * k, (a->y2 + 1) * k - 1, s->h * k, lv_area_get_height(&p->drawn), p->now.flip & OVERLAY_FLIP_Y, &r.y1,
           &r.y2);
   }
   redraw(&r, p->tiles);
 }
 
-bool anim_look(int place, anim_look_t *l) {
-  if (place < 0 || place >= ANIM_PLACES || places[place].slot == ANIM_SLOTS)
+bool overlay_look(int place, overlay_look_t *l) {
+  if (place < 0 || place >= OVERLAY_PLACES || places[place].slot == OVERLAY_SLOTS)
     return false;
   const place_t *p = &places[place];
-  *l = (anim_look_t) {.x = p->x,
-                      .y = p->y,
-                      .deg = p->now.deg,
-                      .size = p->now.size,
-                      .opa = p->now.opa,
-                      .flip = p->flip,
-                      .tiles = p->tiles,
-                      .box = p->drawn,
-                      .frame = place_frame(p),
-                      .pal = slots[p->slot].pal};
+  *l = (overlay_look_t) {.x = p->x,
+                         .y = p->y,
+                         .deg = p->now.deg,
+                         .size = p->now.size,
+                         .opa = p->now.opa,
+                         .flip = p->flip,
+                         .tiles = p->tiles,
+                         .box = p->drawn,
+                         .frame = place_frame(p),
+                         .pal = slots[p->slot].pal};
   l->depth = p->depth;
-  for (int i = 0; i < ANIM_PLACES; i++)
+  for (int i = 0; i < OVERLAY_PLACES; i++)
     if (z[i] == place)
       l->order = (uint8_t) i;
   return true;
@@ -210,7 +210,7 @@ static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
 }
 
 // n pixels of frame f into d, pixel i from u + i * du, v + i * dv in 1/65536 px of the frame drawn at scale. sh
-// takes that to animation pixels, rb is f's bytes per row. paint() calls it twice so the opaque one is its own
+// takes that to frame pixels, rb is f's bytes per row. paint() calls it twice so the opaque one is its own
 // compile, without the mix.
 __attribute__((always_inline)) static inline void pixels(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u,
                                                          int32_t v, int32_t du, int32_t dv, int sh,
@@ -250,9 +250,9 @@ static const uint32_t *covered(const place_t *p, int y, int x, int n, uint32_t *
 
 static bool cover_at(const uint32_t *cover, int i) { return cover[i / 32] >> i % 32 & 1; }
 
-bool anim_covered(int place, int x, int y) {
+bool overlay_covered(int place, int x, int y) {
   uint32_t cover[1];
-  if (!layer || place < 0 || place >= ANIM_PLACES || places[place].slot == ANIM_SLOTS)
+  if (!layer || place < 0 || place >= OVERLAY_PLACES || places[place].slot == OVERLAY_SLOTS)
     return false;
   const uint32_t *c = covered(&places[place], y + layer->coords.y1, x + layer->coords.x1, 1, cover);
   return c && cover_at(c, 0);
@@ -291,7 +291,7 @@ __attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_
   int stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&c), x0 = c.x1 - a->x1;
   lv_color_t *row = (lv_color_t *) ctx->buf + (c.y1 - ctx->buf_area->y1) * stride + (c.x1 - ctx->buf_area->x1);
   lv_opa_t opa = opa8(p->now.opa);
-  bool fx = p->now.flip & ANIM_FLIP_X, fy = p->now.flip & ANIM_FLIP_Y;
+  bool fx = p->now.flip & OVERLAY_FLIP_X, fy = p->now.flip & OVERLAY_FLIP_Y;
   uint32_t cover[(PIC_MAX_W + 31) / 32];
   if (!p->now.deg) {
     int32_t qy = (fh << 15) / zh, ry = (fh << 15) % zh, du = (65536 * fw) / zw;  // fh * 32768 = qy * zh + ry
@@ -348,10 +348,10 @@ __attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_
 static void layer_event(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_DELETE) {
     layer = NULL;
-    for (int k = 0; k < ANIM_PLACES; k++)
+    for (int k = 0; k < OVERLAY_PLACES; k++)
       places[k].tiles = 0;
   } else if (lv_event_get_code(e) == LV_EVENT_DRAW_MAIN) {
-    for (int i = 0; i < ANIM_PLACES; i++) {
+    for (int i = 0; i < OVERLAY_PLACES; i++) {
       const place_t *p = &places[z[i]];
       for (int k = 0; k < 4; k++)
         if (p->tiles >> k & 1) {
@@ -362,7 +362,7 @@ static void layer_event(lv_event_t *e) {
   }
 }
 
-lv_obj_t *anim_show(lv_obj_t *parent) {
+lv_obj_t *overlay_show(lv_obj_t *parent) {
   if (layer)
     lv_obj_del(layer);
   layer = lv_obj_create(parent);
@@ -372,8 +372,8 @@ lv_obj_t *anim_show(lv_obj_t *parent) {
   lv_obj_add_event_cb(layer, layer_event, LV_EVENT_ALL, NULL);
   lv_obj_update_layout(layer);
   bool moves = false;
-  for (int k = 0; k < ANIM_PLACES; k++)
-    if (places[k].slot != ANIM_SLOTS) {
+  for (int k = 0; k < OVERLAY_PLACES; k++)
+    if (places[k].slot != OVERLAY_SLOTS) {
       update(&places[k]);
       moves |= moving(&places[k]);
     }
@@ -385,6 +385,6 @@ lv_obj_t *anim_show(lv_obj_t *parent) {
 }
 
 void draw_init(void) {
-  for (int k = 0; k < ANIM_PLACES; k++)
+  for (int k = 0; k < OVERLAY_PLACES; k++)
     z[k] = (uint8_t) k;
 }

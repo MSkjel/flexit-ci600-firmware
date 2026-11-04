@@ -5,8 +5,8 @@
 
 // How much of copy i of sprite, as the panel has it, is under a text: 0 to 1, or -1 while it isn't shown
 static float under_texts(const char *sprite, int i) {
-  const anim::Anim *a = anim::find(std::string("w_") + sprite);
-  if (!a || a->state != anim::SENT || i >= (int) a->copies.size() || !a->copies[i].used)
+  const overlay::Overlay *a = overlay::find(std::string("w_") + sprite);
+  if (!a || a->state != overlay::SENT || i >= (int) a->copies.size() || !a->copies[i].used)
     return -1;
   Look l = look(a->copies[i].place);
   if (!l.shown || l.opa <= 0)

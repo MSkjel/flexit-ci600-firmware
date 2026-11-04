@@ -252,7 +252,7 @@ frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a c
 `make -C sim esp_sync` (`esp_test` fails if they differ). Screenshots for the ESP's camera go the other way, a 64x8
 tile at a time, JPEG-coded as it's drawn again on its way to the LCD (`app/shot.c`), so the panel keeps nothing but
 the tile being sent. A 16-colour picture can have parts, a box and some of its colours each, in front of the
-animations farther off than them (`K_PIC_PART`, `K_ANIM_DEPTH`): the panel leaves an animation's pixels undrawn where
+animations farther off than them (`K_PIC_PART`, `K_OVERLAY_DEPTH`): the panel leaves an animation's pixels undrawn where
 a nearer part's colours are. An animation without a depth is in front of them all.
 
 ### Adding things
