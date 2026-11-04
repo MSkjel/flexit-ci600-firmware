@@ -437,28 +437,37 @@ static void test_pictures(void) {
   pic_msg(K_PIC_CLEAR, NULL, 0);
 }
 
-// An animation of 4 random frames, its records damaged or not, into slot
-static void send_animation(int slot) {
-  int w = 2 * (1 + below(16)), h = 1 + below(16), bytes = w / 2 * h;
-  static uint8_t frames[4][16 * 16], d[5 * (OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(16 * 16)) + 16];
+// An overlay of 4 random frames, or a still of the first, its records damaged or not, into slot. Its colours have any
+// opacity.
+static void send_overlay(int slot) {
+  int still = below(2), w = 2 * (1 + below(still ? 64 : 16)), h = 1 + below(still ? 48 : 16), bytes = w / 2 * h;
+  static uint8_t frames[4][64 * 48], d[5 * (OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(64 * 48)) + 16];
   for (int f = 0; f < 4; f++)
     for (int i = 0; i < bytes; i++)
       frames[f][i] = (uint8_t) (i % 5 < 2 ? 0xFF : rnd());
   unsigned n = 0;
-  for (int f = 0; f <= 4; f++)
-    n += plink_overlay_record(f ? frames[f - 1] : NULL, frames[f % 4], (unsigned) w, (unsigned) h, (uint8_t) rnd(),
-                              d + n);
+  if (still)
+    n = plink_overlay_pieces(frames[0], (unsigned) w, (unsigned) h, (uint16_t) rnd(), (uint8_t) rnd(), d, sizeof d);
+  else
+    for (int f = 0; f <= 4; f++)
+      n += plink_overlay_record(f ? frames[f - 1] : NULL, frames[f % 4], (unsigned) w, (unsigned) h, (uint8_t) rnd(),
+                                d + n);
   if (below(2))
     n = (unsigned) damage(d, (int) n, (int) sizeof d);
-  uint8_t b[OVERLAY_BEGIN_HEAD + PIC_PAL_LEN + 16];
-  int bn = plink_overlay_begin(b, ++id, (uint8_t) slot, (uint16_t) w, (uint16_t) h, (uint8_t) (1 + below(2)),
-                               (uint8_t) below(OVERLAY_OPAQUE + 1), n, palette());
+  uint32_t pal[16];
+  for (int i = 0; i < 16; i++)
+    pal[i] = palette()[i] | (below(2) ? 0xFF000000 : rnd() << 24);
+  uint8_t b[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN + 16];
+  int bn = plink_overlay_begin(b, ++id, (uint8_t) slot, (uint8_t) (still ? OVERLAY_STILL : OVERLAY_ANIMATED),
+                               (uint16_t) w, (uint16_t) h, (uint8_t) (1 + below(2)), n, pal);
+  if (!below(16))
+    b[OVERLAY_BEGIN_KIND] = (uint8_t) rnd();
   send_head(K_OVERLAY_BEGIN, b, bn, (int) sizeof b);
   send_data(d, n, plink_crc32(0, d, n));
 }
 
-// The animations, sent whole or damaged, placed and moved by messages of every kind and drawn as they go
-static void test_anims(void) {
+// The overlays, sent whole or damaged, placed and moved by messages of every kind and drawn as they go
+static void test_overlays(void) {
   seed();
   static const struct {
     uint16_t key;
@@ -477,7 +486,7 @@ static void test_anims(void) {
   lv_obj_t *layer = overlay_show(lv_scr_act());
   for (int round = 0; round < 3000; round++) {
     if (!below(8))
-      send_animation(below(OVERLAY_SLOTS + 1));
+      send_overlay(below(OVERLAY_SLOTS + 1));
     for (int k = below(6); k > 0; k--) {
       int i = below((int) LEN(MSGS));
       uint8_t m[32];
@@ -528,9 +537,8 @@ static void test_anims(void) {
 }
 
 static const check_test_t TESTS[] = {
-    {"inflate", test_inflate},         {"panel_frames", test_panel_frames},
-    {"esp_answers", test_esp_answers}, {"pictures", test_pictures},
-    {"overlays", test_anims},          {0},
+    {"inflate", test_inflate},   {"panel_frames", test_panel_frames}, {"esp_answers", test_esp_answers},
+    {"pictures", test_pictures}, {"overlays", test_overlays},         {0},
 };
 
 int main(int argc, char **argv) {

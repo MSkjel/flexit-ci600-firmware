@@ -13,9 +13,10 @@ _Static_assert(OVERLAY_POOL < NO_OFF, "16-bit offsets and lengths in the pool, a
 
 typedef struct {
   bool ready, leaving;     // leaving: goes with its last place
-  uint8_t scale, transp;   // scale 1 or 2. transp = transparent palette index, OVERLAY_OPAQUE for none
+  bool still;              // OVERLAY_STILL: no frame, its pieces are unpacked as they're drawn
+  uint8_t scale;           // 1 or 2
   uint16_t w, h;           // size in frame pixels
-  uint16_t off;            // its frame in pool, the records right after. NO_OFF = empty slot
+  uint16_t off;            // its frame in pool, an animated one's, the records right after. NO_OFF = empty slot
   uint16_t rate;           // frame rate in percent, 0 = paused
   uint16_t len;            // record bytes
   uint16_t loop_at, next;  // loop_at = the second record, where we loop back to. next = record to show next
@@ -23,6 +24,7 @@ typedef struct {
   uint16_t frames;         // records in the loop
   uint32_t due;            // tick for the next record
   lv_color_t pal[16];
+  uint8_t opa[8];  // the colours' opacities, 0 clear to 15, two a byte, the first's in the high nibble
 } slot_t;
 
 // A value on its way from one to another
@@ -98,6 +100,9 @@ extern lv_obj_t *layer;  // draws every place on the screensaver, while it's sho
 extern const int32_t SHARE_LO[OVERLAY_CHANNELS], SHARE_HI[OVERLAY_CHANNELS];
 
 static inline bool looping(const slot_t *s) { return s->loop_at < s->len; }
+static inline lv_opa_t colour_opa(const slot_t *s, int i) {
+  return (lv_opa_t) ((s->opa[i / 2] >> (i & 1 ? 0 : 4) & 15) * 17);
+}
 static inline int32_t wrap(int32_t v, int32_t m) { return (v % m + m) % m; }  // to 0..m
 // 1/1000 degree to -180..180
 static inline int32_t half(int32_t a) {
@@ -113,10 +118,15 @@ static inline bool wraps(const place_t *p, int axis) {
 }
 
 // overlay.c
-const uint8_t *place_frame(const place_t *p);  // the frame it shows
-void gone(place_t *p);                         // it faded out, and goes
-void still_rounds(place_t *p, uint32_t ms);    // ms more of a still picture's rounds
-void wake(void);                               // something new to play
+const uint8_t *place_frame(const place_t *p);  // the frame it shows, an animated slot's
+uint8_t *records(const slot_t *s);
+// The record at offset at: an animated slot's into frame where it goes, a still's piece unpacked into frame at w / 2
+// bytes a row. Only checked if frame is NULL. Returns its length, 0 if it's bad. area gets its rectangle, in frame
+// pixels.
+uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area);
+void gone(place_t *p);                       // it faded out, and goes
+void still_rounds(place_t *p, uint32_t ms);  // ms more of a still picture's rounds
+void wake(void);                             // something new to play
 
 // overlay_motion.c
 int32_t ramp_at(const ramp_t *r);

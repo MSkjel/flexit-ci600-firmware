@@ -125,9 +125,9 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
   return plink_pic_patch(b, id, (uint16_t) y, (uint16_t) count, len, pal);
 }
 
-int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
+int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
                       const uint32_t *pal) {
-  return plink_overlay_begin(b, id, (uint8_t) slot, (uint16_t) w, (uint16_t) h, (uint8_t) scale, (uint8_t) transp, len,
+  return plink_overlay_begin(b, id, (uint8_t) slot, (uint8_t) kind, (uint16_t) w, (uint16_t) h, (uint8_t) scale, len,
                              pal);
 }
 

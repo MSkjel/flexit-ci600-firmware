@@ -1,6 +1,7 @@
-// Screensaver overlays from the ESP (K_OVERLAY_BEGIN), drawn over the picture. RAM only. Each record is the
-// deflated rectangle that changed since the last frame, so we only redraw that. A slot holds an overlay, a place
-// shows one somewhere on the screen. The places of a slot show the same frame, unless one has a frame of its own.
+// Screensaver overlays from the ESP (K_OVERLAY_BEGIN), drawn over the picture. RAM only. A slot holds an overlay, a
+// place shows one somewhere on the screen. An animated one's records are the deflated rectangles that changed since
+// the last frame, so we only redraw those, and the places of a slot show the same frame unless one has a frame of its
+// own. A still one is kept packed in pieces, unpacked as they're drawn.
 #pragma once
 #include "lvgl.h"
 #include <stdbool.h>
@@ -24,15 +25,19 @@ lv_obj_t *overlay_show(lv_obj_t *parent);
 
 // A place as it is now, for the tests
 typedef struct {
-  int16_t x, y;            // where it is
-  int16_t deg, size, opa;  // its turn, and size and opacity in 1/1000
-  uint8_t flip;            // OVERLAY_FLIP_*
-  uint8_t tiles;           // bit 0 drawn, then over the right edge, the bottom one, and both
-  uint8_t order;           // drawn after order others
-  uint8_t depth;           // K_OVERLAY_DEPTH's
-  lv_area_t box;           // what it's drawn in, from the top left of overlay_show()'s object
-  const uint8_t *frame;    // the frame it shows, 2 pixels a byte
-  const lv_color_t *pal;   // its colours
+  int16_t x, y;             // where it is
+  int16_t deg, size, opa;   // its turn, and size and opacity in 1/1000
+  uint8_t flip;             // OVERLAY_FLIP_*
+  uint8_t tiles;            // bit 0 drawn, then over the right edge, the bottom one, and both
+  uint8_t order;            // drawn after order others
+  uint8_t depth;            // K_OVERLAY_DEPTH's
+  lv_area_t box;            // what it's drawn in, from the top left of overlay_show()'s object
+  bool still;               // OVERLAY_STILL
+  const lv_color_t *pal;    // its colours
+  lv_opa_t colour_opa[16];  // and their opacities
 } overlay_look_t;
 bool overlay_look(int place, overlay_look_t *l);  // false if there's no such place
 bool overlay_covered(int place, int x, int y);    // a part of the picture is in front of place at x, y, as box is
+// The frame place shows, w x h at a byte a pixel into px: its colour, 16 where a still has none. False if there's no
+// such place, or no memory to unpack a still.
+bool overlay_pixels(int place, uint8_t *px);

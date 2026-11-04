@@ -23,12 +23,12 @@ uint32_t sim_rgb888(uint16_t c);
 // that's furthest off. -1 if it isn't a whole 320x240 JPEG. Text at quality 80 is 12 off, a stale tile 30 or more.
 double sim_jpeg_off(const uint8_t *jpeg, size_t n);
 const uint32_t *sim_jpeg_rgb(void);  // the pixels it decoded, 0xRRGGBB
-// The ESP's picture and animation messages as plink_keys.h lays them out, into b. Each returns its length. pal is
+// The ESP's picture and overlay messages as plink_keys.h lays them out, into b. Each returns its length. pal is
 // 16 colours, NULL for none.
 int sim_pic_begin(uint8_t *b, uint8_t id, int format, int w, int h, uint32_t len, const uint32_t *pal);
 int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const uint32_t *pal);
-int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int w, int h, int scale, int transp, uint32_t len,
-                      const uint32_t *pal);
+int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
+                      const uint32_t *pal);  // pal 0xAARRGGBB
 int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade);
 int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
 int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second

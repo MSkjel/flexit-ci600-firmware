@@ -6,8 +6,8 @@
 #include "plink.h"
 #include <string.h>
 
-// Every slot's current frame (w * h / 2 bytes) and then its records, and the frames places of their own, packed
-// from the start. Freeing one moves what's behind it down.
+// Every slot's frame (w * h / 2 bytes, an animated one's) and then its records, and the frames places of their own,
+// packed from the start. Freeing one moves what's behind it down.
 static uint8_t pool[OVERLAY_POOL];
 static unsigned used;
 
@@ -17,9 +17,10 @@ static uint8_t in = OVERLAY_SLOTS;  // the slot a transfer is coming in for
 static lv_timer_t *timer;
 static uint8_t gone_bits, gone_tag[OVERLAY_PLACES];  // places gone after their rounds, for OVERLAY_GONE
 _Static_assert(OVERLAY_PLACES <= 8, "a bit per place in gone_bits");
+_Static_assert(OVERLAY_PAL_LEN - PIC_PAL_LEN == sizeof slots[0].opa, "the opacities as they come");
 
-static uint32_t frame_bytes(const slot_t *s) { return (uint32_t) s->w / 2 * s->h; }
-static uint8_t *records(const slot_t *s) { return pool + s->off + frame_bytes(s); }
+static uint32_t frame_bytes(const slot_t *s) { return s->still ? 0 : (uint32_t) s->w / 2 * s->h; }
+uint8_t *records(const slot_t *s) { return pool + s->off + frame_bytes(s); }
 const uint8_t *place_frame(const place_t *p) { return pool + (p->frame == NO_OFF ? slots[p->slot].off : p->frame); }
 
 // ---------------------------------------------------------------- the pool
@@ -181,6 +182,36 @@ bool overlay_clear(const uint8_t *b, int n) {
 
 unsigned overlay_used(void) { return used; }
 
+// The nibbles of rectangle a at f, rb bytes a row from its top left, into px a byte each, stride bytes a row
+static void spread(uint8_t *px, int stride, const uint8_t *f, int rb, const lv_area_t *a) {
+  for (int y = a->y1; y <= a->y2; y++, f += rb)
+    for (int x = a->x1; x <= a->x2; x++) {
+      uint8_t b = f[(x - a->x1) / 2];
+      px[y * stride + x] = x & 1 ? b & 15 : b >> 4;
+    }
+}
+
+bool overlay_pixels(int place, uint8_t *px) {
+  if (place < 0 || place >= OVERLAY_PLACES || places[place].slot == OVERLAY_SLOTS)
+    return false;
+  const slot_t *s = &slots[places[place].slot];
+  if (!s->still) {
+    spread(px, s->w, place_frame(&places[place]), s->w / 2, &(lv_area_t) {0, 0, s->w - 1, s->h - 1});
+    return true;
+  }
+  uint8_t *piece = lv_mem_alloc(OVERLAY_PIECE_MAX);
+  if (!piece)
+    return false;
+  memset(px, 16, (size_t) s->w * s->h);
+  for (uint32_t at = 0, k; at < s->len; at += k) {
+    lv_area_t a;
+    k = record(s, at, piece, &a);
+    spread(px, s->w, piece, lv_area_get_width(&a) / 2, &a);
+  }
+  lv_mem_free(piece);
+  return true;
+}
+
 int32_t overlay_gone(void) {
   for (int k = 0; k < OVERLAY_PLACES; k++)
     if (gone_bits >> k & 1) {
@@ -198,22 +229,23 @@ void overlay_abort(void) {
 }
 
 int overlay_open(const uint8_t *b, int n, uint32_t *len) {
-  if (n != OVERLAY_BEGIN_HEAD + PIC_PAL_LEN)
+  if (n != OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN)
     return PIC_BAD;
-  uint8_t i = b[OVERLAY_BEGIN_SLOT];
-  if (i >= OVERLAY_SLOTS)
+  uint8_t i = b[OVERLAY_BEGIN_SLOT], kind = b[OVERLAY_BEGIN_KIND];
+  if (i >= OVERLAY_SLOTS || kind > OVERLAY_STILL)
     return PIC_BAD;
   slot_t *s = &slots[i];
   drop_slot(i);
   s->w = plink_get16(b + OVERLAY_BEGIN_W);
   s->h = plink_get16(b + OVERLAY_BEGIN_H);
   s->scale = b[OVERLAY_BEGIN_SCALE];
-  s->transp = b[OVERLAY_BEGIN_TRANSP];
+  s->still = kind == OVERLAY_STILL;
   s->rate = 100;
   *len = plink_number(b + OVERLAY_BEGIN_SIZE, 4);
   pic_palette(s->pal, b + OVERLAY_BEGIN_HEAD);
-  if (!s->w || !s->h || s->w % 2 || s->h > 255 || (s->scale != 1 && s->scale != 2) || s->transp > OVERLAY_OPAQUE ||
-      s->w * s->scale > PIC_MAX_W || s->h * s->scale > PIC_MAX_H)
+  memcpy(s->opa, b + OVERLAY_BEGIN_HEAD + PIC_PAL_LEN, sizeof s->opa);
+  if (!s->w || !s->h || s->w % 2 || s->h > 255 || (s->scale != 1 && s->scale != 2) || s->w * s->scale > PIC_MAX_W ||
+      s->h * s->scale > PIC_MAX_H)
     return PIC_BAD_SIZE;
   if (*len > OVERLAY_POOL || (s->off = take(frame_bytes(s) + *len)) == NO_OFF)
     return PIC_TOO_BIG;
@@ -227,21 +259,44 @@ void overlay_bytes(uint32_t at, const uint8_t *b, unsigned n) {
     memcpy(records(&slots[in]) + at, b, n);
 }
 
-// A record is OVERLAY_RECORD_*: delay, x / 2, y, w / 2, h, then the deflated rectangle. Applies the one at offset at to
-// frame, or only checks it if frame is NULL. Returns its length, 0 if bad. area gets the changed rectangle, in
-// frame pixels.
-static uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area) {
-  const uint8_t *r = records(s) + at, *end = records(s) + s->len;
+// h rows of w bytes at p, packed as plink_pack_row packs them, into out, or only checked if out is NULL. Returns the
+// bytes they take, 0 if they run past end or a run past the end of a row.
+static uint32_t unpack(const uint8_t *p, const uint8_t *end, unsigned w, unsigned h, uint8_t *out) {
+  const uint8_t *start = p;
+  for (unsigned y = 0; y < h; y++)
+    for (unsigned left = w; left;) {
+      if (p == end)
+        return 0;
+      uint8_t c = *p++;
+      unsigned n = c < 128 ? c + 1u : c - 126u, k = c < 128 ? n : 1;  // the bytes it makes, and those after it
+      if (n > left || (unsigned) (end - p) < k)
+        return 0;
+      if (out) {
+        if (c < 128)
+          memcpy(out, p, n);
+        else
+          memset(out, *p, n);
+        out += n;
+      }
+      p += k;
+      left -= n;
+    }
+  return (uint32_t) (p - start);
+}
+
+// A record is OVERLAY_RECORD_*: delay, x / 2, y, w / 2, h, then the rectangle, deflated or a still's packed rows
+uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area) {
+  const uint8_t *r = records(s) + at, *end = records(s) + s->len, *d = r + OVERLAY_RECORD_HEAD;
   unsigned rb = s->w / 2u;
   if (end - r < OVERLAY_RECORD_HEAD)
     return 0;
   unsigned x = r[OVERLAY_RECORD_X], y = r[OVERLAY_RECORD_Y], w = r[OVERLAY_RECORD_W], h = r[OVERLAY_RECORD_H];
-  if (x + w > rb || y + h > s->h || !w != !h)
+  if (x + w > rb || y + h > s->h || !w != !h || (s->still && w * h > OVERLAY_PIECE_MAX))
     return 0;
   uint32_t n = 0;
   if (w) {
-    n = pinflate(r + OVERLAY_RECORD_HEAD, (uint32_t) (end - r - OVERLAY_RECORD_HEAD), frame ? frame + y * rb + x : NULL,
-                 w, rb, w * h, 0);
+    n = s->still ? unpack(d, end, w, h, frame)
+                 : pinflate(d, (uint32_t) (end - d), frame ? frame + y * rb + x : NULL, w, rb, w * h, 0);
     if (!n)
       return 0;
   }
@@ -272,11 +327,8 @@ static uint8_t advance(const slot_t *s, uint8_t *frame, uint16_t *next, lv_area_
   return delay;
 }
 
-// The first frame into frame: all transparent, or colour 0 if opaque, then the first record
-static void first_frame(const slot_t *s, uint8_t *frame) {
-  memset(frame, s->transp < 16 ? s->transp * 0x11 : 0, frame_bytes(s));
-  record(s, 0, frame, NULL);
-}
+// The first frame into frame, the whole of it in the first record
+static void first_frame(const slot_t *s, uint8_t *frame) { record(s, 0, frame, NULL); }
 
 bool overlay_close(void) {
   if (in >= OVERLAY_SLOTS)
@@ -286,25 +338,31 @@ bool overlay_close(void) {
   in = OVERLAY_SLOTS;
   s->last = NO_OFF;
   s->frames = 0;
-  for (uint32_t at = 0, k; at < s->len; at += k) {
-    if (!(k = record(s, at, NULL, NULL))) {
-      drop_slot(i);
-      return false;
-    }
-    if (at) {
+  s->loop_at = s->len;  // a still's pieces don't loop
+  bool ok = s->len;
+  for (uint32_t at = 0, k; ok && at < s->len; at += k) {
+    lv_area_t a;
+    if (!(k = record(s, at, NULL, &a))) {
+      ok = false;
+    } else if (s->still) {
+      continue;
+    } else if (at) {
       s->last = (uint16_t) at;
       s->frames++;
     } else {
       s->loop_at = (uint16_t) k;
+      ok = lv_area_get_width(&a) == s->w && lv_area_get_height(&a) == s->h;
     }
   }
-  if (!s->len) {
+  if (!ok) {
     drop_slot(i);
     return false;
   }
-  first_frame(s, pool + s->off);
-  s->next = s->loop_at;
-  s->due = lv_tick_get() + period(s, records(s)[OVERLAY_RECORD_DELAY]);
+  if (!s->still) {
+    first_frame(s, pool + s->off);
+    s->next = s->loop_at;
+    s->due = lv_tick_get() + period(s, records(s)[OVERLAY_RECORD_DELAY]);
+  }
   s->ready = true;
   wake();
   return true;
@@ -388,7 +446,7 @@ static void place_msg(const uint8_t *b) {
   uint16_t fade = plink_get16(b + OVERLAY_PLACE_FADE);
   drop_place(p);
   gone_bits &= (uint8_t) ~(1u << k);
-  if (b[OVERLAY_PLACE_OWN]) {  // a frame of its own, started b[OVERLAY_PLACE_START] frames in
+  if (b[OVERLAY_PLACE_OWN] && !s->still) {  // a frame of its own, started b[OVERLAY_PLACE_START] frames in
     if ((p->frame = take(frame_bytes(s))) == NO_OFF)
       return;
     first_frame(s, pool + p->frame);

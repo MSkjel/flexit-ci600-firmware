@@ -246,7 +246,7 @@ void sim_esp_send_dawn(void) {
 #define AN_H 48
 #define AN_FRAMES 8
 unsigned sim_esp_send_animation(int x, int y) {
-  static const uint32_t PAL[16] = {0xF08020, 0xA04010, 0xFFF0C0};
+  static const uint32_t PAL[16] = {0xFFF08020, 0xFFA04010, 0xFFFFF0C0};    // the others clear
   static const uint8_t HEIGHT[AN_FRAMES] = {0, 3, 10, 20, 28, 20, 10, 3};  // ball height above the ground
   static uint8_t frames[AN_FRAMES][AN_H][AN_W / 2];
   memset(frames, 0xFF, sizeof frames);  // colour 15 is transparent
@@ -265,9 +265,9 @@ unsigned sim_esp_send_animation(int x, int y) {
   for (int f = 0; f <= AN_FRAMES; f++)
     comp_len += plink_overlay_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
                                      comp + comp_len);
-  // into slot 0 at scale 1, colour 15 transparent. Then place 0 at x, y once it's in.
-  uint8_t h[OVERLAY_BEGIN_HEAD + PIC_PAL_LEN];
-  send(K_OVERLAY_BEGIN, h, sim_overlay_begin(h, ++pic_id, 0, AN_W, AN_H, 1, 15, comp_len, PAL));
+  // into slot 0 at scale 1. Then place 0 at x, y once it's in.
+  uint8_t h[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
+  send(K_OVERLAY_BEGIN, h, sim_overlay_begin(h, ++pic_id, 0, OVERLAY_ANIMATED, AN_W, AN_H, 1, comp_len, PAL));
   send_data(false);
   place_x = x;
   place_y = y;

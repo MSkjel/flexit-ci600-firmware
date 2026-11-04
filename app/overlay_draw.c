@@ -174,6 +174,7 @@ bool overlay_look(int place, overlay_look_t *l) {
   if (place < 0 || place >= OVERLAY_PLACES || places[place].slot == OVERLAY_SLOTS)
     return false;
   const place_t *p = &places[place];
+  const slot_t *s = &slots[p->slot];
   *l = (overlay_look_t) {.x = p->x,
                          .y = p->y,
                          .deg = p->now.deg,
@@ -182,9 +183,11 @@ bool overlay_look(int place, overlay_look_t *l) {
                          .flip = p->flip,
                          .tiles = p->tiles,
                          .box = p->drawn,
-                         .frame = place_frame(p),
-                         .pal = slots[p->slot].pal};
+                         .still = s->still,
+                         .pal = s->pal};
   l->depth = p->depth;
+  for (int i = 0; i < 16; i++)
+    l->colour_opa[i] = colour_opa(s, i);
   for (int i = 0; i < OVERLAY_PLACES; i++)
     if (z[i] == place)
       l->order = (uint8_t) i;
@@ -210,17 +213,17 @@ static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
 }
 
 // n pixels of frame f into d, pixel i from u + i * du, v + i * dv in 1/65536 px of the frame drawn at scale. sh
-// takes that to frame pixels, rb is f's bytes per row. paint() calls it twice so the opaque one is its own
-// compile, without the mix.
+// takes that to frame pixels, rb is f's bytes per row. The colours in clear aren't drawn, the others at opa, or as
+// they are if opa is NULL. fragment() calls it both ways, so the plain one is its own compile, without the mix.
 __attribute__((always_inline)) static inline void pixels(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u,
                                                          int32_t v, int32_t du, int32_t dv, int sh,
-                                                         const lv_color_t *pal, uint8_t transp, lv_opa_t opa) {
+                                                         const lv_color_t *pal, const lv_opa_t *opa, uint16_t clear) {
   for (; n > 0; n--, d++, u += du, v += dv) {
     int x = u >> sh;
     uint8_t q = f[(v >> sh) * rb + (x >> 1)];
     q = x & 1 ? q & 15 : q >> 4;
-    if (q != transp)
-      *d = opa > LV_OPA_MAX ? pal[q] : lv_color_mix(pal[q], *d, opa);
+    if (!(clear >> q & 1))
+      *d = !opa || opa[q] > LV_OPA_MAX ? pal[q] : lv_color_mix(pal[q], *d, opa[q]);
   }
 }
 
@@ -261,8 +264,8 @@ bool overlay_covered(int place, int x, int y) {
 // pixels() for i0..i1 of row, pixel i from u + i * du, v + i * dv. Those cover has, bit i - i0, are left as they are.
 __attribute__((always_inline)) static inline void runs(lv_color_t *row, int i0, int i1, const uint32_t *cover,
                                                        const uint8_t *f, int rb, int32_t u, int32_t v, int32_t du,
-                                                       int32_t dv, int sh, const lv_color_t *pal, uint8_t transp,
-                                                       lv_opa_t opa) {
+                                                       int32_t dv, int sh, const lv_color_t *pal, const lv_opa_t *opa,
+                                                       uint16_t clear) {
   for (int i = i0; i <= i1;) {
     int e = i1;
     if (cover) {
@@ -272,75 +275,154 @@ __attribute__((always_inline)) static inline void runs(lv_color_t *row, int i0, 
       }
     }
     if (i <= i1)
-      pixels(row + i, e - i + 1, f, rb, u + i * du, v + i * dv, du, dv, sh, pal, transp, opa);
+      pixels(row + i, e - i + 1, f, rb, u + i * du, v + i * dv, du, dv, sh, pal, opa, clear);
     i = e + 1;
   }
 }
 
-// p's box at a on the screen, the part in the area being drawn. Each pixel's middle goes back through the turn, the
-// size and the flip into the frame. Unturned that's the same for each row, and the step from one pixel to the next
-// is the box's, so a size that doesn't change the box looks the same.
-__attribute__((optimize("O3"))) static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a) {
+// How a place's box on the screen goes back into its frame, in the clip c: pixel i of row y, from c's left, is at
+// u + i * du, v + i * dv in 1/65536 of a frame pixel at scale, u and v from back(). sh takes those to frame pixels.
+// Each pixel's middle goes back through the turn, the size and the flip. Unturned that's the same u for each row, and
+// the step from one pixel to the next is the box's, so a size that doesn't change the box looks the same.
+typedef struct {
+  lv_area_t c;
+  int sh, top, h, zh;  // the box's top and height, and the frame's height at its size
+  int32_t fw, fh;      // the frame's size at scale
+  bool fx, fy, turned;
+  int32_t u, du, dv, qy, ry;  // unturned u, and v from qy and ry: fh * 32768 = qy * zh + ry
+  int32_t cs, sn;             // the turn's, 1/32767
+  int64_t dx, kx, ky;
+} brush_t;
+
+static brush_t brush(const place_t *p, const lv_area_t *a, const lv_area_t *c) {
+  const slot_t *s = &slots[p->slot];
+  brush_t b = {.c = *c,
+               .sh = 15 + s->scale,
+               .top = a->y1,
+               .h = lv_area_get_height(a),
+               .fw = s->w * s->scale,
+               .fh = s->h * s->scale,
+               .fx = p->now.flip & OVERLAY_FLIP_X,
+               .fy = p->now.flip & OVERLAY_FLIP_Y,
+               .turned = p->now.deg != 0};
+  int zw = zoom(p->now.size, b.fw), x0 = c->x1 - a->x1;
+  b.zh = zoom(p->now.size, b.fh);
+  if (!b.turned) {
+    b.qy = (b.fh << 15) / b.zh;
+    b.ry = (b.fh << 15) % b.zh;
+    b.du = (65536 * b.fw) / zw;
+    b.u = (int32_t) ((int64_t) (2 * x0 + 1 - zw) * 32768 * b.fw / zw);
+    if (b.fx) {
+      b.u = -b.u;
+      b.du = -b.du;
+    }
+    b.u += b.fw << 15;
+    return b;
+  }
+  b.cs = lv_trigo_cos(p->now.deg);
+  b.sn = lv_trigo_sin(p->now.deg);
+  b.kx = (int64_t) LV_TRIGO_SIN_MAX * zw;
+  b.ky = (int64_t) LV_TRIGO_SIN_MAX * b.zh;
+  b.dx = (int64_t) (2 * x0 + 1 - lv_area_get_width(a)) * 32768;
+  b.du = (int32_t) ((int64_t) b.cs * 65536 * b.fw / b.kx);
+  b.dv = (int32_t) (-(int64_t) b.sn * 65536 * b.fh / b.ky);
+  if (b.fx)
+    b.du = -b.du;
+  if (b.fy)
+    b.dv = -b.dv;
+  return b;
+}
+
+// Where the first pixel of screen row y goes back to
+static void back(const brush_t *b, int y, int32_t *u, int32_t *v) {
+  if (b->turned) {
+    int64_t dy = (int64_t) (2 * (y - b->top) + 1 - b->h) * 32768;
+    *u = (int32_t) ((b->dx * b->cs + dy * b->sn) * b->fw / b->kx);
+    *v = (int32_t) ((dy * b->cs - b->dx * b->sn) * b->fh / b->ky);
+    *u = (b->fx ? -*u : *u) + (b->fw << 15);
+  } else {
+    int k = 2 * (y - b->top) + 1 - b->zh;
+    *u = b->u;
+    *v = k * b->qy + k * b->ry / b->zh;
+  }
+  *v = (b->fy ? -*v : *v) + (b->fh << 15);
+}
+
+// The frame rows the clip's corners go back to, *lo..*hi, and a row more either side for the rounding
+static void rows(const brush_t *b, int *lo, int *hi) {
+  int32_t u, v0, v1;
+  back(b, b->c.y1, &u, &v0);
+  back(b, b->c.y2, &u, &v1);
+  int64_t e = (int64_t) (lv_area_get_width(&b->c) - 1) * b->dv;
+  int64_t mn = LV_MIN(LV_MIN(v0, v1), LV_MIN(v0, v1) + e), mx = LV_MAX(LV_MAX(v0, v1), LV_MAX(v0, v1) + e);
+  *lo = (int) (mn >> b->sh) - 1;
+  *hi = (int) (mx >> b->sh) + 1;
+}
+
+// Rectangle r of p's frame, in frame pixels, where b puts it. Its pixels are at f, rb bytes a row. The colours in
+// clear aren't drawn, the others at opa, or as they are if opa is NULL.
+__attribute__((optimize("O3"))) static void fragment(const place_t *p, const brush_t *b, lv_draw_ctx_t *ctx,
+                                                     const uint8_t *f, int rb, const lv_area_t *r, const lv_opa_t *opa,
+                                                     uint16_t clear) {
+  const lv_color_t *pal = slots[p->slot].pal;
+  int sh = b->sh, stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&b->c);
+  int32_t w = lv_area_get_width(r) << sh, h = lv_area_get_height(r) << sh, du = b->du, dv = b->dv;
+  lv_color_t *row = (lv_color_t *) ctx->buf + (b->c.y1 - ctx->buf_area->y1) * stride + (b->c.x1 - ctx->buf_area->x1);
+  uint32_t cover[(PIC_MAX_W + 31) / 32];
+  for (int y = b->c.y1; y <= b->c.y2; y++, row += stride) {
+    int32_t u, v;
+    back(b, y, &u, &v);
+    u -= r->x1 << sh;
+    v -= r->y1 << sh;
+    int i0 = 0, i1 = n - 1;
+    span(u, du, w, &i0, &i1);
+    span(v, dv, h, &i0, &i1);
+    if (i0 > i1)
+      continue;
+    const uint32_t *cv = covered(p, y, b->c.x1 + i0, i1 - i0 + 1, cover);
+    if (dv && opa)
+      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, pal, opa, clear);
+    else if (dv)
+      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, pal, NULL, clear);
+    else if (opa)  // one row of f, the one v is in
+      runs(row, i0, i1, cv, f + (v >> sh) * rb, 0, u, 0, du, 0, sh, pal, opa, clear);
+    else
+      runs(row, i0, i1, cv, f + (v >> sh) * rb, 0, u, 0, du, 0, sh, pal, NULL, clear);
+  }
+}
+
+// p's box at a on the screen, the part in the area being drawn. A still's pieces are unpacked into *piece, from LVGL's
+// heap the first time.
+static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint8_t **piece) {
   lv_area_t c;
   if (!_lv_area_intersect(&c, a, ctx->clip_area))
     return;
   const slot_t *s = &slots[p->slot];
-  const uint8_t *f = place_frame(p);
-  int rb = s->w / 2, sh = 15 + s->scale, fw = s->w * s->scale, fh = s->h * s->scale;
-  int zw = zoom(p->now.size, fw), zh = zoom(p->now.size, fh), w = lv_area_get_width(a), h = lv_area_get_height(a);
-  int stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&c), x0 = c.x1 - a->x1;
-  lv_color_t *row = (lv_color_t *) ctx->buf + (c.y1 - ctx->buf_area->y1) * stride + (c.x1 - ctx->buf_area->x1);
-  lv_opa_t opa = opa8(p->now.opa);
-  bool fx = p->now.flip & OVERLAY_FLIP_X, fy = p->now.flip & OVERLAY_FLIP_Y;
-  uint32_t cover[(PIC_MAX_W + 31) / 32];
-  if (!p->now.deg) {
-    int32_t qy = (fh << 15) / zh, ry = (fh << 15) % zh, du = (65536 * fw) / zw;  // fh * 32768 = qy * zh + ry
-    int32_t u = (int32_t) ((int64_t) (2 * x0 + 1 - zw) * 32768 * fw / zw);
-    if (fx) {
-      u = -u;
-      du = -du;
-    }
-    u += fw << 15;
-    int i0 = 0, i1 = n - 1;
-    span(u, du, fw << 16, &i0, &i1);
-    for (int y = c.y1; y <= c.y2 && i0 <= i1; y++, row += stride) {
-      int k = 2 * (y - a->y1) + 1 - zh;
-      int32_t v = k * qy + k * ry / zh;
-      v = (fy ? -v : v) + (fh << 15);
-      if (v < 0 || v >= fh << 16)
-        continue;
-      const uint8_t *fr = f + (v >> sh) * rb;
-      const uint32_t *cv = covered(p, y, c.x1 + i0, i1 - i0 + 1, cover);
-      if (opa > LV_OPA_MAX)
-        runs(row, i0, i1, cv, fr, 0, u, 0, du, 0, sh, s->pal, s->transp, LV_OPA_COVER);
-      else
-        runs(row, i0, i1, cv, fr, 0, u, 0, du, 0, sh, s->pal, s->transp, opa);
-    }
+  lv_opa_t opa[16], o = opa8(p->now.opa);
+  uint16_t clear = 0;
+  bool plain = o > LV_OPA_MAX;  // every colour drawn as it is, or not at all
+  for (int i = 0; i < 16; i++) {
+    lv_opa_t k = colour_opa(s, i);
+    opa[i] = (lv_opa_t) ((o * k + 127) / 255);
+    clear |= (uint16_t) (!opa[i] << i);
+    plain &= k == LV_OPA_TRANSP || k == LV_OPA_COVER;
+  }
+  brush_t b = brush(p, a, &c);
+  if (!s->still) {
+    fragment(p, &b, ctx, place_frame(p), s->w / 2, &(lv_area_t) {0, 0, s->w - 1, s->h - 1}, plain ? NULL : opa, clear);
     return;
   }
-  int32_t cs = lv_trigo_cos(p->now.deg), sn = lv_trigo_sin(p->now.deg);  // 1/32767
-  int64_t kx = (int64_t) LV_TRIGO_SIN_MAX * zw, ky = (int64_t) LV_TRIGO_SIN_MAX * zh,
-          dx = (int64_t) (2 * x0 + 1 - w) * 32768;
-  int32_t du = (int32_t) ((int64_t) cs * 65536 * fw / kx), dv = (int32_t) (-(int64_t) sn * 65536 * fh / ky);
-  if (fx)
-    du = -du;
-  if (fy)
-    dv = -dv;
-  for (int y = c.y1; y <= c.y2; y++, row += stride) {
-    int64_t dy = (int64_t) (2 * (y - a->y1) + 1 - h) * 32768;
-    int32_t u = (int32_t) ((dx * cs + dy * sn) * fw / kx), v = (int32_t) ((dy * cs - dx * sn) * fh / ky);
-    u = (fx ? -u : u) + (fw << 15);
-    v = (fy ? -v : v) + (fh << 15);
-    int i0 = 0, i1 = n - 1;
-    span(u, du, fw << 16, &i0, &i1);
-    span(v, dv, fh << 16, &i0, &i1);
-    if (i0 > i1)
+  int lo, hi;
+  rows(&b, &lo, &hi);
+  for (uint32_t at = 0, k; at < s->len; at += k) {
+    lv_area_t r;
+    k = record(s, at, NULL, &r);
+    if (r.y2 < lo || r.y1 > hi || lv_area_get_width(&r) <= 0)
       continue;
-    const uint32_t *cv = covered(p, y, c.x1 + i0, i1 - i0 + 1, cover);
-    if (opa > LV_OPA_MAX)
-      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, s->pal, s->transp, LV_OPA_COVER);
-    else
-      runs(row, i0, i1, cv, f, rb, u, v, du, dv, sh, s->pal, s->transp, opa);
+    if (!*piece && !(*piece = lv_mem_alloc(OVERLAY_PIECE_MAX)))
+      return;
+    record(s, at, *piece, &r);
+    fragment(p, &b, ctx, *piece, lv_area_get_width(&r) / 2, &r, plain ? NULL : opa, clear);
   }
 }
 
@@ -351,14 +433,16 @@ static void layer_event(lv_event_t *e) {
     for (int k = 0; k < OVERLAY_PLACES; k++)
       places[k].tiles = 0;
   } else if (lv_event_get_code(e) == LV_EVENT_DRAW_MAIN) {
+    uint8_t *piece = NULL;
     for (int i = 0; i < OVERLAY_PLACES; i++) {
       const place_t *p = &places[z[i]];
       for (int k = 0; k < 4; k++)
         if (p->tiles >> k & 1) {
           lv_area_t a = tile(&p->drawn, k);
-          paint(p, lv_event_get_draw_ctx(e), &a);
+          paint(p, lv_event_get_draw_ctx(e), &a, &piece);
         }
     }
+    lv_mem_free(piece);
   }
 }
 

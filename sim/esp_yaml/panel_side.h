@@ -31,11 +31,11 @@ int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
 // A place of the animations as the panel has it, see overlay_look_t
 typedef struct {
-  int x, y, deg, flip, size, opa, depth;
+  int x, y, deg, flip, size, opa, depth, still;
 } pn_look_t;
 int pn_anim(int place, pn_look_t *l);
 int pn_overlay_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
-int pn_overlay_line(int place, int y, int w, int scale, int transp, uint8_t *out);
+int pn_overlay_line(int place, int y, int w, int scale, uint8_t *out);
 void pn_overlay_step(int ms);
 unsigned pn_overlay_used(void);
 void pn_bus(const uint8_t *b, int n, uint32_t start_us);

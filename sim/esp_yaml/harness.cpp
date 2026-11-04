@@ -586,32 +586,37 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
     overlay::Overlay *was;
     ~Back() { overlay::W.a = was; }
   } back{was};
-  // its colour map, made again as count() makes it, since the ESP frees it
+  // its colour map, made again as count() and palette() make it, since the ESP frees it
   std::vector<uint32_t> hist(4096);
+  bool clear = false;
   for (int g = 0; g < A.src->frames; g++)
     for (int y = 0; y < A.h; y++)
       for (int x = 0; x < A.w; x++) {
         uint32_t c = overlay::px(g, x, y);
         if (c >> 24 >= 128)
           hist[panel::bin(c)]++;
+        else
+          clear = true;
       }
   uint32_t pal[16] = {};
   std::vector<uint16_t> bins;
-  int colours = panel::median_cut(hist, A.transp == 15 ? 15 : 16, pal, bins);
-  if (memcmp(pal, A.pal, sizeof pal))
+  int colours = panel::median_cut(hist, clear ? 15 : 16, pal, bins);
+  for (int i = 0; i < colours; i++)
+    pal[i] |= 0xFF000000u;
+  if (memcmp(pal, A.pal, sizeof pal) || A.still != (look(p).still != 0))
     return false;
   std::vector<uint8_t> lut(4096);
   for (int i = 0; i < 4096; i++)
     lut[i] = (uint8_t) panel::nearest(panel::bin_rgb(i), A.pal, colours);
   for (int y = 0; y < A.h * A.scale; y++) {
     uint8_t line[320 * 3];
-    if (pn_overlay_line(p, y, A.w, A.scale, A.transp, line) != A.w * A.scale)
+    if (pn_overlay_line(p, y, A.w, A.scale, line) != A.w * A.scale)
       return false;
     for (int x = 0; x < A.w * A.scale; x++) {
       uint32_t c = overlay::px(f, x / A.scale, y / A.scale);
       uint16_t want = sim_rgb565(A.pal[lut[panel::bin(c)]]), got = line[3 * x] | line[3 * x + 1] << 8;
       bool see = c >> 24 < 128;
-      if (see != (line[3 * x + 2] == 0) || (!see && got != want)) {
+      if (see != (line[3 * x + 2] == 0) || (!see && (got != want || line[3 * x + 2] != 255))) {
         if (!quiet)
           printf("  frame %d pixel %d,%d: the panel draws %04x/%d, the ESP made %04x/%d\n", f, x, y, got,
                  line[3 * x + 2], want, !see);
@@ -1995,6 +2000,53 @@ static void overlay_hello_while_made() {
   int r = run_until([&] { return six->state == overlay::SENT && settled(); }, 3000);
   CHECK_MSG(r >= 0 && overlay_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
             (unsigned) overlay_delays("six").size());
+  overlay::clear("");
+}
+
+// One frame goes as a still, of which the panel keeps only its pieces, and colours of a source's own keep their
+// opacity on the panel
+static void overlay_stills() {
+  step("a still overlay, and one with soft edges");
+  overlay::clear("");
+  overlay::add("dot", {60, 40, 1, 500, 20, 30, 1, [](int, int x, int y) -> uint32_t {
+                         int dx = x - 30, dy = y - 20;
+                         return dx * dx + dy * dy < 150 ? 0xFF3080C0u : 0;
+                       }});
+  overlay::Source soft{64, 48, 1, 500, 120, 30, 1, [](int, int x, int y) -> uint32_t {
+                         int d = (x - 32) * (x - 32) + (y - 24) * (y - 24);
+                         uint32_t a = d < 200 ? 255 : d < 500 ? (uint32_t) (500 - d) * 255 / 300 : 0;
+                         return a << 24 | 0xF0C040;
+                       }};
+  soft.colours = {0xFFF0C040, 0xC0F0C040, 0x80F0C040, 0x40F0C040, 0};
+  overlay::add("soft", soft);
+  overlay::show("dot");
+  overlay::show("soft");
+  int r = run_until(
+      [] {
+        return overlay::find("dot")->state == overlay::SENT && overlay::find("soft")->state == overlay::SENT &&
+               settled();
+      },
+      600);
+  const overlay::Overlay &dot = *overlay::find("dot"), &sa = *overlay::find("soft");
+  CHECK_MSG(r >= 0 && dot.still && sa.still && pn_overlay_used() == dot.data.size() + sa.data.size() &&
+                same_anim("dot", 0, dot.copies[0].place),
+            "two stills: '%s', %u bytes on the panel", panel_animation_status.state.c_str(),
+            (unsigned) pn_overlay_used());
+  int p = sa.copies[0].place, off = 0, between = 0;
+  for (int y = 0; y < sa.h; y++) {
+    uint8_t line[320 * 3];
+    if (pn_overlay_line(p, y, sa.w, 1, line) != sa.w) {
+      off++;
+      break;
+    }
+    for (int x = 0; x < sa.w; x++) {
+      uint32_t c = sa.src->pixel(0, std::min(x, sa.src->w - 1), y), k = sa.pal[overlay::nearest_own(c, sa.pal, 5)];
+      int opa = (int) ((k >> 24) * 15 + 127) / 255 * 17, got = line[3 * x] | line[3 * x + 1] << 8;
+      off += line[3 * x + 2] != opa || (opa && got != sim_rgb565(k));
+      between += opa > 0 && opa < 255;
+    }
+  }
+  CHECK_MSG(!off && between > 50, "soft edges: %d pixels off, %d between clear and opaque", off, between);
   overlay::clear("");
 }
 
@@ -3545,6 +3597,7 @@ int main(int argc, char **argv) {
   overlay_esp_restart();
   overlay_hello_while_made();
   overlay_long_frame();
+  overlay_stills();
   overlay_off_screen();
   overlay_shown_again();
   overlay_timing();
