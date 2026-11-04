@@ -154,8 +154,8 @@ static void live_sky() {
   show({"High clouds", "fair_day", 40, 0, 0, 0, 7, 16, 0, utc(2026, 6, 7, 11), met::G_HILLS, 0, 60, 2}, "flag");
   CHECK_MSG(live::R.flag, "high clouds on a flag day: no flag");
 
-  // drifting clouds and far gulls, and on a flag day; too many clouds for the pool is another show
-  show({"Drifting clouds", "fair_day", 0, 30, 0, 0, 4, 8, 0, utc(2026, 5, 5, 8), met::G_HILLS, 0, 90, 3}, "gulls");
+  // drifting clouds, and on a flag day; too many clouds for the pool is another show
+  show({"Drifting clouds", "fair_day", 0, 30, 0, 0, 4, 8, 0, utc(2026, 5, 5, 8), met::G_HILLS, 0, 90, 3}, "mid");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
   show({"Drifting clouds", "fair_day", 0, 10, 15, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 60, 2}, "low");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
@@ -378,18 +378,14 @@ static void live_costs() {
     }
   cirrus.check("CIRRUS_COST");
   cumulus.check("CUMULUS_COST");
-  // the flag in any light, and the far gulls
-  Costs flag, gulls;
+  // the flag in any light
+  Costs flag;
   for (float light : {0.2f, 0.5f, 0.8f, 1.0f}) {
     live::Frames sp;
     live::make_sprite("flag", sp);
     flag.took((float) pool_bytes(live::dimmed(sp, light)), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
   }
   flag.check("FLAG_BYTES");
-  live::Frames far;
-  live::make_sprite("gullfar", far);
-  gulls.took((float) pool_bytes(far), live::GULLS_FAR_BYTES, {{"GULLS_FAR_BYTES", live::GULLS_FAR_BYTES, 0, 1}});
-  gulls.check("GULLS_FAR_BYTES");
   // the aurora's four patches on clear nights up north, all of them in the pool
   float most = 0;
   for (int night = 0; night < 40; night++) {

@@ -31,9 +31,10 @@ int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
 // A place of the animations as the panel has it, see anim_look_t
 typedef struct {
-  int x, y, deg, flip, size, opa;
+  int x, y, deg, flip, size, opa, depth;
 } pn_look_t;
 int pn_anim(int place, pn_look_t *l);
+int pn_anim_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
 int pn_anim_line(int place, int y, int w, int scale, int transp, uint8_t *out);
 void pn_anim_step(int ms);
 unsigned pn_anim_used(void);

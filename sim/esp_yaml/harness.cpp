@@ -2,6 +2,7 @@
 // micros() and millis() run on simulated time.
 //   build/esp_test OUTDIR [PICTURE.ppm]
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <tuple>
@@ -281,6 +282,7 @@ static uint16_t value_key(const char *name) { return (uint16_t) (K_ITEM_VALUE + 
 // Place p of the animations as the panel has it, not shown if there's no such place
 struct Look : pn_look_t {
   bool shown;
+  bool hidden;  // a part of the picture in front of its middle, see follow()
 };
 static Look look(int p) {
   Look l{};
@@ -692,15 +694,35 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
   pn_saver(0);
 }
 
-// Where copy 0 of a weather sprite has been on the panel, a place each cycle it showed
+// Copy 0 of a weather sprite as the panel has it, or where the ESP placed it, as the panel may have moved it on
+// already, or where the ESP last moved it to, as the panel here only moves it on once a second. False if the panel
+// hasn't it.
+enum At { NOW, PLACED, AIMED };
+static bool where(const char *sprite, Look &l, At at = NOW) {
+  const anim::Anim *a = anim::find(std::string("w_") + sprite);
+  if (!a || a->state != anim::SENT || a->copies.empty() || !a->copies[0].used)
+    return false;
+  const anim::Copy &c = a->copies[0];
+  l = look(c.place);
+  if (at == PLACED) {
+    l.x = c.x;
+    l.y = c.y;
+  }
+  if (at == AIMED)
+    for (const anim::Copy::Told &t : c.told)
+      if (t.key == K_ANIM_GLIDE && t.ch == (1 << ANIM_X | 1 << ANIM_Y)) {  // a move
+        l.x = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD]);
+        l.y = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD + 2]);
+      }
+  l.hidden = l.shown && pn_anim_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
+  return l.shown;
+}
+// Where copy 0 of a weather sprite has been on the panel, from where the ESP placed it, a place each cycle it showed
 using Path = std::vector<Look>;
 static void follow(const char *sprite, Path &p) {
-  const anim::Anim *a = anim::find(std::string("w_") + sprite);
-  if (a && a->state == anim::SENT && !a->copies.empty() && a->copies[0].used) {
-    Look l = look(a->copies[0].place);
-    if (l.shown && l.opa > 0)
-      p.push_back(l);
-  }
+  Look l;
+  if (where(sprite, l, p.empty() ? PLACED : NOW) && l.opa > 0)
+    p.push_back(l);
 }
 // Its row where it crossed column x, between the places either side, -1 if it didn't. The panel here only moves it
 // on once a second.
@@ -779,8 +801,9 @@ static int slots_used() {
 }
 
 // Each of the show's visitors in turn, its other timers put off, as live/TAG_K_n.ppm with shots of each. Each asks
-// the panel for no more than it has, and lets go of what it took once it's gone.
-static void visits(const char *tag, int shots = 2) {
+// the panel for no more than it has, and lets go of what it took once it's gone. Those of walkers come from out of
+// sight and go out of it, off the screen or behind the picture's parts, rather than fading in and out in the open.
+static void visits(const char *tag, int shots = 2, std::initializer_list<const char *> walkers = {}) {
   for (int k = 0; k < live::R.visits; k++) {
     show_later();
     size_t from = log_all.size();
@@ -789,9 +812,26 @@ static void visits(const char *tag, int shots = 2) {
     if (!ms)
       continue;
     std::string name = std::string(tag) + "_" + std::to_string(k);
-    play((int) (ms + 999) / 1000 + 1, shots, name);
+    std::map<std::string, Path> paths;  // each walker where it's placed, faded in or not, and where it went
+    play((int) (ms + 999) / 1000 + 1, shots, name, [&] {
+      for (const char *w : walkers) {
+        Path &p = paths[w];
+        Look l;
+        if (where(w, l, p.empty() ? PLACED : AIMED))
+          p.resize(std::min<size_t>(p.size(), 1)), p.push_back(l);
+      }
+    });
     live_quiet(name, from);
     CHECK_MSG(slots_used() <= slots, "%s: %d animations after the visit, %d before", name.c_str(), slots_used(), slots);
+    for (auto &[w, p] : paths) {
+      if (p.empty())
+        continue;
+      const live::Frames *f = live::frames_of(w);
+      auto away = [&](const Look &l) { return l.hidden || l.x + f->w <= 0 || l.x >= met::W; };
+      CHECK_MSG(away(p.front()) && away(p.back()), "%s: the %s from %d,%d, hidden %d, to %d,%d, hidden %d",
+                name.c_str(), w.c_str(), p.front().x, p.front().y, p.front().hidden, p.back().x, p.back().y,
+                p.back().hidden);
+    }
   }
 }
 
@@ -1527,8 +1567,9 @@ static void anim_copies() {
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
   int ar = until_anim_status("Shown: ball (3 copies)", 100);
   CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
-  Look a = look(1), b = look(2);
-  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150, "copies at %d,%d and %d,%d", a.x, a.y, b.x, b.y);
+  Look a = look(1), b = look(2);  // in front of anything a picture has in front of the weather's animations
+  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == ANIM_NEAREST && b.depth == ANIM_NEAREST,
+            "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
   const anim::Anim *ball = anim::find("ball");
   CHECK_MSG(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
