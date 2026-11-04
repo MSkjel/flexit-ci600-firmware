@@ -9,6 +9,7 @@
 #include "mbserver.h"
 #include "panel.h"
 #include "plat.h"
+#include "prof.h"
 #include "room.h"
 #include "rs485.h"
 #include "settings.h"
@@ -40,6 +41,7 @@ static uint32_t flush_px;
 
 bool plat_const(const void *p) { return (uintptr_t) p >= FLASH_BASE_ADDR && (uintptr_t) p < FLASH_SETTINGS; }
 uint32_t plat_entropy(void) { return board_entropy(); }
+int plat_log(uint8_t *out, int room) { return prof_log(out, room); }
 
 static void flushed(void) { lv_disp_flush_ready(&drv); }
 
@@ -231,6 +233,7 @@ static void second(void) {
   PERF.busy_pm = board_busy_pm();
   PERF.stack_free = board_stack_free();
   M.cpu_busy = (uint8_t) ((PERF.busy_pm + 5) / 10);
+  prof_second();
 }
 
 int main(void) {
@@ -273,6 +276,7 @@ int main(void) {
     ui_toast(IC_ALERT, S_UNKNOWN_DISPLAY_CONTROLLER);
   if (on_trial)
     ui_trial(V_CPU_SPEED);
+  prof_init();
 
   // Every 5 ms is plenty, the bus is answered in its interrupt. Sleep in between, awake the core runs flat out
   // at 72 MHz or more and the chip gets warm.

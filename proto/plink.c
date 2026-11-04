@@ -140,6 +140,7 @@ int plink_kind(uint16_t key) {
     case K_PIC_PATCH:
     case K_PIC_DATA:
     case K_ANIM_BEGIN:
+    case K_LOG:
       return PLINK_BYTES;
   }
   if (key >= K_ANIM_FRAMES && key <= K_ANIM_ROUNDS)

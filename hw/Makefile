@@ -2,13 +2,15 @@
 #   make                  build/ci600.bin, the app at 0x08002100
 #   make full STOCK=dump  build/ci600_full.bin, a whole 512 KiB image with the stock bootloader
 #   make flash STOCK=dump writes that image over SWD, needs pyocd
+#   make PROF=1           build/prof/ci600.bin, a debug build that logs on the ESP where its time goes, see prof.c
 ROOT    := ..
-BUILD   := build
+BUILD   := build$(if $(PROF),/prof)
 OBJ_DIR := $(BUILD)
 COMPILE  = $(CC) $(CFLAGS)
 .DEFAULT_GOAL := all
 include $(ROOT)/config.mk
 DEFS    += -DPJPEG_ALSO=0  # the panel's JPEGs are one quality, see pjpeg.h
+DEFS    += $(if $(PROF),-DPROF)
 STOCK   ?=
 CC      := arm-none-eabi-gcc
 OBJCOPY := arm-none-eabi-objcopy
@@ -18,7 +20,8 @@ CFLAGS  := $(ARCH) -O2 -g -std=gnu11 $(WARN) -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -T $(BUILD)/ci600.ld -nostartfiles -Wl,--gc-sections -Wl,-Map=$(BUILD)/ci600.map --specs=nano.specs \
            -Wl,--no-warn-rwx-segments
 
-OBJ := $(patsubst $(ROOT)/%.c,$(BUILD)/%.o,$(sort $(wildcard $(ROOT)/hw/*.c))) $(APP_OBJ)
+HW  := $(filter-out $(if $(PROF),,$(ROOT)/hw/prof.c),$(sort $(wildcard $(ROOT)/hw/*.c)))
+OBJ := $(patsubst $(ROOT)/%.c,$(BUILD)/%.o,$(HW)) $(APP_OBJ)
 
 all: $(BUILD)/ci600.bin
 	@echo "ci600 $(VERSION)"
@@ -35,6 +38,7 @@ $(BUILD)/ci600.ld: ci600.ld layout.h
 
 $(BUILD)/ci600.bin: $(BUILD)/ci600.elf
 	$(OBJCOPY) -O binary $< $@
+	$(if $(PROF),python3 $(ROOT)/tools/mkprof.py $< $@)
 
 $(BUILD)/ci600_full.bin: $(BUILD)/ci600.bin FORCE  # every time, STOCK may name another dump
 	@test -n "$(STOCK)" || { echo "needs STOCK=<the stock CI600 dump>"; exit 1; }

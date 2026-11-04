@@ -372,6 +372,7 @@ void link_poll(void) {
   send_settings();
   while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it
     n = plink_pack(&queue, p, PBULK_ANSWER_MAX);
+    n += plat_log(p + n, PBULK_ANSWER_MAX - n);
     n += shot_take(p + n, PBULK_ANSWER_MAX - n);
     if (!n)
       break;

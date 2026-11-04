@@ -11,6 +11,7 @@
 //   0x120..0x13F  screensaver animations
 //   0x140..0x14F  screenshots
 //   0x150..0x15F  the screensaver's lines
+//   0x160..0x16F  debugging
 //   0x200..0x3FF  ESP items, 0x40 keys for each kind
 //
 // Copied into esphome-flexit-modbus-server by make -C sim esp_sync, edit it here.
@@ -245,6 +246,9 @@ enum { SHOT_TILE_NUM, SHOT_TILE_LEN, SHOT_TILE_HEAD = 3 };
 // fit under those before them. The panel forgets them at a HELLO and shows the temperatures while the ESP is away.
 #define K_SAVER_LINE 0x150
 #define SAVER_LINES 4
+
+// ---- Debugging
+#define K_LOG 0x160  // panel -> ESP: a line of text for the ESP's log, from a debug build like make -C hw PROF=1
 
 // ---- ESP items: anything the ESP adds to the panel, numbered as it likes. Each is on the smart home or comfort
 // page. Any item can be a dashboard tile, and sensors can keep a 24-hour trend.
