@@ -11,7 +11,7 @@
 #define BUF_SIZE (LOW + 720)  // the stream: what's waiting and the next tile. None in the sim is over 700 at q95
 #define AGAIN_MS 200          // a tile we asked for and that wasn't drawn by then is asked for again
 
-// pjpeg_tile()'s drop, more each time a tile doesn't fit. A block of only DC takes at most 26 bits, twice that with
+// pjpeg_tile()'s drop, more each time a tile doesn't fit. A block of only DC takes at most 24 bits, twice that with
 // the zeros stuffed after FF bytes, so the last always fits behind what's waiting.
 static const uint16_t DROP[] = {0, 1, 2, 3, 5, 8, 13, 21, 34, PJPEG_DC_ONLY};
 _Static_assert(SHOT_TILE_W / 16 * 4 * 8 <= BUF_SIZE - LOW - SHOT_TILE_HEAD, "a tile of only DC fits");
