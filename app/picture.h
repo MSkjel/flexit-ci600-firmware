@@ -6,7 +6,7 @@
 
 typedef enum { PIC_NONE, PIC_RECEIVING, PIC_READY } pic_state_t;
 
-// K_PIC_* messages, and K_ANIM_BEGIN and K_ANIM_CLEAR for an animation's transfer. Returns the K_PIC_ACK value to
+// K_PIC_* messages, and K_OVERLAY_BEGIN and K_OVERLAY_CLEAR for an overlay's transfer. Returns the K_PIC_ACK value to
 // send back, -1 for none.
 int32_t pic_msg(uint16_t key, const uint8_t *b, int n);
 void pic_reset(void);  // ESP restarted, drop the transfer in progress. It sends it again

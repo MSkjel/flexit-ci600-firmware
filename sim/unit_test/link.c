@@ -250,8 +250,8 @@ static void test_link(void) {
     link_send(k, 1);
   uint8_t d[512];  // and its animations are gone with it, it sends them again
   dot_frames(true);
-  uint32_t n = anim_records(d, 5);
-  CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  uint32_t n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   place(0, 0, 0, 10, 0, 0);
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK, false);
   msgs_t m = after_out();
@@ -260,18 +260,18 @@ static void test_link(void) {
   CHECK(queued(spare, 1));
   CHECK_EQ(m.n, PLINK_QUEUE);
   CHECK(!placed());
-  CHECK(!anim_used());
-  CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);  // also after the answer to ours
+  CHECK(!overlay_used());
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);  // also after the answer to ours
   number_from_esp(K_HELLO, (uint32_t) PLINK_VERSION << 16, false);
-  CHECK(!anim_used());
+  CHECK(!overlay_used());
   // An animation shows and goes on its own, the screen isn't built again for it
   saver_builds = 0;
-  CHECK_EQ(status(anim_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   uint8_t at[10] = {0};
-  from_esp(K_ANIM_PLACE, at, sizeof at, false);
-  number_from_esp(K_ANIM_CLEAR, ANIM_PLACE_BIT | 0, false);
-  number_from_esp(K_ANIM_CLEAR, ANIM_ALL, false);
-  CHECK(!saver_builds && !anim_used());
+  from_esp(K_OVERLAY_PLACE, at, sizeof at, false);
+  number_from_esp(K_OVERLAY_CLEAR, OVERLAY_PLACE_BIT | 0, false);
+  number_from_esp(K_OVERLAY_CLEAR, OVERLAY_ALL, false);
+  CHECK(!saver_builds && !overlay_used());
   // A CX60 value in the ignored answer goes again unless a newer one waits. Item values don't.
   link_init();
   M.esp_version = PLINK_VERSION;

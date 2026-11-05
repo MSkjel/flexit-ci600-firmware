@@ -8,7 +8,7 @@
 #include "link.h"
 #include "panel.h"
 #include "picture.h"
-#include "anim.h"
+#include "overlay.h"
 #include "plat.h"
 #include "schedule.h"
 #include "trend.h"

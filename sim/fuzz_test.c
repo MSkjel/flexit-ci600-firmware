@@ -1,7 +1,7 @@
 // Damaged and random input for pinflate(), both ends of the link and the panel's picture and animation messages.
 // No crash, no write past a buffer (SAN=1), output as promised. Each test starts from seed 1, FUZZ_SEED=n for another.
 //   build/fuzz_test [-l | -v] [TEST...]
-#include "anim.h"
+#include "overlay.h"
 #include "model.h"
 #include "pbulk.h"
 #include "pdeflate.h"
@@ -437,107 +437,113 @@ static void test_pictures(void) {
   pic_msg(K_PIC_CLEAR, NULL, 0);
 }
 
-// An animation of 4 random frames, its records damaged or not, into slot
-static void send_animation(int slot) {
-  int w = 2 * (1 + below(16)), h = 1 + below(16), bytes = w / 2 * h;
-  static uint8_t frames[4][16 * 16], d[5 * (ANIM_RECORD_HEAD + PDEFLATE_BOUND(16 * 16)) + 16];
+// An overlay of 4 random frames, or a still of the first, its records damaged or not, into slot. Its colours have any
+// opacity.
+static void send_overlay(int slot) {
+  int still = below(2), w = 2 * (1 + below(still ? 64 : 16)), h = 1 + below(still ? 48 : 16), bytes = w / 2 * h;
+  static uint8_t frames[4][64 * 48], d[5 * (OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(64 * 48)) + 16];
   for (int f = 0; f < 4; f++)
     for (int i = 0; i < bytes; i++)
       frames[f][i] = (uint8_t) (i % 5 < 2 ? 0xFF : rnd());
   unsigned n = 0;
-  for (int f = 0; f <= 4; f++)
-    n += plink_anim_record(f ? frames[f - 1] : NULL, frames[f % 4], (unsigned) w, (unsigned) h, (uint8_t) rnd(), d + n);
+  if (still)
+    n = plink_overlay_pieces(frames[0], (unsigned) w, (unsigned) h, (uint16_t) rnd(), (uint8_t) rnd(), d, sizeof d);
+  else
+    for (int f = 0; f <= 4; f++)
+      n += plink_overlay_record(f ? frames[f - 1] : NULL, frames[f % 4], (unsigned) w, (unsigned) h, (uint8_t) rnd(),
+                                d + n);
   if (below(2))
     n = (unsigned) damage(d, (int) n, (int) sizeof d);
-  uint8_t b[ANIM_BEGIN_HEAD + PIC_PAL_LEN + 16];
-  int bn = plink_anim_begin(b, ++id, (uint8_t) slot, (uint16_t) w, (uint16_t) h, (uint8_t) (1 + below(2)),
-                            (uint8_t) below(ANIM_OPAQUE + 1), n, palette());
-  send_head(K_ANIM_BEGIN, b, bn, (int) sizeof b);
+  uint32_t pal[16];
+  for (int i = 0; i < 16; i++)
+    pal[i] = palette()[i] | (below(2) ? 0xFF000000 : rnd() << 24);
+  uint8_t b[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN + 16];
+  int bn = plink_overlay_begin(b, ++id, (uint8_t) slot, (uint8_t) (still ? OVERLAY_STILL : OVERLAY_ANIMATED),
+                               (uint16_t) w, (uint16_t) h, (uint8_t) (1 + below(2)), n, pal);
+  if (!below(16))
+    b[OVERLAY_BEGIN_KIND] = (uint8_t) rnd();
+  send_head(K_OVERLAY_BEGIN, b, bn, (int) sizeof b);
   send_data(d, n, plink_crc32(0, d, n));
 }
 
-// The animations, sent whole or damaged, placed and moved by messages of every kind and drawn as they go
-static void test_anims(void) {
+// The overlays, sent whole or damaged, placed and moved by messages of every kind and drawn as they go
+static void test_overlays(void) {
   seed();
   static const struct {
     uint16_t key;
     int len;  // 0 for a GLIDE or DRIFT, which have a value for each channel
-  } MSGS[] = {{K_ANIM_FRAMES, ANIM_FRAMES_LEN},
-              {K_ANIM_PLACE, ANIM_PLACE_LEN},
-              {K_ANIM_AREA, ANIM_AREA_LEN},
-              {K_ANIM_GLIDE, 0},
-              {K_ANIM_DRIFT, 0},
-              {K_ANIM_WANDER, ANIM_WANDER_LEN},
-              {K_ANIM_FACE, ANIM_FACE_LEN},
-              {K_ANIM_FLIP, ANIM_FLIP_LEN},
-              {K_ANIM_WAVE, ANIM_WAVE_LEN},
-              {K_ANIM_MAP, ANIM_MAP_LEN},
-              {K_ANIM_ROUNDS, ANIM_ROUNDS_LEN}};
-  lv_obj_t *layer = anim_show(lv_scr_act());
+  } MSGS[] = {{K_OVERLAY_FRAMES, OVERLAY_FRAMES_LEN},
+              {K_OVERLAY_PLACE, OVERLAY_PLACE_LEN},
+              {K_OVERLAY_AREA, OVERLAY_AREA_LEN},
+              {K_OVERLAY_GLIDE, 0},
+              {K_OVERLAY_DRIFT, 0},
+              {K_OVERLAY_WANDER, OVERLAY_WANDER_LEN},
+              {K_OVERLAY_FACE, OVERLAY_FACE_LEN},
+              {K_OVERLAY_FLIP, OVERLAY_FLIP_LEN},
+              {K_OVERLAY_WAVE, OVERLAY_WAVE_LEN},
+              {K_OVERLAY_MAP, OVERLAY_MAP_LEN},
+              {K_OVERLAY_ROUNDS, OVERLAY_ROUNDS_LEN}};
+  lv_obj_t *layer = overlay_show(lv_scr_act());
   for (int round = 0; round < 3000; round++) {
     if (!below(8))
-      send_animation(below(ANIM_SLOTS + 1));
+      send_overlay(below(OVERLAY_SLOTS + 1));
     for (int k = below(6); k > 0; k--) {
       int i = below((int) LEN(MSGS));
       uint8_t m[32];
       noise(m, (int) sizeof m);
-      m[ANIM_MSG_PLACE] = (uint8_t) below(ANIM_PLACES + 1);
-      if (MSGS[i].key == K_ANIM_FRAMES)
-        m[ANIM_FRAMES_SLOT] = (uint8_t) below(ANIM_SLOTS + 1);
-      if (MSGS[i].key == K_ANIM_PLACE) {  // most on the screen
-        m[ANIM_PLACE_SLOT] = (uint8_t) below(ANIM_SLOTS + 1);
-        plink_put16(m + ANIM_PLACE_X, (uint16_t) (below(400) - 40));
-        plink_put16(m + ANIM_PLACE_Y, (uint16_t) (below(300) - 30));
+      m[OVERLAY_MSG_PLACE] = (uint8_t) below(OVERLAY_PLACES + 1);
+      if (MSGS[i].key == K_OVERLAY_FRAMES)
+        m[OVERLAY_FRAMES_SLOT] = (uint8_t) below(OVERLAY_SLOTS + 1);
+      if (MSGS[i].key == K_OVERLAY_PLACE) {  // most on the screen
+        m[OVERLAY_PLACE_SLOT] = (uint8_t) below(OVERLAY_SLOTS + 1);
+        plink_put16(m + OVERLAY_PLACE_X, (uint16_t) (below(400) - 40));
+        plink_put16(m + OVERLAY_PLACE_Y, (uint16_t) (below(300) - 30));
       }
       int n = MSGS[i].len;
       if (!n) {
-        m[1] &= (1u << ANIM_CHANNELS) - 1;
-        n = MSGS[i].key == K_ANIM_GLIDE ? ANIM_GLIDE_HEAD : ANIM_DRIFT_HEAD;
+        m[1] &= (1u << OVERLAY_CHANNELS) - 1;
+        n = MSGS[i].key == K_OVERLAY_GLIDE ? OVERLAY_GLIDE_HEAD : OVERLAY_DRIFT_HEAD;
         n += 2 * __builtin_popcount(m[1]);
       }
       if (!below(8))
         n = below((int) sizeof m);
       uint8_t *b = heap(m, n);
-      anim_msg(MSGS[i].key, b, n);
+      overlay_msg(MSGS[i].key, b, n);
       free(b);
     }
     if (!below(10)) {  // a slot, all of them or a place, now or over a while
       uint8_t c[4];
-      unsigned what = ANIM_ALL;
+      unsigned what = OVERLAY_ALL;
       if (below(3))
-        what = (unsigned) below(ANIM_SLOTS);
+        what = (unsigned) below(OVERLAY_SLOTS);
       else if (below(2))
-        what = ANIM_PLACE_BIT | (unsigned) below(ANIM_PLACES);
+        what = OVERLAY_PLACE_BIT | (unsigned) below(OVERLAY_PLACES);
       plink_put32(c, what | (unsigned) below(3) * 200 << 8);
-      pic_msg(K_ANIM_CLEAR, c, 4);
+      pic_msg(K_OVERLAY_CLEAR, c, 4);
     }
-    while (anim_gone() >= 0) {
+    while (overlay_gone() >= 0) {
     }
-    CHECK(anim_used() <= ANIM_POOL);
+    CHECK(overlay_used() <= OVERLAY_POOL);
     sim_run(5 * below(20));
     if (!below(50)) {  // the screensaver goes and comes back
       lv_obj_del(layer);
-      layer = anim_show(lv_scr_act());
+      layer = overlay_show(lv_scr_act());
     }
   }
   lv_obj_clean(lv_scr_act());
   uint8_t all[4];
-  plink_put32(all, ANIM_ALL);
-  pic_msg(K_ANIM_CLEAR, all, 4);
+  plink_put32(all, OVERLAY_ALL);
+  pic_msg(K_OVERLAY_CLEAR, all, 4);
 }
 
 static const check_test_t TESTS[] = {
-    {"inflate", test_inflate},
-    {"panel_frames", test_panel_frames},
-    {"esp_answers", test_esp_answers},
-    {"pictures", test_pictures},
-    {"anims", test_anims},
-    {0},
+    {"inflate", test_inflate},   {"panel_frames", test_panel_frames}, {"esp_answers", test_esp_answers},
+    {"pictures", test_pictures}, {"overlays", test_overlays},         {0},
 };
 
 int main(int argc, char **argv) {
   printf("fuzz_test from seed %s\n", getenv("FUZZ_SEED") ? getenv("FUZZ_SEED") : "1");
   sim_display_init();
-  anim_init();
+  overlay_init();
   return check_main("fuzz_test", (const check_test_t *const[]) {TESTS, NULL}, argc, argv);
 }

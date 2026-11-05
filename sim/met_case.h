@@ -10,15 +10,13 @@
 static const double OSLO_LAT = 59.9139, OSLO_LON = 10.7522;
 
 // UTC seconds since 1970
-inline uint32_t utc(int y, int mo, int d, int h = 0, int mi = 0) {
-  return flexit::panel::met::unix_of(y, mo, d, h, mi);
-}
+inline uint32_t utc(int y, int mo, int d, int h = 0, int mi = 0) { return flexit::panel::unix_of(y, mo, d, h, mi); }
 
 // Oslo's UTC offset in seconds. CEST from 01:00 UTC on the last Sunday in March to the same in October.
 inline int oslo_offset(uint32_t t) {
   int y = 1970 + (int) (t / 31556952u);  // close enough, summer time starts and ends far from New Year
   auto last_sunday = [y](int month) {    // 01:00 UTC on it. 1970-01-01 was a Thursday
-    uint32_t d = flexit::panel::met::days_from_civil(y, month, 31);
+    uint32_t d = flexit::panel::days_from_civil(y, month, 31);
     return (d - (d + 4) % 7) * 86400u + 3600;
   };
   return t >= last_sunday(3) && t < last_sunday(10) ? 7200 : 3600;
@@ -40,16 +38,13 @@ struct SceneBuf {
 
 // MET's answer as the ESP reads it, in pieces of at most chunk bytes. *stopped: the reader had what it needs first.
 inline flexit::panel::met::Weather read_met(const std::string &body, size_t chunk = SIZE_MAX, bool *stopped = nullptr) {
-  std::vector<char> buf(flexit::panel::met::Reader::SIZE + 1);
-  flexit::panel::met::Reader rd(buf.data());
+  flexit::panel::met::Forecast f;
   bool stop = false;
-  for (size_t at = 0, room; at < body.size() && !stop; at += room) {
-    char *p = rd.space(room);
-    room = std::min({room, chunk, body.size() - at});
-    memcpy(p, body.data() + at, room);
-    stop = !rd.got(room);
+  for (size_t at = 0, n; at < body.size() && !stop; at += n) {
+    n = std::min(chunk, body.size() - at);
+    stop = !f.feed(body.data() + at, n);
   }
   if (stopped)
     *stopped = stop;
-  return rd.w;
+  return f.w;
 }

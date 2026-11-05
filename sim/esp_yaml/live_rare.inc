@@ -12,14 +12,14 @@ static Path rare(int k, const char *sprite, const char *tag, int seconds, int sh
   play(seconds, shots, tag, [&] { follow(sprite, p); });
   live_quiet(tag, from);
   CHECK_MSG(logged(made.c_str(), from) && !p.empty(), "%s: %s not shown", tag, sprite);
-  CHECK_MSG(live::R.rare.empty() && !anim::find(std::string("w_") + sprite), "%s: %s still on", tag, sprite);
+  CHECK_MSG(live::R.rare.empty() && !overlay::find(std::string("w_") + sprite), "%s: %s still on", tag, sprite);
   return p;
 }
 
 // The places the panel's animations take
 static int places_used() {
   int n = 0;
-  for (auto &a : anim::anims)
+  for (auto &a : overlay::overlays)
     for (auto &c : a.copies)
       n += c.used;
   return n;
@@ -31,8 +31,8 @@ static void live_rare() {
   // rain in a gale leaves a place and RARE_BYTES of the pool for what blows by: a trampoline, an umbrella, a shirt and
   // a cow
   show({"Light rain", "rain", 0, 70, 90, 1.5f, 19, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 0, 10, 0}, "gale");
-  CHECK_MSG(places_used() < ANIM_PLACES && anim::used_by_others(nullptr) + live::RARE_BYTES <= ANIM_POOL,
-            "rain in a gale: %d places and %u bytes taken", places_used(), (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(places_used() < OVERLAY_PLACES && overlay::used_by_others(nullptr) + live::RARE_BYTES <= OVERLAY_POOL,
+            "rain in a gale: %d places and %u bytes taken", places_used(), (unsigned) overlay::used_by_others(nullptr));
   rare(0, "trampoline", "trampoline", 8, 16);
   rare(1, "umbrella", "umbrella", 20, 3);
   rare(2, "shirt", "shirt", 20, 3);
@@ -84,7 +84,7 @@ static void live_rare() {
   int sat = 0;
   for (const Look &l : p) {
     on = on && l.x == e.den_x && l.y >= e.den_y && l.y <= e.den_y + 15 && l.depth == e.den_depth &&
-         !(l.flip & ANIM_FLIP_X) == (e.moon_x >= e.den_x + 8);
+         !(l.flip & OVERLAY_FLIP_X) == (e.moon_x >= e.den_x + 8);
     sat += l.y == e.den_y && !l.hidden;
   }
   CHECK_MSG(on && sat * 4 >= (int) p.size() * 3, "the wolf at %d,%d flipped %d, %d of %zu cycles up, its place %d,%d, "

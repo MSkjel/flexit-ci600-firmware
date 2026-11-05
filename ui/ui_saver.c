@@ -1,4 +1,4 @@
-// Screensaver. A clock on black or over the ESP's picture, with the ESP's animation on top.
+// Screensaver. A clock on black or over the ESP's picture, with the ESP's overlays on top.
 #include "ui_int.h"
 
 #define BAND_H 74              // height of the band behind the text over a picture
@@ -107,7 +107,7 @@ static void saver_build(lv_obj_t *b, intptr_t arg) {
     mode = saver_plain(mode);  // no picture yet
   bool temps = mode == SAVER_CLOCK_TEMPS || mode == SAVER_PIC_ALL;
   st_bg(lv_scr_act(), lv_color_black(), 0);  // build() puts the theme's back
-  anim_show(b);                              // over the picture, under the texts
+  overlay_show(b);                           // over the picture, under the texts
   if (pic) {
     saver->shows_pic = true;
     if (mode != SAVER_PIC && M.saver_text == SAVER_TEXT_SMALL)

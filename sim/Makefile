@@ -54,6 +54,16 @@ $(OBJ_DIR)/esp_met/%.o: $(ESP_MET)/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
+# packages/code/marks/*.cpp and space/*.cpp, the space pictures' glyphs and the rovers' maps
+MARKS_OBJ := $(patsubst $(ESP_CODE)/%.cpp,$(OBJ_DIR)/esp_%.o,\
+                         $(wildcard $(ESP_CODE)/marks/*.cpp $(ESP_CODE)/space/*.cpp))
+$(OBJ_DIR)/esp_marks/%.o: $(ESP_CODE)/marks/%.cpp $(BUILD_MK)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
+$(OBJ_DIR)/esp_space/%.o: $(ESP_CODE)/space/%.cpp $(BUILD_MK)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
+
 # packages/code/panel/*.cpp, built apart from main.cpp as on the ESP. Not update.cpp, it needs ESP-IDF and the ESP
 # repo's update_test.cpp runs it
 PANEL_CPP := $(filter-out %/update.cpp,$(wildcard $(ESP_CODE)/panel/*.cpp))
@@ -65,15 +75,22 @@ $(OBJ_DIR)/esp_panel/%.o: $(ESP_CODE)/panel/%.cpp $(BUILD_MK)
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
 # gen.py also checks the ESP's copies of proto/ against proto.lock, and lists the headers in packages/code
-ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/*)
+ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/* $(ESP_CODE)/marks/* $(ESP_CODE)/space/*)
 $(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML) $(ESP_PROTO)
 	@test -d $(ESP_REPO) || { echo "needs the ESP repo: ESP_REPO=<esphome-flexit-modbus-server>"; exit 1; }
 	@mkdir -p $(dir $@)
 	python3 esp_yaml/gen.py $(ESP_REPO) $@
 $(OBJ_DIR)/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
-$(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DMET_SAMPLE='"$(abspath esp_yaml/met_sample.json)"'
+$(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DSAMPLES='"$(abspath esp_yaml)/"' \
+                                     -DPICTURES='"$(abspath $(BUILD)/esp_yaml)/"'
+# The photos it shows, from the samples, as PPMs
+ESP_PICTURES := $(addprefix $(BUILD)/esp_yaml/,mars_sample.ppm epic_sample.ppm)
+TO_PPM := python3 -c "import sys; from PIL import Image; Image.open(sys.argv[1]).convert('RGB').save(sys.argv[2])"
+$(BUILD)/esp_yaml/%_sample.ppm: esp_yaml/%_sample.png
+	@mkdir -p $(dir $@)
+	$(TO_PPM) $< $@
 $(BUILD)/esp_test: $(SIMLIB) $(CHECK_OBJ) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) \
-                   $(PANEL_OBJ) $(MET_OBJ)
+                   $(PANEL_OBJ) $(MET_OBJ) $(MARKS_OBJ) | $(ESP_PICTURES)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 # met_render draws the ESP's weather picture from packages/code/met/met_scene.h for a set of weathers and times

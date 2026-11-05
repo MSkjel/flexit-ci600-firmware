@@ -13,7 +13,8 @@ know about, but I doubt it. If something's off, open an issue.
   starts from defaults. From stock or over USB you start from defaults. Fan speeds, setpoint and the week program
   live in the unit and aren't touched.
 - Only stock 7.x has been tested. The ESP checks that for you. Over USB, look under Settings > Advanced user
-  (PIN 1000) > Service (PIN 8888) > System information, at SW ADVANCED PANEL.
+  (PIN 1000) > Service (PIN 8888) > System information, at SW ADVANCED PANEL. The panel shows the version as a
+  letter, A for 1 up to G for 7, so 7.0 is G. SW MOTHERBOARD is the unit's own, the same way.
 - Going back to stock isn't easy, see [Going back to stock](../README.md#going-back-to-stock).
 - Nothing else can be at address 1 while you flash, the [bootloader](hardware.md#the-bootloader) answers there.
 

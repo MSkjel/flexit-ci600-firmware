@@ -38,7 +38,6 @@ struct PanelCamera {
 };
 static PanelCamera panel_screen;
 
-static Image panel_picture_dusk;
-static OnlineImage panel_picture_radar, panel_picture_front_door;
-static HttpRequest panel_http;
+static Image panel_picture_dusk, panel_picture_perseverance, panel_picture_curiosity;
+static OnlineImage panel_picture_radar, panel_picture_front_door, panel_picture_mars_today, panel_picture_earth_today;
 static Animation panel_animation_ball, panel_animation_noise;

@@ -246,7 +246,7 @@ void sim_esp_send_dawn(void) {
 #define AN_H 48
 #define AN_FRAMES 8
 unsigned sim_esp_send_animation(int x, int y) {
-  static const uint32_t PAL[16] = {0xF08020, 0xA04010, 0xFFF0C0};
+  static const uint32_t PAL[16] = {0xFFF08020, 0xFFA04010, 0xFFFFF0C0};    // the others clear
   static const uint8_t HEIGHT[AN_FRAMES] = {0, 3, 10, 20, 28, 20, 10, 3};  // ball height above the ground
   static uint8_t frames[AN_FRAMES][AN_H][AN_W / 2];
   memset(frames, 0xFF, sizeof frames);  // colour 15 is transparent
@@ -263,11 +263,11 @@ unsigned sim_esp_send_animation(int x, int y) {
   comp_len = 0;
   // frame 0 whole, then changes from the frame before, and a last record back to frame 0
   for (int f = 0; f <= AN_FRAMES; f++)
-    comp_len += plink_anim_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
-                                  comp + comp_len);
-  // into slot 0 at scale 1, colour 15 transparent. Then place 0 at x, y once it's in.
-  uint8_t h[ANIM_BEGIN_HEAD + PIC_PAL_LEN];
-  send(K_ANIM_BEGIN, h, sim_anim_begin(h, ++pic_id, 0, AN_W, AN_H, 1, 15, comp_len, PAL));
+    comp_len += plink_overlay_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
+                                     comp + comp_len);
+  // into slot 0 at scale 1. Then place 0 at x, y once it's in.
+  uint8_t h[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
+  send(K_OVERLAY_BEGIN, h, sim_overlay_begin(h, ++pic_id, 0, OVERLAY_ANIMATED, AN_W, AN_H, 1, comp_len, PAL));
   send_data(false);
   place_x = x;
   place_y = y;
@@ -277,14 +277,14 @@ unsigned sim_esp_send_animation(int x, int y) {
 
 void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start) {
   uint8_t m[10];
-  send(K_ANIM_PLACE, m, sim_anim_place(m, place, slot, x, y, own, start, 0));
+  send(K_OVERLAY_PLACE, m, sim_overlay_place(m, place, slot, x, y, own, start, 0));
 }
 
 void sim_esp_move_animation(uint16_t key, int a, int b, int ms) {
   uint8_t m[9];
   int v[2] = {a, b};
-  unsigned xy = 1u << ANIM_X | 1u << ANIM_Y;
-  send(key, m, key == K_ANIM_GLIDE ? sim_anim_glide(m, 0, xy, ms, 0, v) : sim_anim_drift(m, 0, xy, v));
+  unsigned xy = 1u << OVERLAY_X | 1u << OVERLAY_Y;
+  send(key, m, key == K_OVERLAY_GLIDE ? sim_overlay_glide(m, 0, xy, ms, 0, v) : sim_overlay_drift(m, 0, xy, v));
 }
 
 static void esp_pump(void) {

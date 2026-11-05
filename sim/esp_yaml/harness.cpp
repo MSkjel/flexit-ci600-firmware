@@ -15,9 +15,11 @@
 
 namespace panel = flexit::panel;
 namespace pic = flexit::panel::picture;
-namespace anim = flexit::panel::anim;
+namespace overlay = flexit::panel::overlay;
 namespace met = flexit::panel::met;
+namespace fetch = flexit::panel::fetch;
 namespace live = flexit::panel::met::live;
+namespace space = flexit::panel::space;
 
 static void step(const char *what) { printf("%s\n", what); }
 
@@ -44,21 +46,14 @@ void delayMicroseconds(uint32_t us) {
   now_us += us;
   waited_us += us;
 }
-// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap. An online
-// picture's question to its server is answered by the next loop, see run().
-static std::vector<std::pair<TaskFunction_t, void *>> tasks, asks;
-BaseType_t xTaskCreate(TaskFunction_t f, const char *name, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
+// FreeRTOS: a new task waits until run_task() runs it, to its end, and fetch.h's answer is taken as the next loop
+// would, but for the pictures' questions, see run_asks(). Its stack comes from the fake heap.
+static std::vector<std::pair<TaskFunction_t, void *>> tasks;
+BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
   if (stack > ram_block)
     return 0;
-  (strcmp(name, "picture") ? tasks : asks).push_back({f, arg});
+  tasks.push_back({f, arg});
   return pdPASS;
-}
-static void run_asks() {
-  while (!asks.empty()) {
-    auto t = asks.front();
-    asks.erase(asks.begin());
-    t.first(t.second);
-  }
 }
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
@@ -68,9 +63,16 @@ static void run_task() {
   auto t = tasks.front();
   tasks.erase(tasks.begin());
   t.first(t.second);
+  fetch::loop();
+}
+// The pictures' questions to their server, the others wait for run_task()
+static void run_asks() {
+  while (!tasks.empty() && fetch::running && dynamic_cast<pic::Online *>(fetch::running->by))
+    run_task();
 }
 
-// ESP-IDF's HTTP client, answering from panel_http
+// ESP-IDF's HTTP client, answering from web
+static Web web;
 struct HttpClient {
   esp_http_client_config_t config;
   std::string url;  // config's, or where it was moved to
@@ -85,12 +87,13 @@ esp_err_t esp_http_client_set_header(esp_http_client_handle_t c, const char *key
   return ESP_OK;
 }
 esp_err_t esp_http_client_open(esp_http_client_handle_t c, int) {
-  c->c = panel_http.get(c->url, c->headers, {});
+  c->c = web.get(c->url, c->headers, {});
   return c->c ? ESP_OK : ESP_FAIL;
 }
 int64_t esp_http_client_fetch_headers(esp_http_client_handle_t c) {
-  for (const char *h : {"Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
-    std::string k = h, v = c->c->get_response_header(h[0] == 'L'   ? "last-modified"
+  for (const char *h : {"Content-Type", "Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
+    std::string k = h, v = c->c->get_response_header(h[0] == 'C'   ? "content-type"
+                                                     : h[0] == 'L' ? "last-modified"
                                                      : h[0] == 'E' ? "expires"
                                                                    : "retry-after");
     esp_http_client_event_t e = {HTTP_EVENT_ON_HEADER, c->config.user_data, k.data(), v.data()};
@@ -291,30 +294,30 @@ static Look look(int p) {
   l.shown = pn_anim(p, &l);
   return l;
 }
-static bool anim_ready() {  // the panel shows an animation somewhere
-  for (int p = 0; p < ANIM_PLACES; p++)
+static bool overlay_ready() {  // the panel shows an animation somewhere
+  for (int p = 0; p < OVERLAY_PLACES; p++)
     if (look(p).shown)
       return true;
   return false;
 }
 static std::string places() {  // what the panel shows where
   std::string s;
-  for (int p = 0; p < ANIM_PLACES; p++) {
+  for (int p = 0; p < OVERLAY_PLACES; p++) {
     Look l = look(p);
     if (l.shown)
       s += "[" + std::to_string(p) + " " + std::to_string(l.x) + "," + std::to_string(l.y) + "]";
   }
   return s;
 }
-static bool same_pool() { return pn_anim_used() == anim::used_by_others(nullptr); }
+static bool same_pool() { return pn_overlay_used() == overlay::used_by_others(nullptr); }
 
 // The animations play for ms, in the panel's motion steps
 static void steps(int ms) {
   for (int t = 0; t < ms; t += 50)
-    pn_anim_step(50);
+    pn_overlay_step(50);
 }
 
-static bool anim_shown() { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }
+static bool overlay_shown() { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }
 
 // Runs until the ESP says the animations are want and the link is quiet. The cycles it took, -1 if never.
 static int until_anim_status(const char *want, int max = 3000) {
@@ -323,8 +326,8 @@ static int until_anim_status(const char *want, int max = 3000) {
 
 // Every animation the ESP wants is on the panel
 static bool anims_sent() {
-  for (auto &a : anim::anims)
-    if (!a.name.empty() && a.state == anim::WANT)
+  for (auto &a : overlay::overlays)
+    if (!a.name.empty() && a.state == overlay::WANT)
       return false;
   return settled();
 }
@@ -557,9 +560,9 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
 }
 
 // The delays of animation name's records, as the panel plays them
-static std::vector<int> anim_delays(const char *name) {
+static std::vector<int> overlay_delays(const char *name) {
   std::vector<int> d;
-  const anim::Anim *a = anim::find(name);
+  const overlay::Overlay *a = overlay::find(name);
   for (size_t at = 0; a && at + 5 <= a->data.size();) {
     const uint8_t *r = a->data.data() + at;
     uint32_t n =
@@ -576,42 +579,47 @@ static std::vector<int> anim_delays(const char *name) {
 // Whether the panel draws frame f of animation `name` at place p as the ESP made it: transparent in the same
 // places and palette colours elsewhere. Says where not unless quiet.
 static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
-  anim::Anim *a = anim::find(name);
+  overlay::Overlay *a = overlay::find(name);
   if (!a)
     return false;
   auto &A = *a;
-  anim::Anim *was = anim::W.a;
-  anim::W.a = a;  // px() goes by it
+  overlay::Overlay *was = overlay::W.a;
+  overlay::W.a = a;  // px() goes by it
   struct Back {
-    anim::Anim *was;
-    ~Back() { anim::W.a = was; }
+    overlay::Overlay *was;
+    ~Back() { overlay::W.a = was; }
   } back{was};
-  // its colour map, made again as count() makes it, since the ESP frees it
+  // its colour map, made again as count() and palette() make it, since the ESP frees it
   std::vector<uint32_t> hist(4096);
+  bool clear = false;
   for (int g = 0; g < A.src->frames; g++)
     for (int y = 0; y < A.h; y++)
       for (int x = 0; x < A.w; x++) {
-        uint32_t c = anim::px(g, x, y);
+        uint32_t c = overlay::px(g, x, y);
         if (c >> 24 >= 128)
           hist[panel::bin(c)]++;
+        else
+          clear = true;
       }
   uint32_t pal[16] = {};
   std::vector<uint16_t> bins;
-  int colours = panel::median_cut(hist, A.transp == 15 ? 15 : 16, pal, bins);
-  if (memcmp(pal, A.pal, sizeof pal))
+  int colours = panel::median_cut(hist, clear ? 15 : 16, pal, bins);
+  for (int i = 0; i < colours; i++)
+    pal[i] |= 0xFF000000u;
+  if (memcmp(pal, A.pal, sizeof pal) || A.still != (look(p).still != 0))
     return false;
   std::vector<uint8_t> lut(4096);
   for (int i = 0; i < 4096; i++)
     lut[i] = (uint8_t) panel::nearest(panel::bin_rgb(i), A.pal, colours);
   for (int y = 0; y < A.h * A.scale; y++) {
     uint8_t line[320 * 3];
-    if (pn_anim_line(p, y, A.w, A.scale, A.transp, line) != A.w * A.scale)
+    if (pn_overlay_line(p, y, A.w, A.scale, line) != A.w * A.scale)
       return false;
     for (int x = 0; x < A.w * A.scale; x++) {
-      uint32_t c = anim::px(f, x / A.scale, y / A.scale);
+      uint32_t c = overlay::px(f, x / A.scale, y / A.scale);
       uint16_t want = sim_rgb565(A.pal[lut[panel::bin(c)]]), got = line[3 * x] | line[3 * x + 1] << 8;
       bool see = c >> 24 < 128;
-      if (see != (line[3 * x + 2] == 0) || (!see && got != want)) {
+      if (see != (line[3 * x + 2] == 0) || (!see && (got != want || line[3 * x + 2] != 255))) {
         if (!quiet)
           printf("  frame %d pixel %d,%d: the panel draws %04x/%d, the ESP made %04x/%d\n", f, x, y, got,
                  line[3 * x + 2], want, !see);
@@ -625,9 +633,11 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
 // ---------------------------------------------------------------- the weather picture and its shows
 static const std::string &met_status = panel_weather.state;  // what met.h said last, in met.yaml's Panel Weather
 
-// The first 16 KB of a real answer from api.met.no
-static std::string met_sample() {
-  std::ifstream in(MET_SAMPLE);
+// A real answer kept in esp_yaml: met_sample.json is the first 16 KB of api.met.no's, mars_sample.json five photos of
+// NASA's list of Perseverance's, epic_sample.json three of EPIC's day, perseverance_sample.json and
+// curiosity_sample.json some of each rover's waypoints, horizons_sample.txt JPL Horizons' for each probe, cut short
+static std::string sample(const char *file) {
+  std::ifstream in(std::string(SAMPLES) + file);
   std::stringstream body;
   body << in.rdbuf();
   return body.str();
@@ -701,22 +711,22 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
 // hasn't it.
 enum At { NOW, PLACED, AIMED };
 static bool where(const char *sprite, Look &l, At at = NOW) {
-  const anim::Anim *a = anim::find(std::string("w_") + sprite);
-  if (!a || a->state != anim::SENT || a->copies.empty() || !a->copies[0].used)
+  const overlay::Overlay *a = overlay::find(std::string("w_") + sprite);
+  if (!a || a->state != overlay::SENT || a->copies.empty() || !a->copies[0].used)
     return false;
-  const anim::Copy &c = a->copies[0];
+  const overlay::Copy &c = a->copies[0];
   l = look(c.place);
   if (at == PLACED) {
     l.x = c.x;
     l.y = c.y;
   }
   if (at == AIMED)
-    for (const anim::Copy::Told &t : c.told)
-      if (t.key == K_ANIM_GLIDE && t.ch == (1 << ANIM_X | 1 << ANIM_Y)) {  // a move
-        l.x = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD]);
-        l.y = (int16_t) plink_get16(&t.m[ANIM_GLIDE_HEAD + 2]);
+    for (const overlay::Copy::Told &t : c.told)
+      if (t.key == K_OVERLAY_GLIDE && t.ch == (1 << OVERLAY_X | 1 << OVERLAY_Y)) {  // a move
+        l.x = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD]);
+        l.y = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD + 2]);
       }
-  l.hidden = l.shown && pn_anim_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
+  l.hidden = l.shown && pn_overlay_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
   return l.shown;
 }
 // Where copy 0 of a weather sprite has been on the panel, from where the ESP placed it, a place each cycle it showed
@@ -797,7 +807,7 @@ static void show_later() {
 // The panel's animations
 static int slots_used() {
   int n = 0;
-  for (auto &a : anim::anims)
+  for (auto &a : overlay::overlays)
     n += !a.name.empty();
   return n;
 }
@@ -838,22 +848,7 @@ static void visits(const char *tag, int shots = 2, std::initializer_list<const c
 }
 
 // ---------------------------------------------------------------- online pictures
-// A webcam, and its server: it answers with code, size and type, and counts how often it was asked
 static PickingImage webcam;
-static struct {
-  int code = 200, heads = 0;
-  size_t size = 30000;
-  std::string type = "image/jpeg";
-  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &,
-                                     const std::vector<std::string> &) {
-    heads++;
-    auto c = std::make_shared<HttpContainer>();
-    c->status_code = code;
-    c->content_length = size;
-    c->type = type;
-    return c;
-  }
-} cam_server;
 
 // ---------------------------------------------------------------- the steps
 // The ESP boots with a picture and an animation it restored
@@ -874,9 +869,11 @@ static void boot() {
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
   yaml_time_sync();  // Home Assistant's time, right after boot
-  CHECK_MSG(pic::S.want == "dusk" && anim::find("ball"),
+  for (fetch::Asker *a : fetch::askers)
+    a->schedule.not_before = UINT32_MAX;  // until their tests
+  CHECK_MSG(pic::S.want == "dusk" && overlay::find("ball"),
             "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
-            anim::find("ball") != nullptr);
+            overlay::find("ball") != nullptr);
   pic::clear();
   panel_clear_animation.execute("");
   CHECK_MSG(!panel_brightness.has_state() && !panel_idle_brightness.has_state() && !panel_screensaver.has,
@@ -1516,18 +1513,18 @@ static void pictures_jpeg() {
 static void animations() {
   step("animations");
   panel_anim_ball.turn_on();  // the switch
-  int ar = run_until(anim_shown, 2000);
+  int ar = run_until(overlay_shown, 2000);
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), ar);
   CHECK_MSG(ar >= 0 && same_anim("ball", 0), "the panel's first frame isn't the ESP's");
   for (int f = 1; f <= 8; f++) {
-    pn_anim_step(100);
+    pn_overlay_step(100);
     CHECK_MSG(same_anim("ball", f % 8), "frame %d isn't the ESP's", f % 8);
   }
   pn_shot(outdir, "esp_animation");
 }
 
-// The actions reach the panel, pn_anim_step(100) is two steps of the panel's motion timer
-static void anim_moving() {
+// The actions reach the panel, pn_overlay_step(100) is two steps of the panel's motion timer
+static void overlay_moving() {
   step("animations moved and drifting");
   Look l = look(0);
   CHECK_MSG(l.x == 250 && l.y == 20, "ball at %d,%d, not where the yaml put it", l.x, l.y);
@@ -1548,13 +1545,13 @@ static void anim_moving() {
             "no warning about the glide time");
   panel_drift_animation.execute("ball", 0, -20, 0);
   ar = until_anim_status("Shown: ball, drifting", 100);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98 && l.y == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
             panel_animation_status.state.c_str(), l.x, l.y);
   panel_drift_animation.execute("ball", 0, 0, 0);
   ar = until_anim_status("Shown: ball", 100);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), l.x);
   panel_move_animation.execute("ball", 1, 0, 0, 0, "none");  // no such copy
@@ -1563,22 +1560,23 @@ static void anim_moving() {
 }
 
 // More places: a copy in step, and one with a frame of its own two frames ahead
-static void anim_copies() {
+static void overlay_copies() {
   step("animation copies");
   panel_place_animation.execute("ball", 1, 10, 150, false, 0);
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
   int ar = until_anim_status("Shown: ball (3 copies)", 100);
   CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
   Look a = look(1), b = look(2);  // in front of anything a picture has in front of the weather's animations
-  CHECK_MSG(a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == ANIM_NEAREST && b.depth == ANIM_NEAREST,
-            "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
-  const anim::Anim *ball = anim::find("ball");
-  CHECK_MSG(pn_anim_used() == ball->frame_bytes() * 2 + ball->data.size(),
-            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
+  CHECK_MSG(
+      a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == OVERLAY_NEAREST && b.depth == OVERLAY_NEAREST,
+      "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
+  const overlay::Overlay *ball = overlay::find("ball");
+  CHECK_MSG(pn_overlay_used() == ball->frame_bytes() * 2 + ball->data.size(),
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
             (unsigned) (ball->frame_bytes() * 2 + ball->data.size()));
   // copy 1 shows what copy 0 shows, copy 2 started on frame 5 when it was placed, so it's out of step
   int apart = 0;
-  for (int i = 0; i < 8; i++, pn_anim_step(100))
+  for (int i = 0; i < 8; i++, pn_overlay_step(100))
     for (int f = 0; f < 8; f++)
       if (same_anim("ball", f, 0)) {
         CHECK_MSG(same_anim("ball", f, 1), "copy 1 isn't in step at frame %d", f);
@@ -1588,7 +1586,7 @@ static void anim_copies() {
   CHECK_MSG(apart, "copy 2 is in step with copy 0");
   panel_drift_animation.execute("ball", 2, 0, 30);
   run(3);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   a = look(0);
   b = look(2);
   CHECK_MSG(b.x == 200 && b.y == 153 && a.x == 98 && a.y == 40, "only copy 2 drifts: %d,%d and %d,%d", b.x, b.y, a.x,
@@ -1598,13 +1596,13 @@ static void anim_copies() {
 
 // Copy 2 turned and flipped as it drifts, a flip keeps a turn going, a spin and a stop, and a panel restart puts it
 // back as it was. The panel turns it while it's shown.
-static void anim_turning() {
+static void overlay_turning() {
   step("an animation turned and flipped");
   panel_glide_animation.execute("ball", 2, "turn", 450, 0, "none");  // 90
   panel_flip_animation.execute("ball", 2, true, false);
   run(3);
   Look l = look(2), l0 = look(0);
-  CHECK_MSG(l.shown && l.deg == 90 && l.flip == ANIM_FLIP_X && l0.shown && !l0.deg && !l0.flip,
+  CHECK_MSG(l.shown && l.deg == 90 && l.flip == OVERLAY_FLIP_X && l0.shown && !l0.deg && !l0.flip,
             "turned and flipped: %d degrees, flip %d", l.deg, l.flip);
   panel_glide_animation.execute("ball", 2, "turn", 0, 2000, "none");
   run(3);
@@ -1615,7 +1613,7 @@ static void anim_turning() {
   run(3);
   steps(2100);
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 0 && l.flip == ANIM_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
+  CHECK_MSG(l.shown && l.deg == 0 && l.flip == OVERLAY_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
             l.flip);
   panel_spin_animation.execute("ball", 2, -180);
   run(3);
@@ -1632,7 +1630,7 @@ static void anim_turning() {
   run(3);
   restart_panel();
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 180 && l.flip == ANIM_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.deg == 180 && l.flip == OVERLAY_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
   CHECK_MSG(l.shown && l.opa == 0, "placed again it fades in: opacity %d", l.opa);
   steps(400);
   l = look(2);
@@ -1640,7 +1638,7 @@ static void anim_turning() {
 }
 
 // Copy 2 sized, faded and wandering, and back as it was after a restart
-static void anim_wandering() {
+static void overlay_wandering() {
   step("an animation sized, faded and wandering");
   panel_glide_animation.execute("ball", 2, "size", 150, 0, "none");
   panel_glide_animation.execute("ball", 2, "opacity", 50, 1000, "none");
@@ -1655,7 +1653,7 @@ static void anim_wandering() {
   panel_wander_animation.execute("ball", 2, 20, 60, 0, 180, 300, 900, 0, 0);
   panel_face_animation.execute("ball", 2, 0, true, 0, 0, false);
   run(3);
-  const anim::Anim *ball = anim::find("ball");
+  const overlay::Overlay *ball = overlay::find("ball");
   int bw = ball->w * ball->scale, bh = ball->h * ball->scale, zw = (bw * 1500 + 500) / 1000,
       zh = (bh * 1500 + 500) / 1000;
   Look at;                     // where it was last
@@ -1684,9 +1682,9 @@ static void anim_wandering() {
 }
 
 // Copy 1 waved, mapped and its frames paused, and all of it back after a panel restart
-static void anim_waved() {
+static void overlay_waved() {
   step("an animation waved, mapped and paused");
-  int p1 = anim::find("ball")->copies[1].place;
+  int p1 = overlay::find("ball")->copies[1].place;
   panel_wave_animation.execute("ball", 1, "x", 5, 5, 0, 0, 0, 0, 0, false, "none");
   panel_map_animation.execute("ball", 1, "opacity", 50, 50, 100, 100);
   panel_frame_rate_animation.execute("ball", 0);
@@ -1709,28 +1707,28 @@ static void anim_waved() {
   CHECK_MSG(same_anim("ball", 0, p1), "the frames went on after a restart");
 }
 
-static void anim_turned_down() {
+static void overlay_turned_down() {
   step("animation actions the ESP turns down");
-  const anim::Anim *ball = anim::find("ball");
+  const overlay::Overlay *ball = overlay::find("ball");
   int p1 = ball->copies[1].place;
   size_t warned = log_all.size();
   panel_wave_animation.execute("ball", 1, "colour", 0, 1, 0, 0, 0, 0, 0, false, "none");
   panel_glide_animation.execute("ball", 1, "size", 500, 0, "none");
   panel_map_animation.execute("ball", 1, "x", 0, 0, 0, 0);
-  for (int i = 0; i < ANIM_WAVES; i++)  // small ones, a pixel, a degree or 99 %
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[i % ANIM_CHANNELS],
-                                 anim::no_change(i % ANIM_CHANNELS) ? 99 : 1,
-                                 anim::no_change(i % ANIM_CHANNELS) ? 99 : 1, 0, 0, 0, 0, 0, false, "none");
+  for (int i = 0; i < OVERLAY_WAVES; i++)  // small ones, a pixel, a degree or 99 %
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[i % OVERLAY_CHANNELS],
+                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1,
+                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1, 0, 0, 0, 0, 0, false, "none");
   panel_wave_animation.execute("ball", 2, "size", 90, 90, 0, 0, 0, 0, 0, false, "none");
   run(3);
   for (const char *w :
        {"'colour' isn't one of x, y, turn, size, opacity, speed", "size 500 over 0 ms, it takes 10..400",
         "x and y don't follow where it is", "the panel runs 12 waves at most"})
     CHECK_MSG(logged(w, warned), "no warning '%s'", w);
-  for (int i = 0; i < ANIM_WAVES; i++) {
-    int c = i % ANIM_CHANNELS;
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[c], anim::no_change(c), anim::no_change(c),
-                                 0, 0, 0, 0, 0, false, "none");
+  for (int i = 0; i < OVERLAY_WAVES; i++) {
+    int c = i % OVERLAY_CHANNELS;
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c),
+                                 overlay::no_change(c), 0, 0, 0, 0, 0, false, "none");
   }
   panel_map_animation.execute("ball", 1, "opacity", 100, 100, 100, 100);
   panel_frame_rate_animation.execute("ball", 100);
@@ -1745,7 +1743,7 @@ static void anim_turned_down() {
 }
 
 // Copy 3 plays one round from its first frame and goes, and the ESP hears so
-static void anim_one_round() {
+static void overlay_one_round() {
   step("an animation copy that plays one round");
   panel_place_animation.execute("ball", 3, 20, 20, true, 0);
   panel_rounds_animation.execute("ball", 3, 1);
@@ -1754,293 +1752,343 @@ static void anim_one_round() {
             panel_animation_status.state.c_str());
   steps(3000);
   run(5);
-  CHECK_MSG(
-      !look(3).shown && !anim::find("ball")->copies[3].used && panel_animation_status.state == "Shown: ball (3 copies)",
-      "after its round: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(!look(3).shown && !overlay::find("ball")->copies[3].used &&
+                panel_animation_status.state == "Shown: ball (3 copies)",
+            "after its round: '%s'", panel_animation_status.state.c_str());
   panel_glide_animation.execute("ball", 2, "size", 100, 0, "none");
   panel_glide_animation.execute("ball", 2, "opacity", 100, 0, "none");
   panel_move_animation.execute("ball", 2, 200, 150, 0, "none");  // still, for what follows
   run(3);
 }
 
-// A second animation alongside, placed by the action. A frame alone is over ANIM_POOL at full size, so it's made at
+// A second animation alongside, placed by the action. A frame alone is over OVERLAY_POOL at full size, so it's made at
 // half size right away.
-static void anim_two() {
+static void overlay_two() {
   step("two animations");
-  anim::add("big", {200, 120, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {  // a corner moves
-                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + (x < 16 && y < 16 ? f : 0)) % 3) * 0x405060u;
-                    }});
+  overlay::add("big", {200, 120, 4, 100, 16, 16, 1, [](int f, int x, int y) -> uint32_t {  // a corner moves
+                         return 0xFF000000u | (uint32_t) ((x / 8 + y / 8 + (x < 16 && y < 16 ? f : 0)) % 3) * 0x405060u;
+                       }});
   size_t big_at = log_all.size();
-  anim::place("big", 0, 16, 16, false, 0);
+  overlay::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball (3 copies), big");
   CHECK_MSG(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
-  CHECK_MSG(anim::find("big")->half && !logged("making it at half size", big_at),
-            "big: half %d, tried at full size first: %d", anim::find("big") && anim::find("big")->half,
+  CHECK_MSG(overlay::find("big")->half && !logged("making it at half size", big_at),
+            "big: half %d, tried at full size first: %d", overlay::find("big") && overlay::find("big")->half,
             logged("making it at half size", big_at));
-  unsigned used = pn_anim_used();
-  CHECK_MSG(used == anim::used_by_others(nullptr) && used <= ANIM_POOL,
-            "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) anim::used_by_others(nullptr));
+  unsigned used = pn_overlay_used();
+  CHECK_MSG(used == overlay::used_by_others(nullptr) && used <= OVERLAY_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) overlay::used_by_others(nullptr));
   panel_remove_animation.execute("ball", 2);
   run(3);
-  CHECK_MSG(!look(2).shown && pn_anim_used() == used - anim::find("ball")->frame_bytes() &&
+  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - overlay::find("ball")->frame_bytes() &&
                 panel_animation_status.state == "Shown: ball (2 copies), big",
-            "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_anim_used());
+            "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_overlay_used());
   panel_clear_animation.execute("big");
   run(3);
-  CHECK_MSG(
-      !anim::find("big") && look(0).shown && !look(3).shown && panel_animation_status.state == "Shown: ball (2 copies)",
-      "clearing one animation: '%s'", panel_animation_status.state.c_str());
-  anim::clear("");
+  CHECK_MSG(!overlay::find("big") && look(0).shown && !look(3).shown &&
+                panel_animation_status.state == "Shown: ball (2 copies)",
+            "clearing one animation: '%s'", panel_animation_status.state.c_str());
+  overlay::clear("");
   run(3);
-  CHECK_MSG(!anim_ready() && !pn_anim_used() && !panel_anim_ball.state,
+  CHECK_MSG(!overlay_ready() && !pn_overlay_used() && !panel_anim_ball.state,
             "the animations are still there after clearing");
 }
 
-static void anim_half_size() {
+static void overlay_half_size() {
   step("an animation at half size");
   panel_anim_noise.turn_on();
-  int ar = run_until(anim_shown, 3000);
-  CHECK_MSG(ar >= 0 && anim::find("noise")->half && anim::find("noise")->scale == 2 && same_anim("noise", 0),
+  int ar = run_until(overlay_shown, 3000);
+  CHECK_MSG(ar >= 0 && overlay::find("noise")->half && overlay::find("noise")->scale == 2 && same_anim("noise", 0),
             "noise not shown at half size: %s", panel_animation_status.state.c_str());
   // its drift_x from the yaml, 10 px/s left: half a pixel a step
-  pn_anim_step(100);
+  pn_overlay_step(100);
   Look l = look(0);
   CHECK_MSG(panel_animation_status.state == "Shown: noise, drifting" && l.x == 15 && l.y == 16,
             "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), l.x, l.y);
-  CHECK_MSG(anim::find("noise")->data.capacity() == anim::find("noise")->data.size(), "%u bytes kept for %u",
-            (unsigned) anim::find("noise")->data.capacity(), (unsigned) anim::find("noise")->data.size());
+  CHECK_MSG(overlay::find("noise")->data.capacity() == overlay::find("noise")->data.size(), "%u bytes kept for %u",
+            (unsigned) overlay::find("noise")->data.capacity(), (unsigned) overlay::find("noise")->data.size());
   pn_restart();
-  ar = run_until([] { return anim_ready() && anim_shown(); }, 3000);
+  ar = run_until([] { return overlay_ready() && overlay_shown(); }, 3000);
   CHECK_MSG(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
   l = look(0);
-  pn_anim_step(100);
+  pn_overlay_step(100);
   CHECK_MSG(l.x == 16 && l.y == 16 && panel_animation_status.state == "Shown: noise, drifting",
             "after the restart: at %d,%d, status '%s'", l.x, l.y, panel_animation_status.state.c_str());
   l = look(0);
   CHECK_MSG(l.x == 15, "the drift wasn't sent again after a panel restart: at %d", l.x);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
   panel_anim_noise.turn_off();
-  anim::show("big");  // no yaml, no switch
+  overlay::show("big");  // no yaml, no switch
   ar = until_anim_status("Shown: big");
-  CHECK_MSG(ar >= 0 && anim::find("big")->half && same_anim("big", 0) && !anim::find("noise"), "big: %s, half %d",
-            panel_animation_status.state.c_str(), anim::find("big") && anim::find("big")->half);
+  CHECK_MSG(ar >= 0 && overlay::find("big")->half && same_anim("big", 0) && !overlay::find("noise"), "big: %s, half %d",
+            panel_animation_status.state.c_str(), overlay::find("big") && overlay::find("big")->half);
 }
 
-static void anim_not_fitting() {
+static void overlay_not_fitting() {
   step("animations that don't fit");
   // flush with the right and bottom edges, half size rounds up, so it moves in
-  anim::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
-  anim::clear("big");
-  anim::show("edge");
+  overlay::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
+  overlay::clear("big");
+  overlay::show("edge");
   int ar = until_anim_status("Shown: edge");
   Look l = look(0);
-  CHECK_MSG(ar >= 0 && anim::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
-            "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), anim::find("edge")->half, l.x, l.y);
+  CHECK_MSG(ar >= 0 && overlay::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
+            "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), overlay::find("edge")->half, l.x, l.y);
   // the panel draws 2x at most, so scale 2 can't go to half size
-  anim::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
-  anim::clear("edge");
-  anim::show("noise2");
-  ar = run_until([] { return anim::find("noise2") && anim::find("noise2")->state == anim::FAILED; }, 100);
+  overlay::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
+  overlay::clear("edge");
+  overlay::show("noise2");
+  ar = run_until([] { return overlay::find("noise2") && overlay::find("noise2")->state == overlay::FAILED; }, 100);
   CHECK_MSG(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
-                anim::find("noise2")->scale == 2,
-            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), anim::find("noise2")->scale);
-  anim::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
-  anim::clear("noise2");
-  anim::show("scale3");
+                overlay::find("noise2")->scale == 2,
+            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), overlay::find("noise2")->scale);
+  overlay::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
+  overlay::clear("noise2");
+  overlay::show("scale3");
   run(1);
   CHECK_MSG(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
             panel_animation_status.state.c_str());
-  anim::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
-  anim::clear("scale3");
-  anim::show("left");
+  overlay::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
+  overlay::clear("scale3");
+  overlay::show("left");
   run(1);
   CHECK_MSG(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
             panel_animation_status.state.c_str());
   size_t slow_at = log_all.size();
-  anim::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
-  CHECK_MSG(anim::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
-            "frame_ms 5000 taken as %d", anim::sources["slow"].frame_ms);
+  overlay::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
+  CHECK_MSG(overlay::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
+            "frame_ms 5000 taken as %d", overlay::sources["slow"].frame_ms);
 }
 
 // Clearing it while it's being made frees its buffers
-static void anim_cleared_while_made() {
+static void overlay_cleared_while_made() {
   step("an animation cleared while it's made");
-  anim::clear("left");
-  anim::show("edge");
-  anim::W.a = anim::find("edge");
-  anim::start();
-  while (anim::W.f < anim::W.a->src->frames)
-    anim::count();
-  anim::palette();
-  anim::make(0, true);
-  CHECK_MSG(anim::W.phase == anim::MAKE && anim::W.prev.capacity(), "edge isn't being made");
-  anim::clear("");
-  CHECK_MSG(
-      !anim::W.hist.capacity() && !anim::W.frame.capacity() && !anim::W.prev.capacity() && !anim::W.first.capacity(),
-      "clearing kept the buffers");
+  overlay::clear("left");
+  overlay::show("edge");
+  overlay::W.a = overlay::find("edge");
+  overlay::start();
+  while (overlay::W.f < overlay::W.a->src->frames)
+    overlay::count();
+  overlay::palette();
+  overlay::make(0, true);
+  CHECK_MSG(overlay::W.phase == overlay::MAKE && overlay::W.prev.capacity(), "edge isn't being made");
+  overlay::clear("");
+  CHECK_MSG(!overlay::W.hist.capacity() && !overlay::W.frame.capacity() && !overlay::W.prev.capacity() &&
+                !overlay::W.first.capacity(),
+            "clearing kept the buffers");
 }
 
 // No room next to the others: ball and three big ones at half size, the third is refused. Then two more refused the
 // same way fill the slots, and one past that doesn't get one
-static void anim_no_room() {
+static void overlay_no_room() {
   step("no room for another animation");
-  anim::show("ball");
-  anim::place("big", 0, 16, 16, false, 0);
+  overlay::show("ball");
+  overlay::place("big", 0, 16, 16, false, 0);
   int ar = until_anim_status("Shown: ball, big", 6000);
   CHECK_MSG(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
-  anim::add("big2", anim::sources["big"]);
-  anim::add("big3", anim::sources["big"]);
-  anim::place("big2", 0, 16, 16, false, 0);
-  anim::place("big3", 0, 16, 16, false, 0);
-  ar = run_until([] { return anim::find("big3") && anim::find("big3")->state != anim::WANT && settled(); }, 9000);
+  overlay::add("big2", overlay::sources["big"]);
+  overlay::add("big3", overlay::sources["big"]);
+  overlay::place("big2", 0, 16, 16, false, 0);
+  overlay::place("big3", 0, 16, 16, false, 0);
+  ar = run_until([] { return overlay::find("big3") && overlay::find("big3")->state != overlay::WANT && settled(); },
+                 9000);
   CHECK_MSG(
-      ar >= 0 && anim::find("big2")->state == anim::SENT && anim::find("big3")->state == anim::FAILED &&
+      ar >= 0 && overlay::find("big2")->state == overlay::SENT && overlay::find("big3")->state == overlay::FAILED &&
           panel_animation_status.state.rfind("Shown: ball, big, big2; big3: too big even at half size (over ", 0) == 0,
       "four animations: '%s'", panel_animation_status.state.c_str());
-  CHECK_MSG(pn_anim_used() == anim::used_by_others(nullptr) && pn_anim_used() <= ANIM_POOL,
-            "the panel's pool holds %u bytes, the ESP thinks %u", pn_anim_used(),
-            (unsigned) anim::used_by_others(nullptr));
+  CHECK_MSG(pn_overlay_used() == overlay::used_by_others(nullptr) && pn_overlay_used() <= OVERLAY_POOL,
+            "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
+            (unsigned) overlay::used_by_others(nullptr));
   for (const char *name : {"big4", "big5"}) {  // refused like big3, but each takes a slot
-    anim::add(name, anim::sources["big"]);
-    anim::place(name, 0, 16, 16, false, 0);
-    ar = run_until([name] { return anim::find(name) && anim::find(name)->state != anim::WANT && settled(); }, 9000);
-    CHECK_MSG(ar >= 0 && anim::find(name)->state == anim::FAILED, "%s: '%s'", name,
+    overlay::add(name, overlay::sources["big"]);
+    overlay::place(name, 0, 16, 16, false, 0);
+    ar = run_until([name] { return overlay::find(name) && overlay::find(name)->state != overlay::WANT && settled(); },
+                   9000);
+    CHECK_MSG(ar >= 0 && overlay::find(name)->state == overlay::FAILED, "%s: '%s'", name,
               panel_animation_status.state.c_str());
   }
-  anim::add("big6", anim::sources["big"]);
-  anim::place("big6", 0, 16, 16, false, 0);  // no seventh slot
+  overlay::add("big6", overlay::sources["big"]);
+  overlay::place("big6", 0, 16, 16, false, 0);  // no seventh slot
   run(1);
-  CHECK_MSG(!anim::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
+  CHECK_MSG(!overlay::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
             "a seventh animation: '%s'", panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
   run(3);
 }
 
 // A GIF that repeats itself goes once round, and a frame shown twice in a row goes as one twice as long
-static void anim_repeats() {
+static void overlay_repeats() {
   step("animation frames that repeat");
-  anim::add("cycle", {16, 16, 9, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f % 3, x, y); }});
-  anim::add("held", {16, 16, 4, 100, 0, 40, 1, [](int f, int x, int y) { return noise_px(f == 2 ? 1 : f, x, y); }});
+  overlay::add("cycle", {16, 16, 9, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f % 3, x, y); }});
+  overlay::add("held", {16, 16, 4, 100, 0, 40, 1, [](int f, int x, int y) { return noise_px(f == 2 ? 1 : f, x, y); }});
   size_t made = log_all.size();
-  anim::show("cycle");
-  anim::show("held");
+  overlay::show("cycle");
+  overlay::show("held");
   int ar = until_anim_status("Shown: cycle, held");
   CHECK_MSG(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
-                anim_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
-            "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) anim_delays("cycle").size());
-  CHECK_MSG(ar >= 0 && anim_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
-            "held: %u records", (unsigned) anim_delays("held").size());
-  anim::clear("");
+                overlay_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
+            "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) overlay_delays("cycle").size());
+  CHECK_MSG(ar >= 0 && overlay_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
+            "held: %u records", (unsigned) overlay_delays("held").size());
+  overlay::clear("");
   run(3);
 }
 
 // ---- what the panel shows is what the ESP thinks it shows
 // The ESP restarts. The panel drops what it had for the old one, the copies Home Assistant placed too, and shows what
 // the switches do.
-static void anim_esp_restart() {
+static void overlay_esp_restart() {
   step("animations after the ESP restarts");
-  anim::add("a1", {16, 16, 2, 100, 10, 10, 1, noise_px});
-  anim::add("a2", {16, 16, 2, 100, 100, 10, 1, noise_px});
-  anim::show("a1");
-  anim::show("a2");
-  anim::place("a2", 1, 100, 100, false, 0);
+  overlay::add("a1", {16, 16, 2, 100, 10, 10, 1, noise_px});
+  overlay::add("a2", {16, 16, 2, 100, 100, 10, 1, noise_px});
+  overlay::show("a1");
+  overlay::show("a2");
+  overlay::place("a2", 1, 100, 100, false, 0);
   run_until(anims_sent, 3000);
-  anim::clear("a1");  // so a2 gets another slot and place after the restart
+  overlay::clear("a1");  // so a2 gets another slot and place after the restart
   run(3);
-  anim::stop();
-  for (auto &a : anim::anims)
-    a = anim::Anim();
+  overlay::stop();
+  for (auto &a : overlay::overlays)
+    a = overlay::Overlay();
   // what panel::setup() sends, and on_boot shows what the switches have on
   panel::link::send(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);
-  anim::show("a2");
+  overlay::show("a2");
   int r = run_until(anims_sent, 3000);
   CHECK_MSG(r >= 0 && places() == "[0 100,10]" && same_pool(),
             "after an ESP restart the panel shows %s in %u bytes, the ESP has a2 at 100,10 in %u", places().c_str(),
-            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
-  anim::clear("");
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  overlay::clear("");
 }
 
 // A hello while one is made: it's made again from the start, not sent half made. A loop makes a few rows, and a
 // frame's record on its own.
-static void anim_hello_while_made() {
+static void overlay_hello_while_made() {
   step("a hello while an animation is made");
   static int reads;
-  anim::add("six", {128, 40, 6, 100, 50, 50, 1, [](int f, int x, int y) -> uint32_t {
-                      reads++;
-                      return 0xFF000000u | (uint32_t) ((x / 8 + y / 4 + 2 * f) % 7) * 0x203040u;
-                    }});
-  anim::show("six");
-  anim::Anim *six = anim::find("six");
+  overlay::add("six", {128, 40, 6, 100, 50, 50, 1, [](int f, int x, int y) -> uint32_t {
+                         reads++;
+                         return 0xFF000000u | (uint32_t) ((x / 8 + y / 4 + 2 * f) % 7) * 0x203040u;
+                       }});
+  overlay::show("six");
+  overlay::Overlay *six = overlay::find("six");
   micros_step = 1000;  // 4 calls in a loop's 5 ms
   int most = 0;
   bool moved = false;  // the records, which have their RAM from the start
   const uint8_t *at = nullptr;
-  for (int k = 0; k < 1000 && !(anim::W.phase == anim::MAKE && anim::W.f == 2); k++) {
+  for (int k = 0; k < 1000 && !(overlay::W.phase == overlay::MAKE && overlay::W.f == 2); k++) {
     reads = 0;
-    anim::loop(micros() + panel::SLICE_US);
+    overlay::loop(micros() + panel::SLICE_US);
     most = std::max(most, reads);
-    if (anim::W.phase == anim::MAKE) {
+    if (overlay::W.phase == overlay::MAKE) {
       moved |= at && six->data.data() != at;
       at = six->data.data();
     }
   }
   micros_step = 0;
-  CHECK_MSG(anim::W.f == 2 && most == 4 * anim::ROWS_PX && !moved && six->data.capacity() == anim::data_max(),
+  CHECK_MSG(overlay::W.f == 2 && most == 4 * overlay::ROWS_PX && !moved && six->data.capacity() == overlay::data_max(),
             "%d pixels read in a loop, the records moved %d, %u bytes for them", most, moved,
             (unsigned) six->data.capacity());
   pn_restart();  // its hello comes before the next loop
-  int r = run_until([&] { return six->state == anim::SENT && settled(); }, 3000);
-  CHECK_MSG(r >= 0 && anim_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
-            (unsigned) anim_delays("six").size());
-  anim::clear("");
+  int r = run_until([&] { return six->state == overlay::SENT && settled(); }, 3000);
+  CHECK_MSG(r >= 0 && overlay_delays("six").size() == 7 && same_anim("six", 0), "made again after a hello: %u records",
+            (unsigned) overlay_delays("six").size());
+  overlay::clear("");
+}
+
+// One frame goes as a still, of which the panel keeps only its pieces, and colours of a source's own keep their
+// opacity on the panel
+static void overlay_stills() {
+  step("a still overlay, and one with soft edges");
+  overlay::clear("");
+  overlay::add("dot", {60, 40, 1, 500, 20, 30, 1, [](int, int x, int y) -> uint32_t {
+                         int dx = x - 30, dy = y - 20;
+                         return dx * dx + dy * dy < 150 ? 0xFF3080C0u : 0;
+                       }});
+  overlay::Source soft{64, 48, 1, 500, 120, 30, 1, [](int, int x, int y) -> uint32_t {
+                         int d = (x - 32) * (x - 32) + (y - 24) * (y - 24);
+                         uint32_t a = d < 200 ? 255 : d < 500 ? (uint32_t) (500 - d) * 255 / 300 : 0;
+                         return a << 24 | 0xF0C040;
+                       }};
+  soft.colours = {0xFFF0C040, 0xC0F0C040, 0x80F0C040, 0x40F0C040, 0};
+  overlay::add("soft", soft);
+  overlay::show("dot");
+  overlay::show("soft");
+  int r = run_until(
+      [] {
+        return overlay::find("dot")->state == overlay::SENT && overlay::find("soft")->state == overlay::SENT &&
+               settled();
+      },
+      600);
+  const overlay::Overlay &dot = *overlay::find("dot"), &sa = *overlay::find("soft");
+  CHECK_MSG(r >= 0 && dot.still && sa.still && pn_overlay_used() == dot.data.size() + sa.data.size() &&
+                same_anim("dot", 0, dot.copies[0].place),
+            "two stills: '%s', %u bytes on the panel", panel_animation_status.state.c_str(),
+            (unsigned) pn_overlay_used());
+  int p = sa.copies[0].place, off = 0, between = 0;
+  for (int y = 0; y < sa.h; y++) {
+    uint8_t line[320 * 3];
+    if (pn_overlay_line(p, y, sa.w, 1, line) != sa.w) {
+      off++;
+      break;
+    }
+    for (int x = 0; x < sa.w; x++) {
+      uint32_t c = sa.src->pixel(0, std::min(x, sa.src->w - 1), y), k = sa.pal[overlay::nearest_own(c, sa.pal, 5)];
+      int opa = (int) ((k >> 24) * 15 + 127) / 255 * 17, got = line[3 * x] | line[3 * x + 1] << 8;
+      off += line[3 * x + 2] != opa || (opa && got != sim_rgb565(k));
+      between += opa > 0 && opa < 255;
+    }
+  }
+  CHECK_MSG(!off && between > 50, "soft edges: %d pixels off, %d between clear and opaque", off, between);
+  overlay::clear("");
 }
 
 // A long frame goes on in empty records. Past the end of the pool they must fit the records' capacity, or the
 // records move, a peak the RAM check doesn't count. The animation is refused there anyway.
-static void anim_long_frame() {
+static void overlay_long_frame() {
   step("an animation's long frame past the end of the pool");
-  anim::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
-  anim::show("long");
-  anim::W.a = anim::find("long");
-  anim::start();
-  while (anim::W.f < anim::W.a->src->frames)
-    anim::count();
-  anim::palette();
-  anim::Anim &a = *anim::W.a;
+  overlay::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
+  overlay::show("long");
+  overlay::W.a = overlay::find("long");
+  overlay::start();
+  while (overlay::W.f < overlay::W.a->src->frames)
+    overlay::count();
+  overlay::palette();
+  overlay::Overlay &a = *overlay::W.a;
   uint32_t seed = 5;
-  for (auto &b : anim::W.frame)
+  for (auto &b : overlay::W.frame)
     b = (uint8_t) (lcg(seed) >> 24);  // noise, so each record is a frame's size
   const uint8_t *at = a.data.data();
   size_t room = a.data.capacity(), past;
-  while ((past = a.data.size()) + a.frame_bytes() <= ANIM_POOL)
-    anim::record(nullptr, anim::W.frame, 100);
-  bool ok = anim::record(&anim::W.prev, anim::W.frame, 20000);  // 8 records of 2.55 s
-  CHECK_MSG(anim::W.phase == anim::MAKE && room == anim::data_max() && ok && a.data.data() == at &&
+  while ((past = a.data.size()) + a.frame_bytes() <= OVERLAY_POOL)
+    overlay::record(nullptr, overlay::W.frame, 100);
+  bool ok = overlay::record(&overlay::W.prev, overlay::W.frame, 20000);  // 8 records of 2.55 s
+  CHECK_MSG(overlay::W.phase == overlay::MAKE && room == overlay::data_max() && ok && a.data.data() == at &&
                 a.data.capacity() == room && a.data.size() == past,
             "a long frame past the pool: the records moved %d, %u bytes of %u", a.data.data() != at,
             (unsigned) a.data.size(), (unsigned) a.data.capacity());
-  anim::clear("");
+  overlay::clear("");
 }
 
 // A copy can start off the screen, to come in from there. One that isn't a copy takes nothing.
-static void anim_off_screen() {
+static void overlay_off_screen() {
   step("an animation copy off the screen");
   size_t warned = log_all.size();
-  anim::place("ball", 8, 10, 10, false, 0);
+  overlay::place("ball", 8, 10, 10, false, 0);
   run(5);
-  CHECK_MSG(!anim::find("ball") && !anim_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
-            "copy 8: ball %d, the panel shows %s", anim::find("ball") != nullptr, places().c_str());
-  anim::place("ball", 1, -40, 300, false, 0);
+  CHECK_MSG(!overlay::find("ball") && !overlay_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
+            "copy 8: ball %d, the panel shows %s", overlay::find("ball") != nullptr, places().c_str());
+  overlay::place("ball", 1, -40, 300, false, 0);
   bool sent =
-      run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::SENT && settled(); }, 3000) >= 0;
-  Look l = sent ? look(anim::find("ball")->copies[1].place) : Look{};
+      run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::SENT && settled(); },
+                3000) >= 0;
+  Look l = sent ? look(overlay::find("ball")->copies[1].place) : Look{};
   CHECK_MSG(sent && l.shown && l.x == -40 && l.y == 300, "a copy off the screen: the panel shows %s", places().c_str());
-  anim::clear("");
+  overlay::clear("");
   run(5);
 }
 
 // panel_show_animation puts copy 0 back where the yaml has it, drifting, once it was removed or played its rounds
-static void anim_shown_again() {
+static void overlay_shown_again() {
   step("an animation shown again");
   auto back = [] {  // at 16,16 or just left of it, and going left
     Look was = look(0);
@@ -2053,7 +2101,7 @@ static void anim_shown_again() {
   run_until(anims_sent, 3000);
   panel_remove_animation.execute("noise", 0);
   run(3);
-  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
+  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
             places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
@@ -2062,42 +2110,42 @@ static void anim_shown_again() {
   run(3);
   steps(2000);
   run(5);
-  CHECK_MSG(!anim_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
+  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
             places().c_str(), panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
   CHECK_MSG(back(), "shown again after its round: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
 }
 
-static void anim_timing() {
+static void overlay_timing() {
   step("animation timing");
   // A GIF that ends on its first frame. The record back to it stays its own, so a round ends there.
-  anim::add("aba", {16, 16, 3, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f == 1, x, y); }});
-  anim::show("aba");
-  anim::place("aba", 1, 100, 100, true, 0);
-  anim::rounds("aba", 1, 1);
+  overlay::add("aba", {16, 16, 3, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f == 1, x, y); }});
+  overlay::show("aba");
+  overlay::place("aba", 1, 100, 100, true, 0);
+  overlay::rounds("aba", 1, 1);
   run_until(anims_sent, 3000);
   std::string seen;  // the frames it shows, 2 is like 0
-  for (int t = 0; t < 100 && look(1).shown; t++, pn_anim_step(10)) {
+  for (int t = 0; t < 100 && look(1).shown; t++, pn_overlay_step(10)) {
     char f = same_anim("aba", 0, 1, true) ? '0' : same_anim("aba", 1, 1, true) ? '1' : '?';
     if (seen.empty() || seen.back() != f)
       seen += f;
   }
-  CHECK_MSG(anim_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
-            "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) anim_delays("aba").size());
-  anim::clear("");
+  CHECK_MSG(overlay_delays("aba") == std::vector<int>({10, 10, 10, 10}) && seen == "010",
+            "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) overlay_delays("aba").size());
+  overlay::clear("");
 
   // Each frame its own time, past a record's 2550 ms in empty records after it: F0 4 s, F1 0.1 s, F2 3 s. In a
   // loop F0 shows for the record back to it and the empty one after the first record.
-  anim::Source slow{16, 16, 3, 100, 0, 0, 1, noise_px};
+  overlay::Source slow{16, 16, 3, 100, 0, 0, 1, noise_px};
   slow.delays = {4000, 100, 3000};
-  anim::add("slow", slow);
-  anim::show("slow");
+  overlay::add("slow", slow);
+  overlay::show("slow");
   run_until(anims_sent, 3000);
   std::vector<std::pair<int, int>> turns;  // when the panel shows another frame, and which
   int was = 0;
-  for (int t = 0; t <= 16000; t += 10, pn_anim_step(10)) {
+  for (int t = 0; t <= 16000; t += 10, pn_overlay_step(10)) {
     int f = same_anim("slow", 0, 0, true) ? 0 : same_anim("slow", 1, 0, true) ? 1 : 2;
     if (f != was)
       turns.push_back({t, f});
@@ -2106,27 +2154,27 @@ static void anim_timing() {
   int want[3] = {4000, 100, 3000}, timed = 0;  // how long each frame shows, every time it's seen whole
   for (size_t i = 0; i + 1 < turns.size(); i++)
     timed += abs(turns[i + 1].first - turns[i].first - want[turns[i].second]) <= 60 ? 1 : -100;
-  CHECK_MSG(anim_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
+  CHECK_MSG(overlay_delays("slow") == std::vector<int>({255, 145, 10, 255, 45, 255}) && timed >= 4,
             "frames of 4 s, 0.1 s and 3 s: %u records, %u changes, %d timed right",
-            (unsigned) anim_delays("slow").size(), (unsigned) turns.size(), timed);
-  anim::clear("");
+            (unsigned) overlay_delays("slow").size(), (unsigned) turns.size(), timed);
+  overlay::clear("");
 }
 
 // What making one takes, pdeflate and all. Short of it at full size it's made at half size, short of that too it fails
 // until it's shown again or a hello.
-static void anim_without_ram() {
+static void overlay_without_ram() {
   step("animations without the RAM");
   size_t tls = panel::requests * panel::REQUEST_RAM;  // met's request from boot, never run here, holds its share
   ram_free = 45 * 1024 + tls;
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
   run_until(anims_sent, 3000);
-  CHECK_MSG(anim::find("ball")->half && same_anim("ball", 0) &&
+  CHECK_MSG(overlay::find("ball")->half && same_anim("ball", 0) &&
                 logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
-            "ball without the RAM for full size: half %d", anim::find("ball")->half);
-  anim::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
+            "ball without the RAM for full size: half %d", overlay::find("ball")->half);
+  overlay::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
   ram_free = 30 * 1024 + tls;
-  anim::show("ball2x");
+  overlay::show("ball2x");
   run(3);
   CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
             panel_animation_status.state.c_str());
@@ -2137,45 +2185,45 @@ static void anim_without_ram() {
             panel_animation_status.state.c_str());
   // panel_place_animation tries a failed one again too
   ram_free = 30 * 1024;
-  anim::clear("ball2x");
-  anim::show("ball2x");
+  overlay::clear("ball2x");
+  overlay::show("ball2x");
   run(3);
   ram_free = 200 * 1024;
-  anim::place("ball2x", 1, 200, 100, false, 0);
+  overlay::place("ball2x", 1, 200, 100, false, 0);
   r = run_until(anims_sent, 3000);
   CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x (2 copies)", "placed after it failed: '%s'",
             panel_animation_status.state.c_str());
-  anim::clear("");
+  overlay::clear("");
   // one that would only fail again isn't made again after a hello, until it's shown again
   static int making;
   panel_animation_status.add_on_state_callback([](const std::string &s) { making += s == "Making noise2"; });
-  anim::show("noise2");
+  overlay::show("noise2");
   run(3);
   restart_panel();
-  CHECK_MSG(making == 1 && anim::find("noise2")->state == anim::FAILED, "noise2 made %d times, through a hello",
+  CHECK_MSG(making == 1 && overlay::find("noise2")->state == overlay::FAILED, "noise2 made %d times, through a hello",
             making);
-  anim::show("noise2");
+  overlay::show("noise2");
   run(3);
   CHECK_MSG(making == 2, "noise2 not tried again when shown");
-  anim::clear("");
+  overlay::clear("");
 }
 
 // Copies with a frame of their own past the panel's pool aren't kept, placed before it's sent or after. One placed
 // again elsewhere has its own frame back first.
-static void anim_past_pool() {
+static void overlay_past_pool() {
   step("animation copies past the panel's pool");
-  anim::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
+  overlay::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
   for (int i = 1; i <= 6; i++)
-    anim::place("ball", i, 40 * i, 150, true, 0);
+    overlay::place("ball", i, 40 * i, 150, true, 0);
   run_until(anims_sent, 3000);
-  anim::Anim *ball = anim::find("ball");
+  overlay::Overlay *ball = overlay::find("ball");
   CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
                 !look(6).shown,
             "six copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
-            panel_animation_status.state.c_str(), pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
+            panel_animation_status.state.c_str(), pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
   size_t warned = log_all.size();
-  anim::place("ball", 6, 150, 150, true, 0);
-  anim::place("ball", 2, 100, 50, true, 0);
+  overlay::place("ball", 6, 150, 150, true, 0);
+  overlay::place("ball", 2, 100, 50, true, 0);
   run(3);
   Look l = look(ball->copies[2].place);
   CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
@@ -2183,25 +2231,25 @@ static void anim_past_pool() {
                 logged("no room in the panel's 8192 bytes for a copy with a frame of its own", warned),
             "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
   // all eight places taken: no slot for another
-  for (int i = 6; i < ANIM_PLACES; i++)
-    anim::place("ball", i, 20 * i, 10, false, 0);
+  for (int i = 6; i < OVERLAY_PLACES; i++)
+    overlay::place("ball", i, 20 * i, 10, false, 0);
   warned = log_all.size();
-  anim::show("noise");
-  CHECK_MSG(!anim::find("noise") && logged("the panel shows 8 copies at most", warned),
+  overlay::show("noise");
+  CHECK_MSG(!overlay::find("noise") && logged("the panel shows 8 copies at most", warned),
             "a slot taken with no place for it");
-  anim::clear("");
+  overlay::clear("");
 }
 
 // The panel lets a wave that's settling go for a new one, so only those that aren't count
-static void anim_waves_settling() {
+static void overlay_waves_settling() {
   step("animation waves let go for new ones");
-  anim::show("ball");
-  anim::place("ball", 1, 10, 150, false, 0);
-  anim::place("ball", 2, 100, 150, false, 0);
-  for (int i = 0; i < ANIM_WAVES; i++) {
-    int c = i % ANIM_CHANNELS;
-    panel_wave_animation.execute("ball", i / ANIM_CHANNELS, anim::CHANNELS[c], anim::no_change(c) ? 50 : 1,
-                                 anim::no_change(c) ? 90 : 9, 2000, 2000, 0, 0, 0, false, "none");
+  overlay::show("ball");
+  overlay::place("ball", 1, 10, 150, false, 0);
+  overlay::place("ball", 2, 100, 150, false, 0);
+  for (int i = 0; i < OVERLAY_WAVES; i++) {
+    int c = i % OVERLAY_CHANNELS;
+    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c) ? 50 : 1,
+                                 overlay::no_change(c) ? 90 : 9, 2000, 2000, 0, 0, 0, false, "none");
   }
   run_until(anims_sent, 3000);
   steps(500);
@@ -2210,33 +2258,33 @@ static void anim_waves_settling() {
   panel_wave_animation.execute("ball", 2, "x", 30, 30, 0, 0, 0, 0, 0, false, "none");
   run(3);
   steps(100);
-  int x = look(anim::find("ball")->copies[2].place).x;
+  int x = look(overlay::find("ball")->copies[2].place).x;
   CHECK_MSG(x == 130 && !logged("waves at most", warned), "a wave in place of one stopped: copy 2 at %d", x);
   panel_wave_animation.execute("ball", 2, "y", 5, 5, 0, 0, 0, 0, 0, false, "none");
   CHECK_MSG(logged("the panel runs 12 waves at most", warned), "a 13th wave");
 }
 
 // Taking a copy off or clearing another while one is on its way: it goes on, and the panel has what the ESP thinks
-static void anim_on_its_way() {
+static void overlay_on_its_way() {
   step("animations changed while one is on its way");
-  anim::add("mid", {32, 32, 6, 100, 200, 100, 1, noise_px});
-  anim::show("mid");
-  run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
-  CHECK_MSG(anim::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u", pn_anim_used(),
-            (unsigned) anim::used_by_others(nullptr));
+  overlay::add("mid", {32, 32, 6, 100, 200, 100, 1, noise_px});
+  overlay::show("mid");
+  run_until([] { return overlay::W.t.head && overlay::W.t.pos > 512; }, 3000);
+  CHECK_MSG(overlay::W.t.head && same_pool(), "on its way: the panel has %u bytes, the ESP thinks %u",
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
   size_t warned = log_all.size();
-  anim::remove("ball", 1);
+  overlay::remove("ball", 1);
   int r = run_until(anims_sent, 3000);
-  CHECK_MSG(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, anim::find("mid")->copies[0].place),
+  CHECK_MSG(r >= 0 && !logged("sending it again", warned) && same_anim("mid", 0, overlay::find("mid")->copies[0].place),
             "mid sent again after a copy of ball went");
-  anim::clear("mid");
-  anim::show("mid");
-  run_until([] { return anim::W.t.head && anim::W.t.pos > 512; }, 3000);
-  anim::clear("mid");
+  overlay::clear("mid");
+  overlay::show("mid");
+  run_until([] { return overlay::W.t.head && overlay::W.t.pos > 512; }, 3000);
+  overlay::clear("mid");
   run(5);
-  CHECK_MSG(same_pool() && !anim::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
-            pn_anim_used(), (unsigned) anim::used_by_others(nullptr));
-  anim::clear("");
+  CHECK_MSG(same_pool() && !overlay::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
+            pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  overlay::clear("");
   run(3);
 }
 
@@ -2245,13 +2293,18 @@ static void met_requests() {
   step("MET Norway's forecast, asked for and backed off");
   flexit_panel_time.t.timestamp = 1792409400;  // 2026-10-19 11:30 UTC, half an hour into the first forecast hour
   tz_offset_s = 7200;                          // Oslo in summer time
-  // met.yaml's on_boot set it up and asked, its request waits in its task
-  CHECK_MSG(!strcmp(met::url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
-                met::timeout_ms == 4500 && met::modified.empty() && met::due() && met::fetching && tasks.size() == 1,
-            "first request: %s, If-Modified-Since '%s', %d requests", met::url, met::modified.c_str(),
-            (int) tasks.size());
+  met::Forecasts &fc = met::forecasts;
+  fetch::Schedule &sc = fc.schedule;
+  sc.not_before = 0;
+  fetch::tick(true);  // the panel's picture being made
+  CHECK_MSG(!fc.asking && tasks.empty(), "asked MET Norway while the panel's picture was made");
+  // panel.yaml's interval asks once it's due, its request waits in its task
+  yaml_every(1000);
+  CHECK_MSG(!strcmp(fc.url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
+                fc.timeout_ms == 15000 && fc.modified.empty() && fc.asking && tasks.size() == 1,
+            "first request: %s, If-Modified-Since '%s', %d requests", fc.url, fc.modified.c_str(), (int) tasks.size());
   network::up = false;
-  CHECK_MSG(!met::due(), "asks MET Norway while offline");
+  CHECK_MSG(!sc.due(), "asks MET Norway while offline");
   network::up = true;
   // its scene and aurora options are met_scene.h's names, in their order
   bool same = panel_weather_scene.options.size() == std::size(met::GROUNDS) &&
@@ -2268,149 +2321,144 @@ static void met_requests() {
   panel_weather_aurora.control(0);
   CHECK_MSG(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
             "met.yaml's options aren't met_scene.h's names");
-  met::unreachable();  // right after boot the network may not be up: a quick retry of tick()'s, no back-off
-  CHECK_MSG(met::backoff_s == 0 && met::retry_soon && !met::due(), "backed off before MET Norway ever answered");
-  panel_http.down = true;
-  met::not_before = 0;
-  yaml_every(1000);
-  CHECK_MSG(met::fetching && !tasks.empty(), "the early retry didn't ask");
+  web.down = true;  // right after boot the network may not be up: a quick retry, no back-off
   run_task();
+  CHECK_MSG(sc.backoff_s == 0 && sc.early_tries == 1 && !sc.due() && met_status == "Couldn't reach MET Norway",
+            "backed off before MET Norway ever answered: '%s'", met_status.c_str());
+  sc.not_before = 0;
   yaml_every(1000);
-  CHECK_MSG(met::early_tries == 2 && met::retry_soon, "the retry's failure isn't counted as early");
-  for (int i = 0; i < 2; i++)
-    met::unreachable();
-  CHECK_MSG(met::backoff_s == 600 && !met::due() && !met::retry_soon, "kept trying without backing off");
+  CHECK_MSG(fc.asking && !tasks.empty(), "the early retry didn't ask");
+  run_task();
+  CHECK_MSG(sc.early_tries == 2, "the retry's failure isn't counted as early");
+  for (int i = 0; i < 2; i++) {
+    sc.not_before = 0;
+    yaml_every(1000);
+    run_task();
+  }
+  CHECK_MSG(sc.backoff_s == 600 && !sc.due(), "kept trying without backing off");
   // the request, in a task of its own: no answer, then the forecast in 512-byte reads, then without the RAM
   auto ask = [] {
-    panel_weather_fetch.execute();  // met.yaml's, every update_interval
+    yaml_every(1000);  // panel.yaml's
     if (!tasks.empty())
       run_task();
-    yaml_every(1000);  // and its poll()
   };
-  met::not_before = 0;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
-            met_status.c_str(), (unsigned) met::backoff_s);
-  panel_http.down = false;
-  panel_http.body = met_sample();
-  panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
-  panel_http.expires = "Mon, 19 Oct 2026 12:00:00 GMT";
-  met::not_before = 0;
-  met::fetch();
-  met::fetch();  // still running, it waits for that one
-  met::poll();   // nothing yet
-  CHECK_MSG(tasks.size() == 1 && met::fetching && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
+  CHECK_MSG(sc.backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
+            met_status.c_str(), (unsigned) sc.backoff_s);
+  web.down = false;
+  web.body = sample("met_sample.json");
+  web.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
+  web.expires = "Mon, 19 Oct 2026 12:00:00 GMT";
+  sc.not_before = 0;
+  yaml_every(1000);
+  yaml_every(1000);  // still asking, it waits for that one
+  fetch::loop();     // nothing yet
+  CHECK_MSG(tasks.size() == 1 && fc.asking && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
   run_task();
-  met::poll();
-  CHECK_MSG(!met::fetching && met::weather.ok, "the answer wasn't taken from the request's task");
-  CHECK_MSG(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
-  CHECK_MSG(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
-  for (size_t block : {sizeof(met::Fetch) - 1, sizeof(met::Fetch) + 100}) {  // the request, then its task's stack
-    met::not_before = 0;
-    ram_block = block;
-    met::fetch();
-    CHECK_MSG(
-        met_status == "No RAM for the forecast" && met::not_before == 1792410000 && !met::fetching && tasks.empty(),
-        "without %u bytes of RAM: %s, next at %u", (unsigned) block, met_status.c_str(), (unsigned) met::not_before);
-  }
+  CHECK_MSG(!fc.asking && met::weather.ok, "the answer wasn't taken from the request's task");
+  CHECK_MSG(web.sent.empty(), "If-Modified-Since sent before any Last-Modified");
+  CHECK_MSG(sc.not_before == 1792411200 && !sc.due(), "asks again before Expires: %u", (unsigned) sc.not_before);
+  sc.not_before = 0;
+  ram_block = fetch::STACK - 1;  // for its task's stack
+  yaml_every(1000);
+  CHECK_MSG(met_status == "No RAM for the forecast" && sc.not_before == 1792410000 && !fc.asking && tasks.empty(),
+            "without the RAM: %s, next at %u", met_status.c_str(), (unsigned) sc.not_before);
   ram_block = 100 * 1024;
-  met::not_before = 0;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.sent.size() == 1 && panel_http.sent[0].name == "If-Modified-Since" &&
-                panel_http.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
+  CHECK_MSG(web.sent.size() == 1 && web.sent[0].name == "If-Modified-Since" &&
+                web.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
             "If-Modified-Since not sent with the Last-Modified we have");
   CHECK_MSG(met::weather.ok && !strcmp(met::weather.symbol, "partlycloudy_day") &&
                 fabsf(met::weather.temp - 6.6f) < 0.01f && fabsf(met::weather.wind - 1.6f) < 0.01f &&
                 fabsf(met::weather.gust - 3.3f) < 0.01f,
             "forecast read as %s, %.1f, wind %.1f gusting %.1f", met::weather.symbol, met::weather.temp,
             met::weather.wind, met::weather.gust);
-  CHECK_MSG(met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", met::modified.c_str());
+  CHECK_MSG(fc.modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", fc.modified.c_str());
   CHECK_MSG(met::weather.hours == 12 && met::weather.hour[2].time == met::weather.hour[0].time + 7200,
             "forecast hours: %d", met::weather.hours);
   CHECK_MSG(met_status.find("partlycloudy_day") == 0, "status: %s", met_status.c_str());
-  panel_http.status = 304;  // not modified, through the task too
-  met::not_before = 0;
+  web.status = 304;  // not modified, through the task too
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && met::not_before == 1792411200,
-            "a 304: %s, next at %u", met_status.c_str(), (unsigned) met::not_before);
-  // a server error keeps the forecast and asks again a minute later, at once rather than at met.yaml's next check,
-  // then two, and Retry-After makes it wait longer
-  panel_http.status = 503;
-  met::not_before = 0;
+  CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && sc.not_before == 1792411200,
+            "a 304: %s, next at %u", met_status.c_str(), (unsigned) sc.not_before);
+  // a server error keeps the forecast and asks again a minute later, then two, and Retry-After makes it wait longer
+  web.status = 503;
+  sc.not_before = 0;
   ask();
   uint32_t t0 = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK_MSG(met::weather.ok && met_status == "Kept the last forecast (HTTP 503)" && met::not_before == t0 + 60 &&
-                met::retry_soon,
-            "a 503: '%s', next in %d s", met_status.c_str(), (int) (met::not_before - t0));
+  CHECK_MSG(met::weather.ok && met_status == "Kept the last forecast (HTTP 503)" && sc.not_before == t0 + 60,
+            "a 503: '%s', next in %d s", met_status.c_str(), (int) (sc.not_before - t0));
   flexit_panel_time.t.timestamp += 60;
   yaml_every(1000);
-  CHECK_MSG(met::fetching && !tasks.empty(), "not asked again a minute after a 503");
-  panel_http.status = 502;
-  panel_http.retry_after = "600";
+  CHECK_MSG(fc.asking && !tasks.empty(), "not asked again a minute after a 503");
+  web.status = 502;
+  web.retry_after = "600";
   run_task();
   yaml_every(1000);
   t0 = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK_MSG(met::weather.ok && met::backoff_s == 120 && met::not_before == t0 + 600,
-            "a 502 with Retry-After 600: back-off %u, next in %d s", (unsigned) met::backoff_s,
-            (int) (met::not_before - t0));
-  panel_http.retry_after.clear();
-  panel_http.status = 200;
-  met::not_before = 0;
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 120 && sc.not_before == t0 + 600,
+            "a 502 with Retry-After 600: back-off %u, next in %d s", (unsigned) sc.backoff_s,
+            (int) (sc.not_before - t0));
+  web.retry_after.clear();
+  web.status = 200;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.ok && met::backoff_s == 0 && !met::retry_soon, "the forecast after the errors: '%s'",
-            met_status.c_str());
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 0, "the forecast after the errors: '%s'", met_status.c_str());
   flexit_panel_time.t.timestamp -= 60;
   // a 301 is followed, three times at most
-  panel_http.location = std::string(met::url) + "&moved=1";
-  panel_http.moves = 1;
-  met::not_before = 0;
+  web.location = std::string(fc.url) + "&moved=1";
+  web.moves = 1;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.url == panel_http.location && met::weather.ok && met::backoff_s == 0,
-            "after a 301: asked for %s, %s", panel_http.url.c_str(), met_status.c_str());
-  panel_http.moves = 9;
-  met::not_before = 0;
+  CHECK_MSG(web.url == web.location && met::weather.ok && sc.backoff_s == 0, "after a 301: asked for %s, %s",
+            web.url.c_str(), met_status.c_str());
+  web.moves = 9;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.moves == 5 && met_status == "Kept the last forecast (HTTP 301)",
-            "moved on and on: %d requests, '%s'", 9 - panel_http.moves, met_status.c_str());
-  panel_http.moves = 0;
+  CHECK_MSG(web.moves == 5 && met_status == "Kept the last forecast (HTTP 301)", "moved on and on: %d requests, '%s'",
+            9 - web.moves, met_status.c_str());
+  web.moves = 0;
   // A cut-off answer counts as none, wherever it's cut: the forecast and its Last-Modified stay, and it's asked
   // again in minutes
-  panel_http.last_modified = "Tue, 20 Oct 2026 08:00:00 GMT";
+  web.last_modified = "Tue, 20 Oct 2026 08:00:00 GMT";
   for (size_t cut : {6000, 300})
     for (int with : {0, -1}) {  // the connection closed, or failed
-      panel_http.cut = cut;
-      panel_http.cut_with = with;
-      met::backoff_s = 0;
-      met::not_before = 0;
+      web.cut = cut;
+      web.cut_with = with;
+      sc.backoff_s = 0;
+      sc.not_before = 0;
       ask();
-      CHECK_MSG(met_status == "Couldn't reach MET Norway" && met::backoff_s == 600 && met::weather.hours == 12 &&
-                    met::modified == "Mon, 19 Oct 2026 11:34:38 GMT",
+      CHECK_MSG(met_status == "Couldn't reach MET Norway" && sc.backoff_s == 600 && met::weather.hours == 12 &&
+                    fc.modified == "Mon, 19 Oct 2026 11:34:38 GMT",
                 "cut off after %u bytes, read() %d: '%s', back-off %u, %d hours, Last-Modified '%s'", (unsigned) cut,
-                with, met_status.c_str(), (unsigned) met::backoff_s, met::weather.hours, met::modified.c_str());
+                with, met_status.c_str(), (unsigned) sc.backoff_s, met::weather.hours, fc.modified.c_str());
     }
   // but the reader can have all it needs before the cut
-  std::string b = met_sample();
+  std::string b = sample("met_sample.json");
   size_t e = b.find("{\"time\""), f = b.find("{\"time\"", e + 1);
-  panel_http.body = b.substr(0, f);
+  web.body = b.substr(0, f);
   for (int i = 0; i < 30; i++)
-    panel_http.body += b.substr(e, f - e);
-  panel_http.cut = panel_http.body.size() - 100;
-  met::not_before = 0;
+    web.body += b.substr(e, f - e);
+  web.cut = web.body.size() - 100;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.hours == met::HOURS && met::modified == "Tue, 20 Oct 2026 08:00:00 GMT",
+  CHECK_MSG(met::weather.hours == met::HOURS && fc.modified == "Tue, 20 Oct 2026 08:00:00 GMT",
             "cut off once it had %d hours: %d taken, '%s'", met::HOURS, met::weather.hours, met_status.c_str());
-  panel_http.cut = SIZE_MAX;
-  panel_http.body = b;
-  panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
-  met::not_before = 0;
+  web.cut = SIZE_MAX;
+  web.body = b;
+  web.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.hours == 12 && met::backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
+  CHECK_MSG(met::weather.hours == 12 && sc.backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
 }
 
-// The reader with the answer cut anywhere, more hours than it needs, and an hour too big for its buffer
+// The reader with the answer cut anywhere, more hours than it needs, and a value too long for it
 static void met_reading() {
   step("MET Norway's answer read in pieces");
-  std::string b = met_sample();
+  std::string b = sample("met_sample.json");
   bool stopped;
   met::Weather w1 = read_met(b, 1, &stopped);
   CHECK_MSG(!stopped && w1.hours == met::weather.hours && w1.temp == met::weather.temp &&
@@ -2423,9 +2471,10 @@ static void met_reading() {
     many += b.substr(e, f - e);
   met::Weather w2 = read_met(many, 512, &stopped);
   CHECK_MSG(stopped && w2.ok && w2.hours == met::HOURS, "30 hours: %d read, stopped %d", w2.hours, stopped);
+  // a value longer than the reader keeps is cut, and the hour it was in, without a time, skipped
   std::string big = b.substr(0, f) + "{\"time\":\"" + std::string(5000, 'x') + "\"}," + b.substr(e, f - e);
   met::Weather w3 = read_met(big, 512, &stopped);
-  CHECK_MSG(stopped && w3.ok && w3.hours == 1, "an hour over 4 KB: %d hours, stopped %d", w3.hours, stopped);
+  CHECK_MSG(!stopped && w3.ok && w3.hours == 2, "a value over 5000 bytes: %d hours, stopped %d", w3.hours, stopped);
   // MET's longest symbols, and one longer still, which is cut short
   auto symbols = [&](const char *day, const char *night) {
     std::string s = b;
@@ -2502,56 +2551,57 @@ static void met_answers() {
   step("MET Norway's answers");
   const met::Weather sample = met::weather;                                    // the forecast as read from the sample
   auto fetched = [](int status, const met::Weather &w, const char *expires) {  // an answer from the request
-    met::Fetch f;
-    f.status = status;
-    f.w = w;
-    f.expires = expires;
-    met::fetched(f);
+    auto *r = new met::Ask();
+    r->status = status;
+    r->f.w = w;
+    r->expires = expires;
+    met::forecasts.answered(r);
   };
+  auto unreachable = [&] { fetched(0, {}, ""); };
+  fetch::Schedule &sc = met::forecasts.schedule;
   fetched(304, {}, "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
-  CHECK_MSG(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
-  CHECK_MSG(met::not_before == 1792414800, "the 304's Expires not kept");
+  CHECK_MSG(met::weather.ok && met::forecasts.modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
+  CHECK_MSG(sc.not_before == 1792414800, "the 304's Expires not kept");
   uint32_t now = (uint32_t) flexit_panel_time.t.timestamp;
   for (uint32_t want : {60, 120, 240, 480, 960, 1800, 1800}) {
     fetched(want == 60 ? 500 : 503, {}, "");
     CHECK_MSG(
-        met::weather.ok && met::not_before == now + want && met::retry_soon &&
+        met::weather.ok && sc.not_before == now + want &&
             met_status == (want == 60 ? "Kept the last forecast (HTTP 500)" : "Kept the last forecast (HTTP 503)"),
-        "a server error: '%s', next in %d s, not %u", met_status.c_str(), (int) (met::not_before - now),
-        (unsigned) want);
+        "a server error: '%s', next in %d s, not %u", met_status.c_str(), (int) (sc.not_before - now), (unsigned) want);
   }
   fetched(429, {}, "");
-  CHECK_MSG(met::not_before == now + 3600 && !met::retry_soon, "a 429 after server errors waited %d s",
-            (int) (met::not_before - now));
+  CHECK_MSG(sc.not_before == now + 3600, "a 429 after server errors waited %d s", (int) (sc.not_before - now));
   fetched(429, {}, "");
-  CHECK_MSG(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
-  CHECK_MSG(
-      met::retry_after_s("120", now) == 120 && met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792414500) == 300 &&
-          met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792415000) == 0 && met::retry_after_s("", now) == 0,
-      "Retry-After read wrong");
-  met::unreachable();
-  CHECK_MSG(met::backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(sc.not_before == now + 7200 && !sc.due(), "back-off not doubled after a 429");
+  CHECK_MSG(fetch::retry_after_s("120", now) == 120 &&
+                fetch::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792414500) == 300 &&
+                fetch::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792415000) == 0 &&
+                fetch::retry_after_s("", now) == 0,
+            "Retry-After read wrong");
+  unreachable();
+  CHECK_MSG(sc.backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) sc.backoff_s);
   flexit_panel_time.t.timestamp += 7200;
-  CHECK_MSG(met::due(), "not due after the back-off");
+  CHECK_MSG(sc.due(), "not due after the back-off");
   fetched(304, {}, "");  // without Expires, an hour
-  CHECK_MSG(met::backoff_s == 0 && met::not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
+  CHECK_MSG(sc.backoff_s == 0 && sc.not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
   for (uint32_t want : {600, 1200, 2400, 3600, 3600}) {
-    met::unreachable();  // a short drop costs minutes, not hours
-    CHECK_MSG(met::backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
-              (unsigned) met::backoff_s, (unsigned) want);
+    unreachable();  // a short drop costs minutes, not hours
+    CHECK_MSG(sc.backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
+              (unsigned) sc.backoff_s, (unsigned) want);
   }
   fetched(403, {}, "");
-  CHECK_MSG(met::backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(sc.backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) sc.backoff_s);
   met::weather.ok = false;
   fetched(203, sample, "");  // a deprecated product, its data is still good
-  CHECK_MSG(met::weather.ok && met::backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
   static const struct {
     const char *date;
     uint32_t t;
   } DATES[] = {{"Fri, 31 Dec 1999 23:59:59 GMT", 946684799}, {"soon", 0}, {"Mon, 19 Foo 2026 11:34:38 GMT", 0}};
   for (auto d : DATES)
-    CHECK_MSG(met::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date,
-              (unsigned) met::http_date(d.date), (unsigned) d.t);
+    CHECK_MSG(fetch::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date,
+              (unsigned) fetch::http_date(d.date), (unsigned) d.t);
 }
 
 // Through 304s and refusals the tile follows the forecast's hours, and the forecast is dropped once it runs out
@@ -2566,7 +2616,7 @@ static void met_forecast_hours() {
             "4 hours on the tile shows %d, the hour has %.1f", (int) tile.value_, met::weather.hour[4].temp);
   flexit_panel_time.t.timestamp = met::ends(met::weather);
   met::redraw();
-  CHECK_MSG(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::modified.empty() &&
+  CHECK_MSG(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::forecasts.modified.empty() &&
                 met_status == "The forecast has run out",
             "a forecast that ran out: ok %d, tile %d, '%s'", met::weather.ok, (int) tile.value_, met_status.c_str());
   run(3);
@@ -2736,14 +2786,15 @@ static void picture_cleared_mid_anim() {
   panel_picture.control(1);
   CHECK_MSG(picture("dusk before the animation", 6000) >= 0, "dusk not shown");
   panel_anim_noise.turn_on();  // big enough to take a while
-  int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
+  int r = run_until(
+      [] { return overlay::W.t.head && overlay::W.t.pos > 0 && overlay::W.t.pos < overlay::W.a->data.size(); }, 3000);
   CHECK_MSG(r >= 0, "the animation never went out");
   panel_picture.control(0);
-  r = run_until(anim_shown, 3000);
+  r = run_until(overlay_shown, 3000);
   run(3);
-  CHECK_MSG(r >= 0 && anim_ready() && panel_pic() == 0,
+  CHECK_MSG(r >= 0 && overlay_ready() && panel_pic() == 0,
             "after clearing the picture on the animation's way: '%s', animation %d, picture %d",
-            panel_animation_status.state.c_str(), anim_ready(), panel_pic());
+            panel_animation_status.state.c_str(), overlay_ready(), panel_pic());
   panel_picture.control(1);
   CHECK_MSG(picture("dusk again", 3000) >= 0, "the picture is stuck behind the animation");
 }
@@ -2775,12 +2826,12 @@ static void end_lost() {
   panel_anim_ball.turn_off();
   run(3);
   panel_anim_ball.turn_on();
-  r = run_until([] { return anim::find("ball") && anim::find("ball")->state == anim::FAILED; }, 3000);
+  r = run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::FAILED; }, 3000);
   CHECK_MSG(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
             panel_animation_status.state.c_str());
   pn_restart();
   r = until_anim_status("Shown: ball");
-  CHECK_MSG(r >= 0 && anim_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
+  CHECK_MSG(r >= 0 && overlay_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
             panel_animation_status.state.c_str());
   h = real;
 }
@@ -2836,12 +2887,12 @@ static void refused() {
   want = "ball: the panel didn't take it (" + bad + ")";
   int r = until_anim_status(want.c_str());
   run(50);
-  CHECK_MSG(r >= 0 && !turn && went() == 1 && anim::find("ball")->state == anim::FAILED,
+  CHECK_MSG(r >= 0 && !turn && went() == 1 && overlay::find("ball")->state == overlay::FAILED,
             "an animation the panel can't take: %d transfers, '%s'", went(), panel_animation_status.state.c_str());
   st = PIC_BAD_CRC;
   turn = 1;
   ids = panel::transfer_ids;
-  anim::show("ball");  // tried again
+  overlay::show("ball");  // tried again
   r = until_anim_status("Shown: ball");
   CHECK_MSG(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
             went(), panel_animation_status.state.c_str());
@@ -2849,19 +2900,20 @@ static void refused() {
 }
 
 // An animation on its way while the panel is away: no DATA goes until it's back
-static void anim_while_away() {
+static void overlay_while_away() {
   step("an animation on its way while the panel is away");
   panel_anim_ball.turn_off();
   panel_anim_noise.turn_on();
-  int r = run_until([] { return anim::W.t.head && anim::W.t.pos > 0 && anim::W.t.pos < anim::W.a->data.size(); }, 3000);
+  int r = run_until(
+      [] { return overlay::W.t.head && overlay::W.t.pos > 0 && overlay::W.t.pos < overlay::W.a->data.size(); }, 3000);
   cx60_cycle();  // the panel takes what's queued, so there's room for more
-  uint32_t pos = anim::W.t.pos;
+  uint32_t pos = overlay::W.t.pos;
   unsigned queued = panel::link::waiting();
   server->updating_ = true;  // update.cpp has the bus
   for (int k = 0; k < 20; k++)
     panel::loop();
-  CHECK_MSG(r >= 0 && !panel::link::connected && anim::W.t.pos == pos && panel::link::waiting() == queued,
-            "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (anim::W.t.pos - pos),
+  CHECK_MSG(r >= 0 && !panel::link::connected && overlay::W.t.pos == pos && panel::link::waiting() == queued,
+            "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (overlay::W.t.pos - pos),
             panel::link::waiting() - queued);
   server->updating_ = false;
   r = until_anim_status("Shown: noise, drifting");
@@ -2875,19 +2927,19 @@ static void anim_while_away() {
 static void unknown_names() {
   step("names that aren't there, and none");
   pic::show("nope");
-  anim::show("nope");
+  overlay::show("nope");
   run(10);
   CHECK_MSG(logged("No picture called 'nope'") && logged("No animation called 'nope'"), "no warnings about the names");
   CHECK_MSG(panel_picture.state == "dusk" && panel_picture_status.state == "nope: no picture with that name" &&
-                panel_pic() == 2 && panel_anim_ball.state && anim_ready(),
+                panel_pic() == 2 && panel_anim_ball.state && overlay_ready(),
             "an unknown name changed what's shown: '%s' '%s', %d '%s'", panel_picture.state.c_str(),
             panel_picture_status.state.c_str(), panel_anim_ball.state, panel_animation_status.state.c_str());
-  anim::clear("");  // panel_clear_animation without a name
+  overlay::clear("");  // panel_clear_animation without a name
   pic::show("");
   run(20);
   CHECK_MSG(panel_picture.state == "None" && panel_picture_status.state == "None" && panel_pic() == 0,
             "picture '%s' '%s' after no name", panel_picture.state.c_str(), panel_picture_status.state.c_str());
-  CHECK_MSG(!panel_anim_ball.state && panel_animation_status.state == "None" && !anim_ready(),
+  CHECK_MSG(!panel_anim_ball.state && panel_animation_status.state == "None" && !overlay_ready(),
             "animation %d '%s' after no name", panel_anim_ball.state, panel_animation_status.state.c_str());
   panel_picture.control(1);
   CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
@@ -2949,16 +3001,15 @@ static void online_again() {
 
 static void online_grew() {
   step("a shown online picture that grew too big for the ESP");
-  // 200 KB on the server
-  static int asked = 0, fetched = 0;
+  static int fetched = 0;
+  web.status = 200;
+  web.length = 200 * 1024;
+  web.type = "image/jpeg";
+  int asked = web.asked;
   auto o = std::make_shared<pic::Online>();
+  o->url = "http://x/flaky";
   o->every = 1000;
   o->format = "JPEG";
-  o->head = [](const std::string &, size_t &n, std::string &) {
-    asked++;
-    n = 200 * 1024;
-    return 200;
-  };
   o->busy = [] { return false; };
   o->fetch = [] {
     fetched++;
@@ -2966,6 +3017,7 @@ static void online_grew() {
   };
   pic::online["flaky"] = o;
   run(30);
+  asked = web.asked - asked;
   CHECK_MSG(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state.rfind("flaky: too big", 0) == 0,
             "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
   pic::online.erase("flaky");
@@ -2973,8 +3025,8 @@ static void online_grew() {
 
 static void online_too_big() {
   step("online pictures: one too big for the ESP, and a Home Assistant camera's token");
-  panel_http.length = 120 * 1024;  // a JPEG, kept whole
-  panel_http.type = "image/jpeg";
+  web.length = 120 * 1024;  // a JPEG, kept whole
+  web.type = "image/jpeg";
   pic::show("radar");
   run(10);
   CHECK_MSG(!panel_picture_radar.updates && panel_picture_status.state.rfind("radar: too big for the ESP", 0) == 0,
@@ -3000,7 +3052,9 @@ static void online_too_big() {
 
 static void online_downloads() {
   step("an online picture's downloads and refreshes");
-  pic::add_online_image("webcam", webcam, cam_server, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto");
+  web.length = 30000;
+  web.asked = 0;
+  pic::add_online_image("webcam", webcam, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto");
   pic::Online &o = *pic::online["webcam"];
   CHECK_MSG(o.every == 600000 && o.pixels == 160 * 120 * 2 && o.format == "AUTO", "webcam: every %u, %u bytes, %s",
             (unsigned) o.every, (unsigned) o.pixels, o.format.c_str());
@@ -3018,8 +3072,8 @@ static void online_downloads() {
   };
   pic::show("webcam");
   run(3);
-  CHECK_MSG(cam_server.heads == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
-            "not downloaded when shown: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+  CHECK_MSG(web.asked == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
+            "not downloaded when shown: asked %d, %d downloads, '%s'", web.asked, webcam.updates,
             panel_picture_status.state.c_str());
   draw_photo(webcam, 160, 120);  // the download came
   webcam.decoding = false;
@@ -3035,7 +3089,7 @@ static void online_downloads() {
   uint8_t ids = panel::transfer_ids;
   o.fetched = millis() - o.every;
   run(1);
-  CHECK_MSG(cam_server.heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
+  CHECK_MSG(web.asked == 2 && webcam.updates == 2, "not downloaded again after update_interval");
   draw_photo(webcam, 160, 120);
   webcam.decoding = false;
   pic::changed("webcam");
@@ -3050,9 +3104,9 @@ static void online_downloads() {
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK_MSG(cam_server.heads == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
+  CHECK_MSG(web.asked == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
                 panel_pic() == 2,
-            "after a failed refresh: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+            "after a failed refresh: asked %d, %d downloads, '%s'", web.asked, webcam.updates,
             panel_picture_status.state.c_str());
 
   // a failed first download: the reason stays, the next try waits
@@ -3075,17 +3129,17 @@ static void online_fits() {
   step("an online picture's RAM checks");
   pic::Online &o = *pic::online["webcam"];
   auto fits = [&](int c, size_t n, const char *t) {
-    cam_server.code = c;
-    cam_server.size = n;
-    cam_server.type = t;
-    o.answer = {o.url, c, n, t};
+    web.status = c;
+    web.length = n;
+    web.type = t;
+    o.answer = {c, n, t};
     return pic::fits("webcam", o);
   };
   auto download = [&] {  // asks the server, and starts the download with its answer
     pic::download("webcam", o);
     run_asks();
     if (o.asking == pic::Online::ANSWERED)
-      pic::answered("webcam", o);
+      pic::start_download("webcam", o);
   };
   ram_free = 100 * 1024;
   CHECK_MSG(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
@@ -3105,36 +3159,37 @@ static void online_fits() {
   o.format = "AUTO";
   // a download that doesn't start doesn't grow the buffer
   webcam.fail = true;
-  cam_server.size = 40000;
-  int heads = cam_server.heads;
+  web.length = 40000;
+  int asked = web.asked;
   pic::download("webcam", o);  // in a task of its own, the loop goes on meanwhile
-  CHECK_MSG(asks.size() == 1 && cam_server.heads == heads && o.asking == pic::Online::ASKING,
-            "the server asked in the loop: %d times, %u tasks", cam_server.heads - heads, (unsigned) asks.size());
+  CHECK_MSG(tasks.size() == 1 && web.asked == asked && o.asking == pic::Online::ASKING,
+            "the server asked in the loop: %d times, %u tasks", web.asked - asked, (unsigned) tasks.size());
   run_asks();
-  pic::answered("webcam", o);
+  pic::start_download("webcam", o);
   webcam.fail = false;
   CHECK_MSG(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
   download();
-  int updates = webcam.updates, asked = cam_server.heads;
-  cam_server.size = 50000;
+  int updates = webcam.updates;
+  asked = web.asked;
+  web.length = 50000;
   download();  // while that one still runs
   webcam.decoding = false;
-  CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
+  CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && web.asked == asked,
             "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
-            webcam.updates - updates + 1, cam_server.heads - asked + 1);
+            webcam.updates - updates + 1, web.asked - asked + 1);
   // the first PNG needs room for its decoder too
   ram_free = 120 * 1024;
   CHECK_MSG(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
   ram_free = 200 * 1024;
-  cam_server.type = "image/png";
+  web.type = "image/png";
   download();
   webcam.decoding = false;
   ram_free = 120 * 1024;
   CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
   ram_free = 200 * 1024;
-  cam_server.code = 200;
-  cam_server.size = 30000;
-  cam_server.type = "image/jpeg";
+  web.status = 200;
+  web.length = 30000;
+  web.type = "image/jpeg";
 }
 
 // Another picture picked while it's being made: its pixels are freed
@@ -3145,6 +3200,279 @@ static void online_picked() {
   online_pick_after = 1000;
   CHECK_MSG(picture("dusk, picked while webcam was being made", 6000) >= 0 && !webcam.w && !online_pick_after,
             "webcam's pixels kept: %dx%d", webcam.w, webcam.h);
+}
+
+// ---------------------------------------------------------------- the space pictures
+namespace marks = flexit::panel::marks;
+
+// A picture from the PPMs the Makefile makes, see ESP_PICTURES
+static void picture_of(Image &img, const char *file) {
+  CHECK_MSG(load_ppm(img, (std::string(PICTURES) + file).c_str()), "no %s%s", PICTURES, file);
+}
+
+// Whether picture name's marks have text s
+static bool has_mark(const std::string &name, const std::string &s) {
+  for (const marks::Op &o : marks::all[name].layer.ops)
+    if (o.kind == marks::Op::TEXT && o.text == s)
+      return true;
+  return false;
+}
+
+// Picture name's marks' texts, for a failure's message
+static std::string mark_texts(const std::string &name) {
+  std::string t;
+  for (const marks::Op &o : marks::all[name].layer.ops)
+    if (o.kind == marks::Op::TEXT)
+      t += (t.empty() ? "" : " | ") + o.text;
+  return t;
+}
+
+// a is due, the other askers wait
+static void ask_only(fetch::Asker &a) {
+  for (fetch::Asker *o : fetch::askers)
+    o->schedule.not_before = o == &a ? 0 : UINT32_MAX;
+}
+
+// A photo of the day: its list asked for and read, its photo downloaded and shown, and its marks over it
+static void photo_of_the_day(const char *name, fetch::Asker &list, OnlineImage &img, const char *body,
+                             const std::function<void()> &draw) {
+  std::string k = marks::overlay_of(name);
+  pic::show(name);
+  run(5);
+  CHECK_MSG(panel_picture_status.state == std::string(name) + ": looking for the newest photo" && !img.updates,
+            "%s before its list: '%s', %d downloads", name, panel_picture_status.state.c_str(), img.updates);
+  web.body = sample(body);
+  web.type = "application/json";
+  ask_only(list);
+  yaml_every(1000);
+  CHECK_MSG(list.asking && tasks.size() == 1, "%s's list not asked for", name);
+  run_task();
+  CHECK_MSG(!list.asking && list.have && list.schedule.not_before == fetch::now_s() + list.every_s && !img.url.empty(),
+            "%s's list not taken: next in %d s, URL '%s'", name, (int) (list.schedule.not_before - fetch::now_s()),
+            img.url.c_str());
+  web.body.clear();
+  web.type = "image/jpeg";
+  web.length = 11600;
+  CHECK_MSG(run_until([&] { return img.updates == 1; }, 100) >= 0, "%s's photo not downloaded", name);
+  draw();
+  img.decoding = false;
+  img.on_download_finished();
+  std::string shown = std::string("Shown: ") + name;  // its pixels are gone once it's made, so not compared
+  CHECK_MSG(run_until([&] { return panel_picture_status.state.rfind(shown, 0) == 0 && settled() && panel_pic() == 2; },
+                      6000) >= 0,
+            "%s not shown: '%s'", name, panel_picture_status.state.c_str());
+  int r = run_until([&] { return overlay::find(k) && overlay::find(k)->state == overlay::SENT && settled(); }, 600);
+  CHECK_MSG(r >= 0 && overlay::find(k)->still, "%s's marks not over it: '%s'", name,
+            panel_animation_status.state.c_str());
+  steps(400);  // they fade in
+  pn_shot(outdir, (std::string("esp_") + name).c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0 && !overlay::find(k), "%s's marks left over dusk", name);
+}
+
+static void space_photos() {
+  step("Mars today and Earth today: NASA's lists read as they stream, the photos shown with their marks over them");
+  time_t then = flexit_panel_time.t.timestamp;  // put back after, for the tests that follow
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793606400;  // 2026-11-02 08:00 UTC
+  tz_offset_s = 3600;                          // Oslo in winter time
+  Web kept = web;
+  web = Web();
+  const std::string &mars_status = panel_mars_today_status.state, &earth_status = panel_earth_today_status.state;
+
+  // Perseverance's newest sol: its Mastcam-Z colour photo, not the one through the sun filter, the sky camera's, the
+  // Hazcam's or the Navcam's of the sol before
+  photo_of_the_day("mars_today", space::mars::list, panel_picture_mars_today, "mars_sample.json",
+                   [] { picture_of(panel_picture_mars_today, "mars_sample.ppm"); });
+  const space::mars::Photo &p = space::mars::photo;
+  CHECK_MSG(p.sol == 2024 && p.camera == "Mastcam-Z" && p.on_mars == "13:10" && p.elevation < -59 &&
+                p.url.find("/ZL0_2024_0846622537_") != std::string::npos && panel_picture_mars_today.url == p.url,
+            "the photo picked: sol %d, %s at %g, %s", p.sol, p.camera.c_str(), p.elevation, p.url.c_str());
+  CHECK_MSG(mars_status == "Sol 2024, Mastcam-Z, 30 Oct · 10:21", "Mars today's status: '%s'", mars_status.c_str());
+  CHECK_MSG(has_mark("mars_today", "Sol 2024") && has_mark("mars_today", "30 OCT · 13:10 ON MARS") &&
+                has_mark("mars_today", "Jezero crater, by Perseverance's Mastcam-Z"),
+            "Mars today's marks");
+  space::mars::Photo a, b;  // of one sol, the one looking out nearer the horizon, then the later
+  a.sol = b.sol = 9;
+  a.elevation = -60;
+  b.elevation = -8;
+  bool level = space::mars::better(b, a);
+  a.elevation = -6;
+  a.taken = 2;
+  b.taken = 1;
+  CHECK_MSG(level && space::mars::better(a, b), "a photo of the ground picked over one of the view");
+
+  // a server error keeps the photo and asks again a minute later
+  std::string url = p.url;
+  web.status = 503;
+  ask_only(space::mars::list);
+  yaml_every(1000);
+  run_task();
+  CHECK_MSG(mars_status == "Kept the last photo (HTTP 503)" && p.url == url &&
+                space::mars::list.schedule.not_before == fetch::now_s() + 60,
+            "after a server error: '%s', next in %d s", mars_status.c_str(),
+            (int) (space::mars::list.schedule.not_before - fetch::now_s()));
+  web.status = 200;
+
+  // EPIC's newest of the day, late on 1 November
+  photo_of_the_day("earth_today", space::earth::list, panel_picture_earth_today, "epic_sample.json",
+                   [] { picture_of(panel_picture_earth_today, "epic_sample.ppm"); });
+  CHECK_MSG(panel_picture_earth_today.url ==
+                "https://epic.gsfc.nasa.gov/archive/natural/2026/11/01/thumbs/epic_1b_20261101224105.jpg",
+            "Earth today's photo: %s", panel_picture_earth_today.url.c_str());
+  CHECK_MSG(earth_status == "epic_1b_20261101224105, 1 Nov · 23:36", "Earth today's status: '%s'",
+            earth_status.c_str());
+  CHECK_MSG(has_mark("earth_today", "1.49") && has_mark("earth_today", "the Pacific") &&
+                has_mark("earth_today", "6° S 173° W") && has_mark("earth_today", "near Apia") &&
+                has_mark("earth_today", "1 NOV · 23:36"),
+            "Earth today's marks");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
+}
+
+// A rover's waypoints read from body and its picture shown with its track, the marks over it
+static void rover_shown(const char *rover, const char *body) {
+  space::rover::Map &m = *space::rover::map_of(rover);
+  std::string k = marks::overlay_of(rover);
+  web.body = sample(body);
+  ask_only(m);
+  yaml_every(1000);
+  CHECK_MSG(m.asking && tasks.size() == 1, "%s's waypoints not asked for", rover);
+  run_task();
+  CHECK_MSG(m.have && m.track.size() > 20 && m.schedule.not_before == fetch::now_s() + 21600,
+            "%s's waypoints not taken: %u points, next in %d s", rover, (unsigned) m.track.size(),
+            (int) (m.schedule.not_before - fetch::now_s()));
+  pic::show(rover);
+  CHECK_MSG(picture(rover, 6000) >= 0, "%s not shown", rover);
+  int r = run_until([&] { return overlay::find(k) && overlay::find(k)->state == overlay::SENT && settled(); }, 600);
+  CHECK_MSG(r >= 0, "%s's marks not over it: '%s'", rover, panel_animation_status.state.c_str());
+  steps(400);
+  pn_shot(outdir, (std::string("esp_") + rover).c_str());
+}
+
+static void rover_tracks() {
+  step("the rovers: their waypoints read as they stream, their tracks on their maps with the marks over them");
+  time_t then = flexit_panel_time.t.timestamp;
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793606400;  // 2026-11-02 08:00 UTC
+  tz_offset_s = 3600;
+  Web kept = web;
+  web = Web();
+  web.type = "application/json";
+  // Perseverance's sol 2024 began on Earth when its Mastcam-Z photo at 13:10 on Mars, 09:21:10 UTC, says it did
+  const space::rover::Rover &m20 = space::rover::ROVERS[0];
+  int32_t off = (int32_t) (space::sol_start(2024, m20.landed) - 1793303349u);
+  CHECK_MSG(abs(off) < 120, "sol 2024 began %d s off", off);
+
+  rover_shown("perseverance", "perseverance_sample.json");
+  space::rover::Map &m = *space::rover::map_of("perseverance");
+  space::rover::Point end = space::rover::point_of(m20, m.last.lon, m.last.lat, 0);
+  CHECK_MSG(m.first.sol == 13 && m.last.sol == 2022 && m.track.size() < 79 && m.track.back().x == end.x &&
+                m.track.back().y == end.y && panel_perseverance_status.state == "Sol 2022, 45.25 km",
+            "Perseverance: sols %d to %d, %u points, '%s'", m.first.sol, m.last.sol, (unsigned) m.track.size(),
+            panel_perseverance_status.state.c_str());
+  CHECK_MSG(has_mark("perseverance", "45.25") && has_mark("perseverance", "634") &&
+                has_mark("perseverance", "DRIVEN SINCE 2021") && has_mark("perseverance", "Landed 2021") &&
+                has_mark("perseverance", "NOW") && has_mark("perseverance", "LAST 120 SOLS") &&
+                has_mark("perseverance", "2 KM"),
+            "Perseverance's marks");
+  // driven off the map, west: an arrow at the edge
+  space::rover::Map away = m;
+  away.track.push_back(space::rover::point_of(m20, 77.0, 18.47, 2030));
+  away.last.sol = 2030;
+  marks::Layer l = space::rover::layer_of(away);
+  const marks::Op *arrow = nullptr;
+  for (const marks::Op &o : l.ops)
+    if (o.kind == marks::Op::POLY)
+      arrow = &o;
+  CHECK_MSG(arrow && arrow->box.x0 >= 0 && arrow->box.x0 < 12 && fabsf(arrow->box.y0 - 116) < 8,
+            "no arrow at the left edge: %g, %g", arrow ? arrow->box.x0 : -1, arrow ? arrow->box.y0 : -1);
+
+  rover_shown("curiosity", "curiosity_sample.json");
+  CHECK_MSG(panel_curiosity_status.state == "Sol 5045, 38.48 km" && has_mark("curiosity", "1013") &&
+                has_mark("curiosity", "UP MOUNT SHARP"),
+            "Curiosity: '%s'", panel_curiosity_status.state.c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0 && !overlay::find("curiosity_marks"), "Curiosity's marks left over dusk");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
+}
+
+// The probe Horizons is being asked about
+static space::probes::Horizons *asked() {
+  return static_cast<space::probes::Horizons *>(space::probes::horizons.asking);
+}
+
+// A round of JPL Horizons' answers, each probe's from horizons_sample.txt as its question comes
+static void horizons_round() {
+  std::string all = sample("horizons_sample.txt");
+  while (space::probes::horizons.asking && !tasks.empty()) {
+    int id = space::probes::PROBES[asked()->probe].id;
+    size_t at = all.find("(" + std::to_string(id) + ")"), from = all.rfind("API VERSION", at),
+           to = all.find("API VERSION", at);
+    web.body = all.substr(from, to == std::string::npos ? to : to - from);
+    run_task();
+  }
+}
+
+static void probes_chart() {
+  step("the probes: JPL Horizons asked where each is, one after the other, the planets worked out, on a chart");
+  time_t then = flexit_panel_time.t.timestamp;
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793880000;  // 2026-11-05 12:00 UTC, the sample's day
+  tz_offset_s = 3600;
+  Web kept = web;
+  web = Web();
+  web.type = "text/plain";
+  pic::show("probes");
+  run(5);
+  CHECK_MSG(panel_picture_status.state == "probes: asking JPL Horizons where they are", "before the answers: '%s'",
+            panel_picture_status.state.c_str());
+  ask_only(space::probes::horizons);
+  yaml_every(1000);
+  CHECK_MSG(asked() && asked()->url.find("COMMAND=%27-31%27") != std::string::npos &&
+                asked()->url.find("START_TIME=%272026-11-05%27&STOP_TIME=%272026-11-06%27") != std::string::npos,
+            "the first question: %s", asked() ? asked()->url.c_str() : "none");
+  horizons_round();
+  int known = 0;
+  for (auto &t : space::probes::tracks)
+    known += t.ok;
+  CHECK_MSG(known == space::probes::N && panel_probes_status.state == "11 probes, 5 Nov · 13:00" &&
+                space::probes::horizons.schedule.not_before == fetch::now_s() + 86400,
+            "after a round: %d probes, '%s'", known, panel_probes_status.state.c_str());
+  // the light-day: Voyager 1's signal takes a day on 19 November 2026, as JPL has it
+  CHECK_MSG(has_mark("probes", "Voyager 1") && has_mark("probes", "172") && has_mark("probes", "144") &&
+                has_mark("probes", "66") && has_mark("probes", "VOYAGER 1'S SIGNAL") &&
+                has_mark("probes", "A light-day on 19 Nov"),
+            "the farthest: %s", mark_texts("probes").c_str());
+  CHECK_MSG(has_mark("probes", "Mars") && has_mark("probes", "Psyche") && has_mark("probes", "Lucy") &&
+                has_mark("probes", "Neptune") && space::probes::k > 80,
+            "the chart's marks, at %g px an AU", space::probes::k);
+  CHECK_MSG(picture("probes", 6000) >= 0, "probes not shown");
+  int r = run_until(
+      [] {
+        return overlay::find("probes_marks") && overlay::find("probes_marks")->state == overlay::SENT && settled();
+      },
+      600);
+  CHECK_MSG(r >= 0, "the probes' marks not over it: '%s'", panel_animation_status.state.c_str());
+  steps(400);
+  pn_shot(outdir, "esp_probes");
+  // a server error part way: what came stays, the round is asked again
+  ask_only(space::probes::horizons);
+  yaml_every(1000);
+  run_task();
+  web.status = 500;
+  run_task();
+  CHECK_MSG(!asked() && panel_probes_status.state == "Kept the last positions (HTTP 500)" &&
+                space::probes::tracks[1].ok && space::probes::horizons.schedule.not_before == fetch::now_s() + 60,
+            "after a server error: '%s'", panel_probes_status.state.c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
 }
 
 static void picture_no_ram() {
@@ -3197,7 +3525,7 @@ static void actions_kept() {
   pic::show("dusk");
   CHECK_MSG(picture("dusk", 6000) >= 0 && panel_picture.saved == "dusk", "show: '%s' kept",
             panel_picture.saved.c_str());
-  anim::show("ball");
+  overlay::show("ball");
   CHECK_MSG(panel_anim_ball.state, "animation: the switch isn't on");
   panel_clear_animation.execute("");
   CHECK_MSG(!panel_anim_ball.state, "animation cleared: the switch is still on");
@@ -3264,11 +3592,11 @@ static void notes_while_away() {
   run(10);
   CHECK_MSG(!panel::link::queued(K_NOTIFY), "a note queued for a panel that's away");
   // nothing made for it meanwhile
-  anim::clear("");
+  overlay::clear("");
   pic::show("weather");
   panel_anim_ball.turn_on();
   run(50);
-  CHECK_MSG(pic::S.phase == pic::START && !met::drawing && anim::W.phase == anim::IDLE &&
+  CHECK_MSG(pic::S.phase == pic::START && !met::drawing && overlay::W.phase == overlay::IDLE &&
                 panel_picture_status.state == "weather: waiting for the panel",
             "made for a panel that's away: '%s', '%s'", panel_picture_status.state.c_str(),
             panel_animation_status.state.c_str());
@@ -3276,9 +3604,9 @@ static void notes_while_away() {
   restart_panel();
   const char *away = pn_note(&icon, &level, &fresh);
   CHECK_MSG(fresh && !strcmp(away, "Door open") && panel::note.empty(), "note while away: '%s', fresh %d", away, fresh);
-  CHECK_MSG(
-      picture("weather, the panel back", 6000) >= 0 && anim::find("ball") && anim::find("ball")->state == anim::SENT,
-      "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(picture("weather, the panel back", 6000) >= 0 && overlay::find("ball") &&
+                overlay::find("ball")->state == overlay::SENT,
+            "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
   panel::notify("Washer done", "washer", "info");
   restart_panel();  // before it went out
   const char *restart = pn_note(&icon, &level, &fresh);
@@ -3291,23 +3619,23 @@ static void bootloader_away() {
     delayMicroseconds(1);  // about a frame a slice, so it's made over many loops
     return noise_px(f, x, y);
   };
-  anim::clear("");
+  overlay::clear("");
   run(5);
-  anim::add("slow", {64, 64, 6, 100, 16, 16, 1, slow});
-  anim::show("slow");
+  overlay::add("slow", {64, 64, 6, 100, 16, 16, 1, slow});
+  overlay::show("slow");
   panel::loop();
-  bool making = anim::W.phase == anim::COUNT || anim::W.phase == anim::MAKE;
+  bool making = overlay::W.phase == overlay::COUNT || overlay::W.phase == overlay::MAKE;
   server->updating_ = true;  // update.h has the bus
   panel::loop();
-  CHECK_MSG(making && !panel::link::connected && anim::W.phase == anim::IDLE &&
-                anim::find("slow")->state == anim::WANT && anim::find("slow")->data.empty(),
+  CHECK_MSG(making && !panel::link::connected && overlay::W.phase == overlay::IDLE &&
+                overlay::find("slow")->state == overlay::WANT && overlay::find("slow")->data.empty(),
             "still made for a panel in its bootloader: making %d, connected %d, phase %d", making,
-            panel::link::connected, anim::W.phase);
+            panel::link::connected, overlay::W.phase);
   run(50);
-  CHECK_MSG(anim::W.phase == anim::IDLE, "made again while in its bootloader: phase %d", anim::W.phase);
+  CHECK_MSG(overlay::W.phase == overlay::IDLE, "made again while in its bootloader: phase %d", overlay::W.phase);
   server->updating_ = false;
   restart_panel();  // the new firmware
-  CHECK_MSG(run_until([] { return anim::find("slow")->state == anim::SENT && settled(); }, 3000) >= 0,
+  CHECK_MSG(run_until([] { return overlay::find("slow")->state == overlay::SENT && settled(); }, 3000) >= 0,
             "not made once the panel was back: '%s'", panel_animation_status.state.c_str());
 }
 
@@ -3523,29 +3851,30 @@ int main(int argc, char **argv) {
   pictures();
   pictures_jpeg();
   animations();
-  anim_moving();
-  anim_copies();
-  anim_turning();
-  anim_wandering();
-  anim_waved();
-  anim_turned_down();
-  anim_one_round();
-  anim_two();
-  anim_half_size();
-  anim_not_fitting();
-  anim_cleared_while_made();
-  anim_no_room();
-  anim_repeats();
-  anim_esp_restart();
-  anim_hello_while_made();
-  anim_long_frame();
-  anim_off_screen();
-  anim_shown_again();
-  anim_timing();
-  anim_without_ram();
-  anim_past_pool();
-  anim_waves_settling();
-  anim_on_its_way();
+  overlay_moving();
+  overlay_copies();
+  overlay_turning();
+  overlay_wandering();
+  overlay_waved();
+  overlay_turned_down();
+  overlay_one_round();
+  overlay_two();
+  overlay_half_size();
+  overlay_not_fitting();
+  overlay_cleared_while_made();
+  overlay_no_room();
+  overlay_repeats();
+  overlay_esp_restart();
+  overlay_hello_while_made();
+  overlay_long_frame();
+  overlay_stills();
+  overlay_off_screen();
+  overlay_shown_again();
+  overlay_timing();
+  overlay_without_ram();
+  overlay_past_pool();
+  overlay_waves_settling();
+  overlay_on_its_way();
   met_requests();
   met_reading();
   met_picture();
@@ -3564,7 +3893,7 @@ int main(int argc, char **argv) {
   picture_cleared_mid_anim();
   end_lost();
   refused();
-  anim_while_away();
+  overlay_while_away();
   unknown_names();
   cleared_and_shown();
   online_again();
@@ -3573,6 +3902,9 @@ int main(int argc, char **argv) {
   online_downloads();
   online_fits();
   online_picked();
+  space_photos();
+  rover_tracks();
+  probes_chart();
   picture_no_ram();
   actions_kept();
   number_late();

@@ -251,9 +251,11 @@ Messages are numbered and resent until the other side has them. `proto/pbus.h` h
 frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a copy of `proto/`: update it with
 `make -C sim esp_sync` (`esp_test` fails if they differ). Screenshots for the ESP's camera go the other way, a 64x8
 tile at a time, JPEG-coded as it's drawn again on its way to the LCD (`app/shot.c`), so the panel keeps nothing but
-the tile being sent. A 16-colour picture can have parts, a box and some of its colours each, in front of the
-animations farther off than them (`K_PIC_PART`, `K_ANIM_DEPTH`): the panel leaves an animation's pixels undrawn where
-a nearer part's colours are. An animation without a depth is in front of them all.
+the tile being sent. Overlays over the screensaver's picture have 16 colours, each with its own opacity
+(`K_OVERLAY_BEGIN`). An animated one keeps its frame and the deflated rectangles that change it, a still one only its
+packed pieces, unpacked one at a time as a strip is drawn. A 16-colour picture can have parts, a box and some of its
+colours each, in front of the overlays farther off than them (`K_PIC_PART`, `K_OVERLAY_DEPTH`): the panel leaves an
+overlay's pixels undrawn where a nearer part's colours are. An overlay without a depth is in front of them all.
 
 ### Adding things
 

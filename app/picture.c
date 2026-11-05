@@ -1,6 +1,6 @@
 // Screensaver picture, see picture.h
 #include "picture.h"
-#include "anim.h"
+#include "overlay.h"
 #include "pdeflate.h"
 #include "plink.h"
 #include "tjpgd/tjpgd.h"
@@ -34,9 +34,9 @@ typedef struct {
   uint8_t work[3072];  // TJpgDec's tables and buffers, it needs 2968 bytes for pjpeg.h's JPEGs
 } jpeg_t;
 
-// Transfer in progress. A whole picture into pic, a patch after it in pool, or an animation for anim.c
+// Transfer in progress. A whole picture into pic, a patch after it in pool, or an overlay for overlay.c
 static struct {
-  enum { XF_NONE, XF_PICTURE, XF_PATCH, XF_ANIM } kind;
+  enum { XF_NONE, XF_PICTURE, XF_PATCH, XF_OVERLAY } kind;
   uint8_t id;                     // the transfer's id, echoed in our acks
   uint16_t y, count;              // a patch's first row and number of rows
   uint32_t len, got, crc, acked;  // total bytes, bytes received, CRC so far, bytes received at the last ack
@@ -59,8 +59,8 @@ static void clear(void) { pic.state = PIC_NONE; }
 void pic_reset(void) {
   if (xfer.kind == XF_PICTURE)
     clear();
-  if (xfer.kind == XF_ANIM)
-    anim_abort();
+  if (xfer.kind == XF_OVERLAY)
+    overlay_abort();
   xfer.kind = XF_NONE;
 }
 
@@ -83,7 +83,7 @@ static void start(const uint8_t *b, int n) {
 
 static uint16_t get16be(const uint8_t *b) { return (uint16_t) (b[0] << 8 | b[1]); }  // JPEG's byte order
 
-// One copy for anim.c and us: inlined, -O3 unrolls each into 440 bytes
+// One copy for overlay.c and us: inlined, -O3 unrolls each into 440 bytes
 __attribute__((noinline)) void pic_palette(lv_color_t *pal, const uint8_t *rgb) {
   for (int i = 0; i < 16; i++, rgb += 3)
     pal[i] = lv_color_make(rgb[0], rgb[1], rgb[2]);
@@ -173,13 +173,13 @@ static bool parse(const uint8_t *b, uint32_t n) {
   return true;
 }
 
-// ANIM_BEGIN: anim.c checks the header and keeps the records
-static int32_t anim_begin(const uint8_t *b, int n) {
+// OVERLAY_BEGIN: overlay.c checks the header and keeps the records
+static int32_t overlay_begin(const uint8_t *b, int n) {
   start(b, n);
-  int st = anim_open(b, n, &xfer.len);
+  int st = overlay_open(b, n, &xfer.len);
   if (st >= 0)
     return ack((uint8_t) st);
-  xfer.kind = XF_ANIM;
+  xfer.kind = XF_OVERLAY;
   return -1;
 }
 
@@ -215,10 +215,10 @@ static bool pieces(const uint8_t *b, int n) {
 static int32_t data(const uint8_t *b, int n) {
   if (xfer.kind == XF_NONE)
     return -1;  // the rest of a failed transfer, the ESP already has our answer
-  if (xfer.kind == XF_ANIM || pic.format == PIC_JPEG) {
+  if (xfer.kind == XF_OVERLAY || pic.format == PIC_JPEG) {
     uint32_t k = LV_MIN(xfer.len - xfer.got, (uint32_t) n);
-    if (xfer.kind == XF_ANIM)
-      anim_bytes(xfer.got, b, k);
+    if (xfer.kind == XF_OVERLAY)
+      overlay_bytes(xfer.got, b, k);
     else
       memcpy(pool + xfer.got, b, k);  // a JPEG, checked as a whole at the end
     xfer.crc = plink_crc32(xfer.crc, b, k);
@@ -372,13 +372,13 @@ static bool picture_done(bool jpeg) {
 
 // END, with the CRC-32 of the len bytes
 static int32_t finish(uint32_t crc) {
-  bool anim = xfer.kind == XF_ANIM, jpeg = xfer.kind == XF_PICTURE && pic.format == PIC_JPEG;
+  bool overlay = xfer.kind == XF_OVERLAY, jpeg = xfer.kind == XF_PICTURE && pic.format == PIC_JPEG;
   uint16_t rows = xfer.kind == XF_PICTURE ? pic.h : xfer.count;
-  if (xfer.got != xfer.len || (!anim && !jpeg && xfer.rows != rows))
+  if (xfer.got != xfer.len || (!overlay && !jpeg && xfer.rows != rows))
     return fail(PIC_BAD);
   if (crc != xfer.crc)
     return fail(PIC_BAD_CRC);
-  if (!(anim ? anim_close() : picture_done(jpeg)))
+  if (!(overlay ? overlay_close() : picture_done(jpeg)))
     return fail(PIC_BAD);
   int32_t a = ack(PIC_DONE);
   xfer.kind = XF_NONE;
@@ -395,10 +395,10 @@ int32_t pic_msg(uint16_t key, const uint8_t *b, int n) {
       return data(b, n);
     case K_PIC_END:
       return xfer.kind == XF_NONE ? -1 : finish(plink_number(b, n));
-    case K_ANIM_BEGIN:
-      return anim_begin(b, n);
-    case K_ANIM_CLEAR:
-      if (anim_clear(b, n))  // it took the one coming in with it
+    case K_OVERLAY_BEGIN:
+      return overlay_begin(b, n);
+    case K_OVERLAY_CLEAR:
+      if (overlay_clear(b, n))  // it took the one coming in with it
         pic_reset();
       return -1;
     case K_PIC_CLEAR:

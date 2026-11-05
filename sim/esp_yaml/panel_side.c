@@ -21,7 +21,7 @@ void pn_init(void) {
 
 void pn_restart(void) {  // a restart loses the link state and the picture, which only lives in RAM
   pic_msg(K_PIC_CLEAR, NULL, 0);
-  anim_clear_all();
+  overlay_clear_all();
   M.esp_online = false;
   val_forget_esp();
   link_init();
@@ -109,24 +109,24 @@ int pn_pic(int *w, int *h) {
 }
 int pn_pic_format(void) { return pic_format(); }
 
-// Line y of the frame place p shows, w x h animation pixels drawn at scale, 3 bytes per pixel: RGB565, then 0 where
-// it's colour transp. 0 if there's no such place.
-int pn_anim_line(int p, int y, int w, int scale, int transp, uint8_t *out) {
-  anim_look_t l;
-  if (!anim_look(p, &l))
+// Line y of the frame place p shows, w pixels across drawn at scale, 3 bytes per pixel: RGB565, then its colour's
+// opacity, 0 where a still has none. 0 if there's no such place.
+int pn_overlay_line(int p, int y, int w, int scale, uint8_t *out) {
+  static uint8_t px[PIC_MAX_W * PIC_MAX_H];
+  overlay_look_t l;
+  if (!overlay_look(p, &l) || !overlay_pixels(p, px))
     return 0;
   for (int x = 0; x < w * scale; x++) {
-    int sx = x / scale, c = l.frame[y / scale * (w / 2) + sx / 2];
-    c = sx & 1 ? c & 15 : c >> 4;
-    memcpy(out + 3 * x, &l.pal[c], 2);
-    out[3 * x + 2] = c == transp ? LV_OPA_TRANSP : LV_OPA_COVER;
+    int c = px[y / scale * w + x / scale];
+    memcpy(out + 3 * x, c < 16 ? &l.pal[c] : &(lv_color_t) {0}, 2);
+    out[3 * x + 2] = c < 16 ? l.colour_opa[c] : LV_OPA_TRANSP;
   }
   return w * scale;
 }
 
 // Let the animations play for ms.
-void pn_anim_step(int ms) {
-  lv_obj_t *o = anim_show(lv_scr_act());
+void pn_overlay_step(int ms) {
+  lv_obj_t *o = overlay_show(lv_scr_act());
   lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
   lv_obj_del(o);
@@ -134,14 +134,14 @@ void pn_anim_step(int ms) {
 
 // 0 if there's no such place
 int pn_anim(int place, pn_look_t *out) {
-  anim_look_t l;
-  if (!anim_look(place, &l))
+  overlay_look_t l;
+  if (!overlay_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth};
+  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth, l.still};
   return 1;
 }
-int pn_anim_covered(int place, int x, int y) { return anim_covered(place, x, y); }
-unsigned pn_anim_used(void) { return anim_used(); }
+int pn_overlay_covered(int place, int x, int y) { return overlay_covered(place, x, y); }
+unsigned pn_overlay_used(void) { return overlay_used(); }
 
 // The picture screensaver up, so its animations play, or down again. The picture alone unless pn_saver_texts()
 // said otherwise.
