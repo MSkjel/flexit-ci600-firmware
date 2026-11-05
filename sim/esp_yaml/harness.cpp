@@ -17,7 +17,9 @@ namespace panel = flexit::panel;
 namespace pic = flexit::panel::picture;
 namespace overlay = flexit::panel::overlay;
 namespace met = flexit::panel::met;
+namespace fetch = flexit::panel::fetch;
 namespace live = flexit::panel::met::live;
+namespace space = flexit::panel::space;
 
 static void step(const char *what) { printf("%s\n", what); }
 
@@ -44,21 +46,14 @@ void delayMicroseconds(uint32_t us) {
   now_us += us;
   waited_us += us;
 }
-// FreeRTOS: a new task waits until run_task() runs it, to its end. Its stack comes from the fake heap. An online
-// picture's question to its server is answered by the next loop, see run().
-static std::vector<std::pair<TaskFunction_t, void *>> tasks, asks;
-BaseType_t xTaskCreate(TaskFunction_t f, const char *name, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
+// FreeRTOS: a new task waits until run_task() runs it, to its end, and fetch.h's answer is taken as the next loop
+// would, but for the pictures' questions, see run_asks(). Its stack comes from the fake heap.
+static std::vector<std::pair<TaskFunction_t, void *>> tasks;
+BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg, UBaseType_t, TaskHandle_t *) {
   if (stack > ram_block)
     return 0;
-  (strcmp(name, "picture") ? tasks : asks).push_back({f, arg});
+  tasks.push_back({f, arg});
   return pdPASS;
-}
-static void run_asks() {
-  while (!asks.empty()) {
-    auto t = asks.front();
-    asks.erase(asks.begin());
-    t.first(t.second);
-  }
 }
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
@@ -68,9 +63,16 @@ static void run_task() {
   auto t = tasks.front();
   tasks.erase(tasks.begin());
   t.first(t.second);
+  fetch::loop();
+}
+// The pictures' questions to their server, the others wait for run_task()
+static void run_asks() {
+  while (!tasks.empty() && fetch::running && dynamic_cast<pic::Online *>(fetch::running->by))
+    run_task();
 }
 
-// ESP-IDF's HTTP client, answering from panel_http
+// ESP-IDF's HTTP client, answering from web
+static Web web;
 struct HttpClient {
   esp_http_client_config_t config;
   std::string url;  // config's, or where it was moved to
@@ -85,12 +87,13 @@ esp_err_t esp_http_client_set_header(esp_http_client_handle_t c, const char *key
   return ESP_OK;
 }
 esp_err_t esp_http_client_open(esp_http_client_handle_t c, int) {
-  c->c = panel_http.get(c->url, c->headers, {});
+  c->c = web.get(c->url, c->headers, {});
   return c->c ? ESP_OK : ESP_FAIL;
 }
 int64_t esp_http_client_fetch_headers(esp_http_client_handle_t c) {
-  for (const char *h : {"Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
-    std::string k = h, v = c->c->get_response_header(h[0] == 'L'   ? "last-modified"
+  for (const char *h : {"Content-Type", "Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
+    std::string k = h, v = c->c->get_response_header(h[0] == 'C'   ? "content-type"
+                                                     : h[0] == 'L' ? "last-modified"
                                                      : h[0] == 'E' ? "expires"
                                                                    : "retry-after");
     esp_http_client_event_t e = {HTTP_EVENT_ON_HEADER, c->config.user_data, k.data(), v.data()};
@@ -630,9 +633,11 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
 // ---------------------------------------------------------------- the weather picture and its shows
 static const std::string &met_status = panel_weather.state;  // what met.h said last, in met.yaml's Panel Weather
 
-// The first 16 KB of a real answer from api.met.no
-static std::string met_sample() {
-  std::ifstream in(MET_SAMPLE);
+// A real answer kept in esp_yaml: met_sample.json is the first 16 KB of api.met.no's, mars_sample.json five photos of
+// NASA's list of Perseverance's, epic_sample.json three of EPIC's day, perseverance_sample.json and
+// curiosity_sample.json some of each rover's waypoints, horizons_sample.txt JPL Horizons' for each probe, cut short
+static std::string sample(const char *file) {
+  std::ifstream in(std::string(SAMPLES) + file);
   std::stringstream body;
   body << in.rdbuf();
   return body.str();
@@ -843,22 +848,7 @@ static void visits(const char *tag, int shots = 2, std::initializer_list<const c
 }
 
 // ---------------------------------------------------------------- online pictures
-// A webcam, and its server: it answers with code, size and type, and counts how often it was asked
 static PickingImage webcam;
-static struct {
-  int code = 200, heads = 0;
-  size_t size = 30000;
-  std::string type = "image/jpeg";
-  std::shared_ptr<HttpContainer> get(const std::string &, const std::vector<http_request::Header> &,
-                                     const std::vector<std::string> &) {
-    heads++;
-    auto c = std::make_shared<HttpContainer>();
-    c->status_code = code;
-    c->content_length = size;
-    c->type = type;
-    return c;
-  }
-} cam_server;
 
 // ---------------------------------------------------------------- the steps
 // The ESP boots with a picture and an animation it restored
@@ -879,6 +869,8 @@ static void boot() {
   panel_anim_ball.publish_state(true);            // restored
   yaml_boot();
   yaml_time_sync();  // Home Assistant's time, right after boot
+  for (fetch::Asker *a : fetch::askers)
+    a->schedule.not_before = UINT32_MAX;  // until their tests
   CHECK_MSG(pic::S.want == "dusk" && overlay::find("ball"),
             "the restored picture and animation aren't shown after boot: '%s', %d", pic::S.want.c_str(),
             overlay::find("ball") != nullptr);
@@ -2301,13 +2293,18 @@ static void met_requests() {
   step("MET Norway's forecast, asked for and backed off");
   flexit_panel_time.t.timestamp = 1792409400;  // 2026-10-19 11:30 UTC, half an hour into the first forecast hour
   tz_offset_s = 7200;                          // Oslo in summer time
-  // met.yaml's on_boot set it up and asked, its request waits in its task
-  CHECK_MSG(!strcmp(met::url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
-                met::timeout_ms == 4500 && met::modified.empty() && met::due() && met::fetching && tasks.size() == 1,
-            "first request: %s, If-Modified-Since '%s', %d requests", met::url, met::modified.c_str(),
-            (int) tasks.size());
+  met::Forecasts &fc = met::forecasts;
+  fetch::Schedule &sc = fc.schedule;
+  sc.not_before = 0;
+  fetch::tick(true);  // the panel's picture being made
+  CHECK_MSG(!fc.asking && tasks.empty(), "asked MET Norway while the panel's picture was made");
+  // panel.yaml's interval asks once it's due, its request waits in its task
+  yaml_every(1000);
+  CHECK_MSG(!strcmp(fc.url, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=59.9139&lon=10.7522") &&
+                fc.timeout_ms == 15000 && fc.modified.empty() && fc.asking && tasks.size() == 1,
+            "first request: %s, If-Modified-Since '%s', %d requests", fc.url, fc.modified.c_str(), (int) tasks.size());
   network::up = false;
-  CHECK_MSG(!met::due(), "asks MET Norway while offline");
+  CHECK_MSG(!sc.due(), "asks MET Norway while offline");
   network::up = true;
   // its scene and aurora options are met_scene.h's names, in their order
   bool same = panel_weather_scene.options.size() == std::size(met::GROUNDS) &&
@@ -2324,149 +2321,144 @@ static void met_requests() {
   panel_weather_aurora.control(0);
   CHECK_MSG(same && met::ground_of("moon") == met::G_HILLS && logged("No weather option called 'moon'"),
             "met.yaml's options aren't met_scene.h's names");
-  met::unreachable();  // right after boot the network may not be up: a quick retry of tick()'s, no back-off
-  CHECK_MSG(met::backoff_s == 0 && met::retry_soon && !met::due(), "backed off before MET Norway ever answered");
-  panel_http.down = true;
-  met::not_before = 0;
-  yaml_every(1000);
-  CHECK_MSG(met::fetching && !tasks.empty(), "the early retry didn't ask");
+  web.down = true;  // right after boot the network may not be up: a quick retry, no back-off
   run_task();
+  CHECK_MSG(sc.backoff_s == 0 && sc.early_tries == 1 && !sc.due() && met_status == "Couldn't reach MET Norway",
+            "backed off before MET Norway ever answered: '%s'", met_status.c_str());
+  sc.not_before = 0;
   yaml_every(1000);
-  CHECK_MSG(met::early_tries == 2 && met::retry_soon, "the retry's failure isn't counted as early");
-  for (int i = 0; i < 2; i++)
-    met::unreachable();
-  CHECK_MSG(met::backoff_s == 600 && !met::due() && !met::retry_soon, "kept trying without backing off");
+  CHECK_MSG(fc.asking && !tasks.empty(), "the early retry didn't ask");
+  run_task();
+  CHECK_MSG(sc.early_tries == 2, "the retry's failure isn't counted as early");
+  for (int i = 0; i < 2; i++) {
+    sc.not_before = 0;
+    yaml_every(1000);
+    run_task();
+  }
+  CHECK_MSG(sc.backoff_s == 600 && !sc.due(), "kept trying without backing off");
   // the request, in a task of its own: no answer, then the forecast in 512-byte reads, then without the RAM
   auto ask = [] {
-    panel_weather_fetch.execute();  // met.yaml's, every update_interval
+    yaml_every(1000);  // panel.yaml's
     if (!tasks.empty())
       run_task();
-    yaml_every(1000);  // and its poll()
   };
-  met::not_before = 0;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
-            met_status.c_str(), (unsigned) met::backoff_s);
-  panel_http.down = false;
-  panel_http.body = met_sample();
-  panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
-  panel_http.expires = "Mon, 19 Oct 2026 12:00:00 GMT";
-  met::not_before = 0;
-  met::fetch();
-  met::fetch();  // still running, it waits for that one
-  met::poll();   // nothing yet
-  CHECK_MSG(tasks.size() == 1 && met::fetching && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
+  CHECK_MSG(sc.backoff_s == 1200 && met_status == "Couldn't reach MET Norway", "no answer: %s, back-off %u",
+            met_status.c_str(), (unsigned) sc.backoff_s);
+  web.down = false;
+  web.body = sample("met_sample.json");
+  web.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
+  web.expires = "Mon, 19 Oct 2026 12:00:00 GMT";
+  sc.not_before = 0;
+  yaml_every(1000);
+  yaml_every(1000);  // still asking, it waits for that one
+  fetch::loop();     // nothing yet
+  CHECK_MSG(tasks.size() == 1 && fc.asking && !met::weather.ok, "%u requests at once", (unsigned) tasks.size());
   run_task();
-  met::poll();
-  CHECK_MSG(!met::fetching && met::weather.ok, "the answer wasn't taken from the request's task");
-  CHECK_MSG(panel_http.sent.empty(), "If-Modified-Since sent before any Last-Modified");
-  CHECK_MSG(met::not_before == 1792411200 && !met::due(), "asks again before Expires: %u", (unsigned) met::not_before);
-  for (size_t block : {sizeof(met::Fetch) - 1, sizeof(met::Fetch) + 100}) {  // the request, then its task's stack
-    met::not_before = 0;
-    ram_block = block;
-    met::fetch();
-    CHECK_MSG(
-        met_status == "No RAM for the forecast" && met::not_before == 1792410000 && !met::fetching && tasks.empty(),
-        "without %u bytes of RAM: %s, next at %u", (unsigned) block, met_status.c_str(), (unsigned) met::not_before);
-  }
+  CHECK_MSG(!fc.asking && met::weather.ok, "the answer wasn't taken from the request's task");
+  CHECK_MSG(web.sent.empty(), "If-Modified-Since sent before any Last-Modified");
+  CHECK_MSG(sc.not_before == 1792411200 && !sc.due(), "asks again before Expires: %u", (unsigned) sc.not_before);
+  sc.not_before = 0;
+  ram_block = fetch::STACK - 1;  // for its task's stack
+  yaml_every(1000);
+  CHECK_MSG(met_status == "No RAM for the forecast" && sc.not_before == 1792410000 && !fc.asking && tasks.empty(),
+            "without the RAM: %s, next at %u", met_status.c_str(), (unsigned) sc.not_before);
   ram_block = 100 * 1024;
-  met::not_before = 0;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.sent.size() == 1 && panel_http.sent[0].name == "If-Modified-Since" &&
-                panel_http.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
+  CHECK_MSG(web.sent.size() == 1 && web.sent[0].name == "If-Modified-Since" &&
+                web.sent[0].value == "Mon, 19 Oct 2026 11:34:38 GMT",
             "If-Modified-Since not sent with the Last-Modified we have");
   CHECK_MSG(met::weather.ok && !strcmp(met::weather.symbol, "partlycloudy_day") &&
                 fabsf(met::weather.temp - 6.6f) < 0.01f && fabsf(met::weather.wind - 1.6f) < 0.01f &&
                 fabsf(met::weather.gust - 3.3f) < 0.01f,
             "forecast read as %s, %.1f, wind %.1f gusting %.1f", met::weather.symbol, met::weather.temp,
             met::weather.wind, met::weather.gust);
-  CHECK_MSG(met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", met::modified.c_str());
+  CHECK_MSG(fc.modified == "Mon, 19 Oct 2026 11:34:38 GMT", "Last-Modified not kept: %s", fc.modified.c_str());
   CHECK_MSG(met::weather.hours == 12 && met::weather.hour[2].time == met::weather.hour[0].time + 7200,
             "forecast hours: %d", met::weather.hours);
   CHECK_MSG(met_status.find("partlycloudy_day") == 0, "status: %s", met_status.c_str());
-  panel_http.status = 304;  // not modified, through the task too
-  met::not_before = 0;
+  web.status = 304;  // not modified, through the task too
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && met::not_before == 1792411200,
-            "a 304: %s, next at %u", met_status.c_str(), (unsigned) met::not_before);
-  // a server error keeps the forecast and asks again a minute later, at once rather than at met.yaml's next check,
-  // then two, and Retry-After makes it wait longer
-  panel_http.status = 503;
-  met::not_before = 0;
+  CHECK_MSG(met::weather.ok && met_status.find("partlycloudy_day") == 0 && sc.not_before == 1792411200,
+            "a 304: %s, next at %u", met_status.c_str(), (unsigned) sc.not_before);
+  // a server error keeps the forecast and asks again a minute later, then two, and Retry-After makes it wait longer
+  web.status = 503;
+  sc.not_before = 0;
   ask();
   uint32_t t0 = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK_MSG(met::weather.ok && met_status == "Kept the last forecast (HTTP 503)" && met::not_before == t0 + 60 &&
-                met::retry_soon,
-            "a 503: '%s', next in %d s", met_status.c_str(), (int) (met::not_before - t0));
+  CHECK_MSG(met::weather.ok && met_status == "Kept the last forecast (HTTP 503)" && sc.not_before == t0 + 60,
+            "a 503: '%s', next in %d s", met_status.c_str(), (int) (sc.not_before - t0));
   flexit_panel_time.t.timestamp += 60;
   yaml_every(1000);
-  CHECK_MSG(met::fetching && !tasks.empty(), "not asked again a minute after a 503");
-  panel_http.status = 502;
-  panel_http.retry_after = "600";
+  CHECK_MSG(fc.asking && !tasks.empty(), "not asked again a minute after a 503");
+  web.status = 502;
+  web.retry_after = "600";
   run_task();
   yaml_every(1000);
   t0 = (uint32_t) flexit_panel_time.t.timestamp;
-  CHECK_MSG(met::weather.ok && met::backoff_s == 120 && met::not_before == t0 + 600,
-            "a 502 with Retry-After 600: back-off %u, next in %d s", (unsigned) met::backoff_s,
-            (int) (met::not_before - t0));
-  panel_http.retry_after.clear();
-  panel_http.status = 200;
-  met::not_before = 0;
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 120 && sc.not_before == t0 + 600,
+            "a 502 with Retry-After 600: back-off %u, next in %d s", (unsigned) sc.backoff_s,
+            (int) (sc.not_before - t0));
+  web.retry_after.clear();
+  web.status = 200;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.ok && met::backoff_s == 0 && !met::retry_soon, "the forecast after the errors: '%s'",
-            met_status.c_str());
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 0, "the forecast after the errors: '%s'", met_status.c_str());
   flexit_panel_time.t.timestamp -= 60;
   // a 301 is followed, three times at most
-  panel_http.location = std::string(met::url) + "&moved=1";
-  panel_http.moves = 1;
-  met::not_before = 0;
+  web.location = std::string(fc.url) + "&moved=1";
+  web.moves = 1;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.url == panel_http.location && met::weather.ok && met::backoff_s == 0,
-            "after a 301: asked for %s, %s", panel_http.url.c_str(), met_status.c_str());
-  panel_http.moves = 9;
-  met::not_before = 0;
+  CHECK_MSG(web.url == web.location && met::weather.ok && sc.backoff_s == 0, "after a 301: asked for %s, %s",
+            web.url.c_str(), met_status.c_str());
+  web.moves = 9;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(panel_http.moves == 5 && met_status == "Kept the last forecast (HTTP 301)",
-            "moved on and on: %d requests, '%s'", 9 - panel_http.moves, met_status.c_str());
-  panel_http.moves = 0;
+  CHECK_MSG(web.moves == 5 && met_status == "Kept the last forecast (HTTP 301)", "moved on and on: %d requests, '%s'",
+            9 - web.moves, met_status.c_str());
+  web.moves = 0;
   // A cut-off answer counts as none, wherever it's cut: the forecast and its Last-Modified stay, and it's asked
   // again in minutes
-  panel_http.last_modified = "Tue, 20 Oct 2026 08:00:00 GMT";
+  web.last_modified = "Tue, 20 Oct 2026 08:00:00 GMT";
   for (size_t cut : {6000, 300})
     for (int with : {0, -1}) {  // the connection closed, or failed
-      panel_http.cut = cut;
-      panel_http.cut_with = with;
-      met::backoff_s = 0;
-      met::not_before = 0;
+      web.cut = cut;
+      web.cut_with = with;
+      sc.backoff_s = 0;
+      sc.not_before = 0;
       ask();
-      CHECK_MSG(met_status == "Couldn't reach MET Norway" && met::backoff_s == 600 && met::weather.hours == 12 &&
-                    met::modified == "Mon, 19 Oct 2026 11:34:38 GMT",
+      CHECK_MSG(met_status == "Couldn't reach MET Norway" && sc.backoff_s == 600 && met::weather.hours == 12 &&
+                    fc.modified == "Mon, 19 Oct 2026 11:34:38 GMT",
                 "cut off after %u bytes, read() %d: '%s', back-off %u, %d hours, Last-Modified '%s'", (unsigned) cut,
-                with, met_status.c_str(), (unsigned) met::backoff_s, met::weather.hours, met::modified.c_str());
+                with, met_status.c_str(), (unsigned) sc.backoff_s, met::weather.hours, fc.modified.c_str());
     }
   // but the reader can have all it needs before the cut
-  std::string b = met_sample();
+  std::string b = sample("met_sample.json");
   size_t e = b.find("{\"time\""), f = b.find("{\"time\"", e + 1);
-  panel_http.body = b.substr(0, f);
+  web.body = b.substr(0, f);
   for (int i = 0; i < 30; i++)
-    panel_http.body += b.substr(e, f - e);
-  panel_http.cut = panel_http.body.size() - 100;
-  met::not_before = 0;
+    web.body += b.substr(e, f - e);
+  web.cut = web.body.size() - 100;
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.hours == met::HOURS && met::modified == "Tue, 20 Oct 2026 08:00:00 GMT",
+  CHECK_MSG(met::weather.hours == met::HOURS && fc.modified == "Tue, 20 Oct 2026 08:00:00 GMT",
             "cut off once it had %d hours: %d taken, '%s'", met::HOURS, met::weather.hours, met_status.c_str());
-  panel_http.cut = SIZE_MAX;
-  panel_http.body = b;
-  panel_http.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
-  met::not_before = 0;
+  web.cut = SIZE_MAX;
+  web.body = b;
+  web.last_modified = "Mon, 19 Oct 2026 11:34:38 GMT";
+  sc.not_before = 0;
   ask();
-  CHECK_MSG(met::weather.hours == 12 && met::backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
+  CHECK_MSG(met::weather.hours == 12 && sc.backoff_s == 0, "the forecast not back: %d hours", met::weather.hours);
 }
 
-// The reader with the answer cut anywhere, more hours than it needs, and an hour too big for its buffer
+// The reader with the answer cut anywhere, more hours than it needs, and a value too long for it
 static void met_reading() {
   step("MET Norway's answer read in pieces");
-  std::string b = met_sample();
+  std::string b = sample("met_sample.json");
   bool stopped;
   met::Weather w1 = read_met(b, 1, &stopped);
   CHECK_MSG(!stopped && w1.hours == met::weather.hours && w1.temp == met::weather.temp &&
@@ -2479,9 +2471,10 @@ static void met_reading() {
     many += b.substr(e, f - e);
   met::Weather w2 = read_met(many, 512, &stopped);
   CHECK_MSG(stopped && w2.ok && w2.hours == met::HOURS, "30 hours: %d read, stopped %d", w2.hours, stopped);
+  // a value longer than the reader keeps is cut, and the hour it was in, without a time, skipped
   std::string big = b.substr(0, f) + "{\"time\":\"" + std::string(5000, 'x') + "\"}," + b.substr(e, f - e);
   met::Weather w3 = read_met(big, 512, &stopped);
-  CHECK_MSG(stopped && w3.ok && w3.hours == 1, "an hour over 4 KB: %d hours, stopped %d", w3.hours, stopped);
+  CHECK_MSG(!stopped && w3.ok && w3.hours == 2, "a value over 5000 bytes: %d hours, stopped %d", w3.hours, stopped);
   // MET's longest symbols, and one longer still, which is cut short
   auto symbols = [&](const char *day, const char *night) {
     std::string s = b;
@@ -2558,56 +2551,57 @@ static void met_answers() {
   step("MET Norway's answers");
   const met::Weather sample = met::weather;                                    // the forecast as read from the sample
   auto fetched = [](int status, const met::Weather &w, const char *expires) {  // an answer from the request
-    met::Fetch f;
-    f.status = status;
-    f.w = w;
-    f.expires = expires;
-    met::fetched(f);
+    auto *r = new met::Ask();
+    r->status = status;
+    r->f.w = w;
+    r->expires = expires;
+    met::forecasts.answered(r);
   };
+  auto unreachable = [&] { fetched(0, {}, ""); };
+  fetch::Schedule &sc = met::forecasts.schedule;
   fetched(304, {}, "Mon, 19 Oct 2026 13:00:00 GMT");  // not modified: nothing changes
-  CHECK_MSG(met::weather.ok && met::modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
-  CHECK_MSG(met::not_before == 1792414800, "the 304's Expires not kept");
+  CHECK_MSG(met::weather.ok && met::forecasts.modified == "Mon, 19 Oct 2026 11:34:38 GMT", "304 changed the forecast");
+  CHECK_MSG(sc.not_before == 1792414800, "the 304's Expires not kept");
   uint32_t now = (uint32_t) flexit_panel_time.t.timestamp;
   for (uint32_t want : {60, 120, 240, 480, 960, 1800, 1800}) {
     fetched(want == 60 ? 500 : 503, {}, "");
     CHECK_MSG(
-        met::weather.ok && met::not_before == now + want && met::retry_soon &&
+        met::weather.ok && sc.not_before == now + want &&
             met_status == (want == 60 ? "Kept the last forecast (HTTP 500)" : "Kept the last forecast (HTTP 503)"),
-        "a server error: '%s', next in %d s, not %u", met_status.c_str(), (int) (met::not_before - now),
-        (unsigned) want);
+        "a server error: '%s', next in %d s, not %u", met_status.c_str(), (int) (sc.not_before - now), (unsigned) want);
   }
   fetched(429, {}, "");
-  CHECK_MSG(met::not_before == now + 3600 && !met::retry_soon, "a 429 after server errors waited %d s",
-            (int) (met::not_before - now));
+  CHECK_MSG(sc.not_before == now + 3600, "a 429 after server errors waited %d s", (int) (sc.not_before - now));
   fetched(429, {}, "");
-  CHECK_MSG(met::not_before == now + 7200 && !met::due(), "back-off not doubled after a 429");
-  CHECK_MSG(
-      met::retry_after_s("120", now) == 120 && met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792414500) == 300 &&
-          met::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792415000) == 0 && met::retry_after_s("", now) == 0,
-      "Retry-After read wrong");
-  met::unreachable();
-  CHECK_MSG(met::backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(sc.not_before == now + 7200 && !sc.due(), "back-off not doubled after a 429");
+  CHECK_MSG(fetch::retry_after_s("120", now) == 120 &&
+                fetch::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792414500) == 300 &&
+                fetch::retry_after_s("Mon, 19 Oct 2026 13:00:00 GMT", 1792415000) == 0 &&
+                fetch::retry_after_s("", now) == 0,
+            "Retry-After read wrong");
+  unreachable();
+  CHECK_MSG(sc.backoff_s == 3600, "no answer after a 429 waited %u s", (unsigned) sc.backoff_s);
   flexit_panel_time.t.timestamp += 7200;
-  CHECK_MSG(met::due(), "not due after the back-off");
+  CHECK_MSG(sc.due(), "not due after the back-off");
   fetched(304, {}, "");  // without Expires, an hour
-  CHECK_MSG(met::backoff_s == 0 && met::not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
+  CHECK_MSG(sc.backoff_s == 0 && sc.not_before == now + 7200 + 3600, "an answer didn't reset the back-off");
   for (uint32_t want : {600, 1200, 2400, 3600, 3600}) {
-    met::unreachable();  // a short drop costs minutes, not hours
-    CHECK_MSG(met::backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
-              (unsigned) met::backoff_s, (unsigned) want);
+    unreachable();  // a short drop costs minutes, not hours
+    CHECK_MSG(sc.backoff_s == want && met_status == "Couldn't reach MET Norway", "no answer backed off %u s, not %u",
+              (unsigned) sc.backoff_s, (unsigned) want);
   }
   fetched(403, {}, "");
-  CHECK_MSG(met::backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) met::backoff_s);
+  CHECK_MSG(sc.backoff_s == 7200, "a refusal after no answers backed off %u s", (unsigned) sc.backoff_s);
   met::weather.ok = false;
   fetched(203, sample, "");  // a deprecated product, its data is still good
-  CHECK_MSG(met::weather.ok && met::backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
+  CHECK_MSG(met::weather.ok && sc.backoff_s == 0, "a 203 not taken: %s", met_status.c_str());
   static const struct {
     const char *date;
     uint32_t t;
   } DATES[] = {{"Fri, 31 Dec 1999 23:59:59 GMT", 946684799}, {"soon", 0}, {"Mon, 19 Foo 2026 11:34:38 GMT", 0}};
   for (auto d : DATES)
-    CHECK_MSG(met::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date,
-              (unsigned) met::http_date(d.date), (unsigned) d.t);
+    CHECK_MSG(fetch::http_date(d.date) == d.t, "HTTP date '%s' read as %u, not %u", d.date,
+              (unsigned) fetch::http_date(d.date), (unsigned) d.t);
 }
 
 // Through 304s and refusals the tile follows the forecast's hours, and the forecast is dropped once it runs out
@@ -2622,7 +2616,7 @@ static void met_forecast_hours() {
             "4 hours on the tile shows %d, the hour has %.1f", (int) tile.value_, met::weather.hour[4].temp);
   flexit_panel_time.t.timestamp = met::ends(met::weather);
   met::redraw();
-  CHECK_MSG(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::modified.empty() &&
+  CHECK_MSG(!met::weather.ok && tile.value_ == ITEM_UNKNOWN && met::forecasts.modified.empty() &&
                 met_status == "The forecast has run out",
             "a forecast that ran out: ok %d, tile %d, '%s'", met::weather.ok, (int) tile.value_, met_status.c_str());
   run(3);
@@ -3007,16 +3001,15 @@ static void online_again() {
 
 static void online_grew() {
   step("a shown online picture that grew too big for the ESP");
-  // 200 KB on the server
-  static int asked = 0, fetched = 0;
+  static int fetched = 0;
+  web.status = 200;
+  web.length = 200 * 1024;
+  web.type = "image/jpeg";
+  int asked = web.asked;
   auto o = std::make_shared<pic::Online>();
+  o->url = "http://x/flaky";
   o->every = 1000;
   o->format = "JPEG";
-  o->head = [](const std::string &, size_t &n, std::string &) {
-    asked++;
-    n = 200 * 1024;
-    return 200;
-  };
   o->busy = [] { return false; };
   o->fetch = [] {
     fetched++;
@@ -3024,6 +3017,7 @@ static void online_grew() {
   };
   pic::online["flaky"] = o;
   run(30);
+  asked = web.asked - asked;
   CHECK_MSG(asked >= 3 && asked <= 5 && !fetched && panel_picture_status.state.rfind("flaky: too big", 0) == 0,
             "asked %d times, fetched %d, status '%s'", asked, fetched, panel_picture_status.state.c_str());
   pic::online.erase("flaky");
@@ -3031,8 +3025,8 @@ static void online_grew() {
 
 static void online_too_big() {
   step("online pictures: one too big for the ESP, and a Home Assistant camera's token");
-  panel_http.length = 120 * 1024;  // a JPEG, kept whole
-  panel_http.type = "image/jpeg";
+  web.length = 120 * 1024;  // a JPEG, kept whole
+  web.type = "image/jpeg";
   pic::show("radar");
   run(10);
   CHECK_MSG(!panel_picture_radar.updates && panel_picture_status.state.rfind("radar: too big for the ESP", 0) == 0,
@@ -3058,7 +3052,9 @@ static void online_too_big() {
 
 static void online_downloads() {
   step("an online picture's downloads and refreshes");
-  pic::add_online_image("webcam", webcam, cam_server, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto");
+  web.length = 30000;
+  web.asked = 0;
+  pic::add_online_image("webcam", webcam, "http://x/webcam", "10min", "auto", "160x120", "auto", "auto");
   pic::Online &o = *pic::online["webcam"];
   CHECK_MSG(o.every == 600000 && o.pixels == 160 * 120 * 2 && o.format == "AUTO", "webcam: every %u, %u bytes, %s",
             (unsigned) o.every, (unsigned) o.pixels, o.format.c_str());
@@ -3076,8 +3072,8 @@ static void online_downloads() {
   };
   pic::show("webcam");
   run(3);
-  CHECK_MSG(cam_server.heads == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
-            "not downloaded when shown: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+  CHECK_MSG(web.asked == 1 && webcam.updates == 1 && panel_picture_status.state == "webcam: waiting for it",
+            "not downloaded when shown: asked %d, %d downloads, '%s'", web.asked, webcam.updates,
             panel_picture_status.state.c_str());
   draw_photo(webcam, 160, 120);  // the download came
   webcam.decoding = false;
@@ -3093,7 +3089,7 @@ static void online_downloads() {
   uint8_t ids = panel::transfer_ids;
   o.fetched = millis() - o.every;
   run(1);
-  CHECK_MSG(cam_server.heads == 2 && webcam.updates == 2, "not downloaded again after update_interval");
+  CHECK_MSG(web.asked == 2 && webcam.updates == 2, "not downloaded again after update_interval");
   draw_photo(webcam, 160, 120);
   webcam.decoding = false;
   pic::changed("webcam");
@@ -3108,9 +3104,9 @@ static void online_downloads() {
   webcam.decoding = false;
   pic::failed("webcam");
   run(20);
-  CHECK_MSG(cam_server.heads == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
+  CHECK_MSG(web.asked == 3 && webcam.updates == 3 && panel_picture_status.state.rfind("Shown: webcam", 0) == 0 &&
                 panel_pic() == 2,
-            "after a failed refresh: asked %d, %d downloads, '%s'", cam_server.heads, webcam.updates,
+            "after a failed refresh: asked %d, %d downloads, '%s'", web.asked, webcam.updates,
             panel_picture_status.state.c_str());
 
   // a failed first download: the reason stays, the next try waits
@@ -3133,17 +3129,17 @@ static void online_fits() {
   step("an online picture's RAM checks");
   pic::Online &o = *pic::online["webcam"];
   auto fits = [&](int c, size_t n, const char *t) {
-    cam_server.code = c;
-    cam_server.size = n;
-    cam_server.type = t;
-    o.answer = {o.url, c, n, t};
+    web.status = c;
+    web.length = n;
+    web.type = t;
+    o.answer = {c, n, t};
     return pic::fits("webcam", o);
   };
   auto download = [&] {  // asks the server, and starts the download with its answer
     pic::download("webcam", o);
     run_asks();
     if (o.asking == pic::Online::ANSWERED)
-      pic::answered("webcam", o);
+      pic::start_download("webcam", o);
   };
   ram_free = 100 * 1024;
   CHECK_MSG(fits(200, 30000, "image/jpeg"), "a JPEG the size of the download buffer it has refused");
@@ -3163,36 +3159,37 @@ static void online_fits() {
   o.format = "AUTO";
   // a download that doesn't start doesn't grow the buffer
   webcam.fail = true;
-  cam_server.size = 40000;
-  int heads = cam_server.heads;
+  web.length = 40000;
+  int asked = web.asked;
   pic::download("webcam", o);  // in a task of its own, the loop goes on meanwhile
-  CHECK_MSG(asks.size() == 1 && cam_server.heads == heads && o.asking == pic::Online::ASKING,
-            "the server asked in the loop: %d times, %u tasks", cam_server.heads - heads, (unsigned) asks.size());
+  CHECK_MSG(tasks.size() == 1 && web.asked == asked && o.asking == pic::Online::ASKING,
+            "the server asked in the loop: %d times, %u tasks", web.asked - asked, (unsigned) tasks.size());
   run_asks();
-  pic::answered("webcam", o);
+  pic::start_download("webcam", o);
   webcam.fail = false;
   CHECK_MSG(o.kept.buffer == 30000, "a download that didn't start grew the buffer to %u", (unsigned) o.kept.buffer);
   download();
-  int updates = webcam.updates, asked = cam_server.heads;
-  cam_server.size = 50000;
+  int updates = webcam.updates;
+  asked = web.asked;
+  web.length = 50000;
   download();  // while that one still runs
   webcam.decoding = false;
-  CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && cam_server.heads == asked,
+  CHECK_MSG(o.kept.buffer == 40000 && webcam.updates == updates && web.asked == asked,
             "buffer %u after two downloads, %d started, the server asked %d times", (unsigned) o.kept.buffer,
-            webcam.updates - updates + 1, cam_server.heads - asked + 1);
+            webcam.updates - updates + 1, web.asked - asked + 1);
   // the first PNG needs room for its decoder too
   ram_free = 120 * 1024;
   CHECK_MSG(!fits(200, 5000, "image/png") && fits(200, 30000, "image/jpeg"), "a first PNG's decoder not counted");
   ram_free = 200 * 1024;
-  cam_server.type = "image/png";
+  web.type = "image/png";
   download();
   webcam.decoding = false;
   ram_free = 120 * 1024;
   CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
   ram_free = 200 * 1024;
-  cam_server.code = 200;
-  cam_server.size = 30000;
-  cam_server.type = "image/jpeg";
+  web.status = 200;
+  web.length = 30000;
+  web.type = "image/jpeg";
 }
 
 // Another picture picked while it's being made: its pixels are freed
@@ -3203,6 +3200,279 @@ static void online_picked() {
   online_pick_after = 1000;
   CHECK_MSG(picture("dusk, picked while webcam was being made", 6000) >= 0 && !webcam.w && !online_pick_after,
             "webcam's pixels kept: %dx%d", webcam.w, webcam.h);
+}
+
+// ---------------------------------------------------------------- the space pictures
+namespace marks = flexit::panel::marks;
+
+// A picture from the PPMs the Makefile makes, see ESP_PICTURES
+static void picture_of(Image &img, const char *file) {
+  CHECK_MSG(load_ppm(img, (std::string(PICTURES) + file).c_str()), "no %s%s", PICTURES, file);
+}
+
+// Whether picture name's marks have text s
+static bool has_mark(const std::string &name, const std::string &s) {
+  for (const marks::Op &o : marks::all[name].layer.ops)
+    if (o.kind == marks::Op::TEXT && o.text == s)
+      return true;
+  return false;
+}
+
+// Picture name's marks' texts, for a failure's message
+static std::string mark_texts(const std::string &name) {
+  std::string t;
+  for (const marks::Op &o : marks::all[name].layer.ops)
+    if (o.kind == marks::Op::TEXT)
+      t += (t.empty() ? "" : " | ") + o.text;
+  return t;
+}
+
+// a is due, the other askers wait
+static void ask_only(fetch::Asker &a) {
+  for (fetch::Asker *o : fetch::askers)
+    o->schedule.not_before = o == &a ? 0 : UINT32_MAX;
+}
+
+// A photo of the day: its list asked for and read, its photo downloaded and shown, and its marks over it
+static void photo_of_the_day(const char *name, fetch::Asker &list, OnlineImage &img, const char *body,
+                             const std::function<void()> &draw) {
+  std::string k = marks::overlay_of(name);
+  pic::show(name);
+  run(5);
+  CHECK_MSG(panel_picture_status.state == std::string(name) + ": looking for the newest photo" && !img.updates,
+            "%s before its list: '%s', %d downloads", name, panel_picture_status.state.c_str(), img.updates);
+  web.body = sample(body);
+  web.type = "application/json";
+  ask_only(list);
+  yaml_every(1000);
+  CHECK_MSG(list.asking && tasks.size() == 1, "%s's list not asked for", name);
+  run_task();
+  CHECK_MSG(!list.asking && list.have && list.schedule.not_before == fetch::now_s() + list.every_s && !img.url.empty(),
+            "%s's list not taken: next in %d s, URL '%s'", name, (int) (list.schedule.not_before - fetch::now_s()),
+            img.url.c_str());
+  web.body.clear();
+  web.type = "image/jpeg";
+  web.length = 11600;
+  CHECK_MSG(run_until([&] { return img.updates == 1; }, 100) >= 0, "%s's photo not downloaded", name);
+  draw();
+  img.decoding = false;
+  img.on_download_finished();
+  std::string shown = std::string("Shown: ") + name;  // its pixels are gone once it's made, so not compared
+  CHECK_MSG(run_until([&] { return panel_picture_status.state.rfind(shown, 0) == 0 && settled() && panel_pic() == 2; },
+                      6000) >= 0,
+            "%s not shown: '%s'", name, panel_picture_status.state.c_str());
+  int r = run_until([&] { return overlay::find(k) && overlay::find(k)->state == overlay::SENT && settled(); }, 600);
+  CHECK_MSG(r >= 0 && overlay::find(k)->still, "%s's marks not over it: '%s'", name,
+            panel_animation_status.state.c_str());
+  steps(400);  // they fade in
+  pn_shot(outdir, (std::string("esp_") + name).c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0 && !overlay::find(k), "%s's marks left over dusk", name);
+}
+
+static void space_photos() {
+  step("Mars today and Earth today: NASA's lists read as they stream, the photos shown with their marks over them");
+  time_t then = flexit_panel_time.t.timestamp;  // put back after, for the tests that follow
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793606400;  // 2026-11-02 08:00 UTC
+  tz_offset_s = 3600;                          // Oslo in winter time
+  Web kept = web;
+  web = Web();
+  const std::string &mars_status = panel_mars_today_status.state, &earth_status = panel_earth_today_status.state;
+
+  // Perseverance's newest sol: its Mastcam-Z colour photo, not the one through the sun filter, the sky camera's, the
+  // Hazcam's or the Navcam's of the sol before
+  photo_of_the_day("mars_today", space::mars::list, panel_picture_mars_today, "mars_sample.json",
+                   [] { picture_of(panel_picture_mars_today, "mars_sample.ppm"); });
+  const space::mars::Photo &p = space::mars::photo;
+  CHECK_MSG(p.sol == 2024 && p.camera == "Mastcam-Z" && p.on_mars == "13:10" && p.elevation < -59 &&
+                p.url.find("/ZL0_2024_0846622537_") != std::string::npos && panel_picture_mars_today.url == p.url,
+            "the photo picked: sol %d, %s at %g, %s", p.sol, p.camera.c_str(), p.elevation, p.url.c_str());
+  CHECK_MSG(mars_status == "Sol 2024, Mastcam-Z, 30 Oct · 10:21", "Mars today's status: '%s'", mars_status.c_str());
+  CHECK_MSG(has_mark("mars_today", "Sol 2024") && has_mark("mars_today", "30 OCT · 13:10 ON MARS") &&
+                has_mark("mars_today", "Jezero crater, by Perseverance's Mastcam-Z"),
+            "Mars today's marks");
+  space::mars::Photo a, b;  // of one sol, the one looking out nearer the horizon, then the later
+  a.sol = b.sol = 9;
+  a.elevation = -60;
+  b.elevation = -8;
+  bool level = space::mars::better(b, a);
+  a.elevation = -6;
+  a.taken = 2;
+  b.taken = 1;
+  CHECK_MSG(level && space::mars::better(a, b), "a photo of the ground picked over one of the view");
+
+  // a server error keeps the photo and asks again a minute later
+  std::string url = p.url;
+  web.status = 503;
+  ask_only(space::mars::list);
+  yaml_every(1000);
+  run_task();
+  CHECK_MSG(mars_status == "Kept the last photo (HTTP 503)" && p.url == url &&
+                space::mars::list.schedule.not_before == fetch::now_s() + 60,
+            "after a server error: '%s', next in %d s", mars_status.c_str(),
+            (int) (space::mars::list.schedule.not_before - fetch::now_s()));
+  web.status = 200;
+
+  // EPIC's newest of the day, late on 1 November
+  photo_of_the_day("earth_today", space::earth::list, panel_picture_earth_today, "epic_sample.json",
+                   [] { picture_of(panel_picture_earth_today, "epic_sample.ppm"); });
+  CHECK_MSG(panel_picture_earth_today.url ==
+                "https://epic.gsfc.nasa.gov/archive/natural/2026/11/01/thumbs/epic_1b_20261101224105.jpg",
+            "Earth today's photo: %s", panel_picture_earth_today.url.c_str());
+  CHECK_MSG(earth_status == "epic_1b_20261101224105, 1 Nov · 23:36", "Earth today's status: '%s'",
+            earth_status.c_str());
+  CHECK_MSG(has_mark("earth_today", "1.49") && has_mark("earth_today", "the Pacific") &&
+                has_mark("earth_today", "6° S 173° W") && has_mark("earth_today", "near Apia") &&
+                has_mark("earth_today", "1 NOV · 23:36"),
+            "Earth today's marks");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
+}
+
+// A rover's waypoints read from body and its picture shown with its track, the marks over it
+static void rover_shown(const char *rover, const char *body) {
+  space::rover::Map &m = *space::rover::map_of(rover);
+  std::string k = marks::overlay_of(rover);
+  web.body = sample(body);
+  ask_only(m);
+  yaml_every(1000);
+  CHECK_MSG(m.asking && tasks.size() == 1, "%s's waypoints not asked for", rover);
+  run_task();
+  CHECK_MSG(m.have && m.track.size() > 20 && m.schedule.not_before == fetch::now_s() + 21600,
+            "%s's waypoints not taken: %u points, next in %d s", rover, (unsigned) m.track.size(),
+            (int) (m.schedule.not_before - fetch::now_s()));
+  pic::show(rover);
+  CHECK_MSG(picture(rover, 6000) >= 0, "%s not shown", rover);
+  int r = run_until([&] { return overlay::find(k) && overlay::find(k)->state == overlay::SENT && settled(); }, 600);
+  CHECK_MSG(r >= 0, "%s's marks not over it: '%s'", rover, panel_animation_status.state.c_str());
+  steps(400);
+  pn_shot(outdir, (std::string("esp_") + rover).c_str());
+}
+
+static void rover_tracks() {
+  step("the rovers: their waypoints read as they stream, their tracks on their maps with the marks over them");
+  time_t then = flexit_panel_time.t.timestamp;
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793606400;  // 2026-11-02 08:00 UTC
+  tz_offset_s = 3600;
+  Web kept = web;
+  web = Web();
+  web.type = "application/json";
+  // Perseverance's sol 2024 began on Earth when its Mastcam-Z photo at 13:10 on Mars, 09:21:10 UTC, says it did
+  const space::rover::Rover &m20 = space::rover::ROVERS[0];
+  int32_t off = (int32_t) (space::sol_start(2024, m20.landed) - 1793303349u);
+  CHECK_MSG(abs(off) < 120, "sol 2024 began %d s off", off);
+
+  rover_shown("perseverance", "perseverance_sample.json");
+  space::rover::Map &m = *space::rover::map_of("perseverance");
+  space::rover::Point end = space::rover::point_of(m20, m.last.lon, m.last.lat, 0);
+  CHECK_MSG(m.first.sol == 13 && m.last.sol == 2022 && m.track.size() < 79 && m.track.back().x == end.x &&
+                m.track.back().y == end.y && panel_perseverance_status.state == "Sol 2022, 45.25 km",
+            "Perseverance: sols %d to %d, %u points, '%s'", m.first.sol, m.last.sol, (unsigned) m.track.size(),
+            panel_perseverance_status.state.c_str());
+  CHECK_MSG(has_mark("perseverance", "45.25") && has_mark("perseverance", "634") &&
+                has_mark("perseverance", "DRIVEN SINCE 2021") && has_mark("perseverance", "Landed 2021") &&
+                has_mark("perseverance", "NOW") && has_mark("perseverance", "LAST 120 SOLS") &&
+                has_mark("perseverance", "2 KM"),
+            "Perseverance's marks");
+  // driven off the map, west: an arrow at the edge
+  space::rover::Map away = m;
+  away.track.push_back(space::rover::point_of(m20, 77.0, 18.47, 2030));
+  away.last.sol = 2030;
+  marks::Layer l = space::rover::layer_of(away);
+  const marks::Op *arrow = nullptr;
+  for (const marks::Op &o : l.ops)
+    if (o.kind == marks::Op::POLY)
+      arrow = &o;
+  CHECK_MSG(arrow && arrow->box.x0 >= 0 && arrow->box.x0 < 12 && fabsf(arrow->box.y0 - 116) < 8,
+            "no arrow at the left edge: %g, %g", arrow ? arrow->box.x0 : -1, arrow ? arrow->box.y0 : -1);
+
+  rover_shown("curiosity", "curiosity_sample.json");
+  CHECK_MSG(panel_curiosity_status.state == "Sol 5045, 38.48 km" && has_mark("curiosity", "1013") &&
+                has_mark("curiosity", "UP MOUNT SHARP"),
+            "Curiosity: '%s'", panel_curiosity_status.state.c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0 && !overlay::find("curiosity_marks"), "Curiosity's marks left over dusk");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
+}
+
+// The probe Horizons is being asked about
+static space::probes::Horizons *asked() {
+  return static_cast<space::probes::Horizons *>(space::probes::horizons.asking);
+}
+
+// A round of JPL Horizons' answers, each probe's from horizons_sample.txt as its question comes
+static void horizons_round() {
+  std::string all = sample("horizons_sample.txt");
+  while (space::probes::horizons.asking && !tasks.empty()) {
+    int id = space::probes::PROBES[asked()->probe].id;
+    size_t at = all.find("(" + std::to_string(id) + ")"), from = all.rfind("API VERSION", at),
+           to = all.find("API VERSION", at);
+    web.body = all.substr(from, to == std::string::npos ? to : to - from);
+    run_task();
+  }
+}
+
+static void probes_chart() {
+  step("the probes: JPL Horizons asked where each is, one after the other, the planets worked out, on a chart");
+  time_t then = flexit_panel_time.t.timestamp;
+  int32_t tz = tz_offset_s;
+  flexit_panel_time.t.timestamp = 1793880000;  // 2026-11-05 12:00 UTC, the sample's day
+  tz_offset_s = 3600;
+  Web kept = web;
+  web = Web();
+  web.type = "text/plain";
+  pic::show("probes");
+  run(5);
+  CHECK_MSG(panel_picture_status.state == "probes: asking JPL Horizons where they are", "before the answers: '%s'",
+            panel_picture_status.state.c_str());
+  ask_only(space::probes::horizons);
+  yaml_every(1000);
+  CHECK_MSG(asked() && asked()->url.find("COMMAND=%27-31%27") != std::string::npos &&
+                asked()->url.find("START_TIME=%272026-11-05%27&STOP_TIME=%272026-11-06%27") != std::string::npos,
+            "the first question: %s", asked() ? asked()->url.c_str() : "none");
+  horizons_round();
+  int known = 0;
+  for (auto &t : space::probes::tracks)
+    known += t.ok;
+  CHECK_MSG(known == space::probes::N && panel_probes_status.state == "11 probes, 5 Nov · 13:00" &&
+                space::probes::horizons.schedule.not_before == fetch::now_s() + 86400,
+            "after a round: %d probes, '%s'", known, panel_probes_status.state.c_str());
+  // the light-day: Voyager 1's signal takes a day on 19 November 2026, as JPL has it
+  CHECK_MSG(has_mark("probes", "Voyager 1") && has_mark("probes", "172") && has_mark("probes", "144") &&
+                has_mark("probes", "66") && has_mark("probes", "VOYAGER 1'S SIGNAL") &&
+                has_mark("probes", "A light-day on 19 Nov"),
+            "the farthest: %s", mark_texts("probes").c_str());
+  CHECK_MSG(has_mark("probes", "Mars") && has_mark("probes", "Psyche") && has_mark("probes", "Lucy") &&
+                has_mark("probes", "Neptune") && space::probes::k > 80,
+            "the chart's marks, at %g px an AU", space::probes::k);
+  CHECK_MSG(picture("probes", 6000) >= 0, "probes not shown");
+  int r = run_until(
+      [] {
+        return overlay::find("probes_marks") && overlay::find("probes_marks")->state == overlay::SENT && settled();
+      },
+      600);
+  CHECK_MSG(r >= 0, "the probes' marks not over it: '%s'", panel_animation_status.state.c_str());
+  steps(400);
+  pn_shot(outdir, "esp_probes");
+  // a server error part way: what came stays, the round is asked again
+  ask_only(space::probes::horizons);
+  yaml_every(1000);
+  run_task();
+  web.status = 500;
+  run_task();
+  CHECK_MSG(!asked() && panel_probes_status.state == "Kept the last positions (HTTP 500)" &&
+                space::probes::tracks[1].ok && space::probes::horizons.schedule.not_before == fetch::now_s() + 60,
+            "after a server error: '%s'", panel_probes_status.state.c_str());
+  pic::show("dusk");
+  CHECK_MSG(picture("dusk", 6000) >= 0, "dusk not shown");
+  web = kept;
+  flexit_panel_time.t.timestamp = then;
+  tz_offset_s = tz;
 }
 
 static void picture_no_ram() {
@@ -3632,6 +3902,9 @@ int main(int argc, char **argv) {
   online_downloads();
   online_fits();
   online_picked();
+  space_photos();
+  rover_tracks();
+  probes_chart();
   picture_no_ram();
   actions_kept();
   number_late();

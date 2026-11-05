@@ -208,7 +208,8 @@ static void live_kept() {
   uint16_t &heat = server->hold[flexit_modbus_server::REG_PERCENTAGE_HEATING], before = heat;
   heat = 40;
   yaml_every(5 * 60000);
-  CHECK_MSG(met::options.heater_pct == 40 && !met::fetching && picture("the weather with the heater on", 3000) >= 0,
+  CHECK_MSG(met::options.heater_pct == 40 && !met::forecasts.asking &&
+                picture("the weather with the heater on", 3000) >= 0,
             "the heater at 40 %%: %d in the picture", met::options.heater_pct);
   heat = before;
   yaml_every(5 * 60000);

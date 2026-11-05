@@ -1,4 +1,4 @@
-// ESP-IDF's HTTP client, as much of it as met.h uses. harness.cpp answers from panel_http, the fake internet.
+// ESP-IDF's HTTP client, as much of it as fetch.h uses. harness.cpp answers from web, the fake internet.
 #pragma once
 #include <cstdint>
 typedef int esp_err_t;
@@ -14,6 +14,7 @@ typedef struct {
 typedef struct {
   const char *url, *user_agent;
   int timeout_ms;
+  int buffer_size_tx;
   esp_err_t (*crt_bundle_attach)(void *conf);
   esp_err_t (*event_handler)(esp_http_client_event_t *e);
   void *user_data;

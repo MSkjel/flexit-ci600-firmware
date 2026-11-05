@@ -265,6 +265,10 @@ struct TextSensor {
   template<typename F> void add_on_state_callback(F &&f) { cb.add(std::forward<F>(f)); }
 };
 
+namespace text_sensor {
+using ::TextSensor;
+}  // namespace text_sensor
+
 struct Event {
   std::string last;
   int count = 0;
@@ -346,18 +350,11 @@ struct OnlineImage : Image {
   void set_url(const std::string &u) { url = u; }
 };
 
-// http_request, for online_picture.yaml's check before a download, and met.h's forecast through esp_http_client.h
+// The web, for fetch.h's requests through esp_http_client.h
 namespace http_request {
 struct Header {
   std::string name, value;
 };
-enum class HttpReadLoopResult { DATA, RETRY, COMPLETE, ERROR, TIMEOUT };
-inline HttpReadLoopResult http_read_loop_result(int r, uint32_t &, uint32_t, bool complete) {
-  return r > 0      ? HttpReadLoopResult::DATA
-         : r < 0    ? HttpReadLoopResult::ERROR
-         : complete ? HttpReadLoopResult::COMPLETE
-                    : HttpReadLoopResult::RETRY;
-}
 }  // namespace http_request
 struct HttpContainer {
   int status_code = 200;
@@ -382,9 +379,9 @@ struct HttpContainer {
     return (int) n;
   }
   bool is_read_complete() const { return at >= body.size(); }
-  void end() {}
 };
-struct HttpRequest {
+// A server, the same one at every URL
+struct Web {
   size_t length = 0;                         // the Content-Length the server reports
   std::string type;                          // and its Content-Type
   int status = 200;                          // and its HTTP status
@@ -397,11 +394,12 @@ struct HttpRequest {
   std::string location;                    // to here
   std::vector<http_request::Header> sent;  // the last request's headers
   std::string url;                         // and its URL
-  uint32_t get_timeout() const { return 4500; }
+  int asked = 0;                           // requests it has had
   std::shared_ptr<HttpContainer> get(const std::string &u, const std::vector<http_request::Header> &h,
                                      const std::vector<std::string> &) {
     sent = h;
     url = u;
+    asked++;
     if (down)
       return nullptr;
     auto c = std::make_shared<HttpContainer>();
