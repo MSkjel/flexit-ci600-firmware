@@ -15,8 +15,8 @@ static void live_town() {
     pn_saver(1);
     bool pole = pn_overlay_covered(k, s.pole_x, s.pole_top + 4), sea = !pn_overlay_covered(k, l.x + 6, l.y + 7);
     int pennant = 0, behind = 0;
-    for (int i = 0; i < s.nsprites; i++) {
-      const met::Sprite &q = s.sprite[i];
+    for (int i = 0; i < s.nstamps; i++) {
+      const met::Stamp &q = s.stamps->at[i];
       for (int y = 0; y < q.h && q.tag == met::L_FLAG; y++)
         for (int x = 0; x < q.w; x++)
           if (q.rows[y] >> (q.w - 1 - x) & 1) {

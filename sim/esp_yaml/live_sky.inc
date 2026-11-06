@@ -172,23 +172,16 @@ static void live_kept() {
   // frames are empty, nothing worse.
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
   tick(1);
-  CHECK_MSG(!live::R.px.capacity(), "the rain's frame kept: %u bytes", (unsigned) (live::R.px.capacity() * 4));
-  {
-    live::Frames tile = *live::frames_of("prec");
-    size_t need = (size_t) tile.w * tile.h * 4, from = log_all.size();
-    live::unload("prec");
-    live::add("prec", tile);
-    ram_block = need - 1;  // what overlay.h takes still fits
-    live::prec_place(panel_scene(), false);
-    int r = run_until(
-        [] {
-          auto *a = overlay::find("w_prec");
-          return a && a->state != overlay::WANT;
-        },
-        3000);
-    CHECK_MSG(r >= 0 && overlay::find("w_prec")->state == overlay::SENT && logged("No RAM to draw the frames of a", from),
-              "the rain without %u bytes for its frame: %s", (unsigned) need, panel_animation_status.state.c_str());
+  CHECK_MSG(!live::R.px.capacity(), "the rain's frame kept: %u bytes", (unsigned) live::R.px.capacity());
+  {  // asked of frame_pixel() itself, as overlay.h takes more than the frame and wouldn't get that far
+    const live::Frames *tile = live::frames_of("prec");
+    size_t need = (size_t) tile->w * tile->h, from = log_all.size();
+    ram_block = need - 1;
+    uint32_t px = live::frame_pixel(tile, 0, 0, 0);
     ram_block = 100 * 1024;
+    CHECK_MSG(!px && live::R.px.empty() && logged("No RAM to draw the frames of a", from),
+              "the rain without %u bytes for its frame", (unsigned) need);
+    live::free_px();
   }
   // the flag follows the light without the show starting again: up at 9 on the King's birthday, brighter by noon
   tz_offset_s = 3600;
@@ -219,15 +212,18 @@ static void live_kept() {
 
 // What sp takes of the panel's pool as overlay.h makes it, its frame and records. 0 if it didn't make it whole.
 static size_t pool_bytes(const live::Frames &sp) {
-  std::vector<uint32_t> px;
+  std::vector<uint8_t> px;
+  live::Colours cols;
   int drawn = -1;
   overlay::Source src{sp.w, sp.h, sp.count(), 100, 0, 0, 1, [&](int f, int x, int y) {
                      if (f != drawn) {
                        px.assign((size_t) sp.w * sp.h, 0);
-                       sp.draw(f, live::Canvas{sp.w, sp.h, px.data()});
+                       cols = live::Colours();
+                       sp.draw(f, live::Canvas{sp.w, sp.h, px.data(), &cols});
                        drawn = f;
                      }
-                     return px[(size_t) y * sp.w + x];
+                     uint8_t i = px[(size_t) y * sp.w + x];
+                     return i ? 0xFF000000u | cols.rgb[i] : 0u;
                    }};
   src.delays = sp.delays;
   overlay::Overlay a;

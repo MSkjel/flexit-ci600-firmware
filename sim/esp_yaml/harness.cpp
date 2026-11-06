@@ -2682,18 +2682,18 @@ static void weather_scene() {
     met::build(s, v, OSLO_LAT, OSLO_LON, t, false, oslo_offset, o);
     met::palette(s, nullptr);
   };
-  // never more than 16 colours, and a flag day on the coast's sprites keep theirs
+  // never more than 16 colours, and a flag day on the coast's stamps keep theirs
   draw(wx("fair_day", 25, 14, 5, 200), utc(2026, 5, 17, 11), {met::G_COAST});
   bool in_pal = true, under_16 = true;
-  for (int i = 0; i < s.nsprites; i++)
-    in_pal = in_pal && s.pal[s.sprite[i].ix] == s.sprite[i].c;
+  for (int i = 0; i < s.nstamps; i++)
+    in_pal = in_pal && s.pal[s.stamps->at[i].ix] == s.stamps->at[i].c;
   for (int y = 0; y < met::H; y++) {
     uint8_t r[met::W];
     met::row(s, y, r);
     for (int x = 0; x < met::W; x++)
       under_16 = under_16 && r[x] < 16;
   }
-  CHECK_MSG(s.folded && in_pal && under_16, "a flag day on the coast: %d folded, sprites' colours kept %d", s.folded,
+  CHECK_MSG(s.folded && in_pal && under_16, "a flag day on the coast: %d folded, stamps' colours kept %d", s.folded,
             in_pal);
   // the wind blows things downwind. The picture faces south, so a wind from the east goes to the right.
   for (float from : {90.0f, 270.0f}) {
@@ -2702,8 +2702,8 @@ static void weather_scene() {
     met::Options o{};
     o.heater_pct = 60;
     draw(w, utc(2026, 5, 17, 10), o);
-    int dir = from < 180 ? 1 : -1, flag = s.sprite[s.nsprites - 1].x - s.pole_x,
-        smoke = s.sprite[0].x + s.sprite[0].w / 2 - (s.cabin_x + 9);
+    int dir = from < 180 ? 1 : -1, flag = s.stamps->at[s.nstamps - 1].x - s.pole_x,
+        smoke = s.stamps->at[0].x + s.stamps->at[0].w / 2 - (s.cabin_x + 9);
     CHECK_MSG(s.slant * dir > 0 && flag * dir > 0 && smoke * dir > 0, "wind from %.0f: rain %d, flag %d, smoke %d",
               from, s.slant, flag, smoke);
   }
@@ -2743,9 +2743,9 @@ static void weather_scene() {
     met::Options c{met::G_COAST};
     c.frame = frame;
     draw(wx("clearsky_night", 0, 8, 2, 200), utc(2026, 9, 10, 21, 30), c);
-    lamps[frame] = s.nsprites;
+    lamps[frame] = s.nstamps;
   }
-  CHECK_MSG(lamps[0] == lamps[1] + 1, "the lamp doesn't blink: %d and %d sprites", lamps[0], lamps[1]);
+  CHECK_MSG(lamps[0] == lamps[1] + 1, "the lamp doesn't blink: %d and %d stamps", lamps[0], lamps[1]);
   // the moon wraps around the edges like the sun
   draw(wx("clearsky_night", 0, 2, 2, 200), utc(2026, 10, 26, 21), {});
   CHECK_MSG(s.moon, "no moon to wrap");
@@ -2773,9 +2773,9 @@ static void weather_scene() {
     if (s.tree[i].layer == 2 && s.tree[i].kind == 0 &&
         (tree < 0 || abs(s.tree[i].x - s.home_x) < abs(s.tree[tree].x - s.home_x)))
       tree = i;
-  for (int i = 0; i < s.nsprites; i++)
-    if (s.sprite[i].w == 2 && s.sprite[i].h == 2)
-      (s.sprite[i].x < s.tree[tree].x ? left : right)++;
+  for (int i = 0; i < s.nstamps; i++)
+    if (s.stamps->at[i].w == 2 && s.stamps->at[i].h == 2)
+      (s.stamps->at[i].x < s.tree[tree].x ? left : right)++;
   printf("  Christmas lights: %d on the left, %d on the right\n", left, right);
   CHECK_MSG(left >= 5 && right >= 5, "Christmas lights: %d on the left, %d on the right", left, right);
 }
