@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,13 +42,32 @@ extern std::string log_all;  // everything logged, for checks
 
 uint32_t millis();
 inline size_t ram_free = 200 * 1024, ram_block = 100 * 1024;  // the fake heap, set by the tests
+inline size_t psram_free, psram_block;                        // and PSRAM, none unless a test gives it some
+inline std::set<const void *> in_psram;                       // what RAMAllocator put there
+// As with psram: in the yaml
+#define USE_PSRAM
 template<typename T> struct RAMAllocator {  // picture.h checks free RAM before downloading or making a picture
-  enum { ALLOC_EXTERNAL = 1, ALLOC_INTERNAL = 2 };
-  RAMAllocator(uint8_t = 0) {}
-  size_t get_free_heap_size() const { return ram_free; }
-  size_t get_max_free_block_size() const { return ram_block; }
-  T *allocate(size_t n) { return n * sizeof(T) > ram_block ? nullptr : (T *) malloc(n * sizeof(T)); }
-  void deallocate(T *p, size_t) { free(p); }
+  enum { ALLOC_EXTERNAL = 1, ALLOC_INTERNAL = 2, PREFER_INTERNAL = 8 };
+  uint8_t flags;  // PSRAM first, as ESPHome's, unless only one or PREFER_INTERNAL
+  RAMAllocator(uint8_t f = 0) : flags(f & PREFER_INTERNAL ? 11 : f & 3 ? f & 3 : 3) {}
+  bool in() const { return flags & ALLOC_INTERNAL; }
+  bool ps() const { return flags & ALLOC_EXTERNAL; }
+  size_t get_free_heap_size() const { return (in() ? ram_free : 0) + (ps() ? psram_free : 0); }
+  size_t get_max_free_block_size() const { return std::max(in() ? ram_block : 0, ps() ? psram_block : 0); }
+  T *allocate(size_t n) {
+    size_t size = n * sizeof(T);
+    bool fits_in = in() && size <= ram_block, fits_ps = ps() && size <= psram_block;
+    if (!fits_in && !fits_ps)
+      return nullptr;
+    T *p = (T *) malloc(size);
+    if (fits_ps && !(fits_in && flags & PREFER_INTERNAL))
+      in_psram.insert(p);
+    return p;
+  }
+  void deallocate(T *p, size_t) {
+    in_psram.erase(p);
+    free(p);
+  }
 };
 void delayMicroseconds(uint32_t us);
 uint32_t micros();

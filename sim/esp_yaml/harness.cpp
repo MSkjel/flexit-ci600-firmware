@@ -2542,6 +2542,18 @@ static void met_picture() {
             "without the RAM to draw it: '%s'", panel_picture_status.state.c_str());
   ram_block = 100 * 1024;
   CHECK_MSG(picture("weather, with the RAM back", 3000) >= 0 && !met::drawing, "not drawn with the RAM back");
+  // PSRAM takes the scene only when internal RAM is short of it, here by a byte, the land kept. Too short to make
+  // the picture then, which takes more
+  ram_free = sizeof(met::Drawing) + sizeof(met::Stamps) + 8191;
+  psram_free = psram_block = 4096 * 1024;
+  bool ps = met::new_drawing() && in_psram.count(met::drawing) && in_psram.count(met::drawing->scene.stamps);
+  met::free_drawing();
+  ram_free = 200 * 1024;
+  bool in = met::new_drawing() && !in_psram.count(met::drawing) && !in_psram.count(met::drawing->scene.stamps);
+  met::free_drawing();
+  psram_free = psram_block = 0;
+  CHECK_MSG(ps && in && in_psram.empty(), "the scene in PSRAM: %d with internal RAM short, %d with it to spare", ps,
+            !in);
 }
 
 // A server error keeps the forecast and asks again a minute later, then twice as long up to half an hour. Refusals
@@ -3187,6 +3199,19 @@ static void online_fits() {
   ram_free = 120 * 1024;
   CHECK_MSG(o.kept.decoder == 'P' && fits(200, 5000, "image/png"), "a PNG refused with its decoder there");
   ram_free = 200 * 1024;
+  // 320x240 is 150 KB decoded, in one piece: only with PSRAM, which takes the buffer and the pixels
+  uint32_t pixels = o.pixels;
+  o.pixels = 320 * 240 * 2;
+  CHECK_MSG(!fits(200, 30000, "image/jpeg"), "320x240 taken without PSRAM");
+  psram_free = psram_block = 4096 * 1024;
+  CHECK_MSG(fits(200, 30000, "image/jpeg"), "320x240 refused with PSRAM: '%s'", pic::S.waiting.c_str());
+  ram_free = 50 * 1024;  // converting it is internal RAM's
+  size_t logged = log_all.size();
+  CHECK_MSG(!fits(200, 30000, "image/jpeg") && log_all.find("PSRAM 4096 KB free", logged) != std::string::npos,
+            "with PSRAM but too little internal RAM: '%s'", log_all.substr(logged).c_str());
+  ram_free = 200 * 1024;
+  psram_free = psram_block = 0;
+  o.pixels = pixels;
   web.status = 200;
   web.length = 30000;
   web.type = "image/jpeg";
