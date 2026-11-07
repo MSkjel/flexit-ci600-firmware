@@ -3774,6 +3774,10 @@ static void screen_camera() {
   c = one_image(30);
   CHECK_MSG(c >= 0 && c < 15 && screen_off() < 20, "an image of the unchanged screen took %d cycles", c);
   printf("  then of the same screen after %d cycles\n", c);
+  // and isn't the last again, which Home Assistant's stream wouldn't pass on, so Chrome, a frame behind, would never
+  // show the last
+  auto &im = cam.images;
+  CHECK_MSG(im.size() >= 2 && im[im.size() - 1] != im[im.size() - 2], "two images of the same screen are the same");
   // The screen changes, the next image shows it. Without the animations, a moving one would be off.
   panel_clear_animation.execute("");
   watch(settled, 500);
