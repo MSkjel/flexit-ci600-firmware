@@ -1,4 +1,15 @@
 // The sky shows, see met_live_sky.h
+// A scene for the weather at t, its colours placed, in a buffer of its own
+static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
+                                  double lon = OSLO_LON) {
+  static SceneBuf sc(false);
+  met::Weather w = weather;
+  w.time = t / 3600 * 3600;
+  met::build(sc.s, w, lat, lon, t, false, oslo_offset, o);
+  met::palette(sc.s, nullptr);
+  return sc.s;
+}
+
 static void live_sky() {
   step("the weather animations: the sky (packages/code/met/met_live_sky.h)");
   // the picture drawn again s seconds on, the clouds moved. With hour, a new forecast for the next hour.
@@ -109,27 +120,31 @@ static void live_sky() {
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 2, 14, 70, utc(2026, 7, 4, 10), met::G_HILLS, 0, 60, 2}, "flag");
   CHECK_MSG(live::R.flag, "fog on a flag day: no flag");
 
-  // the aurora on several nights up north, made again when its ribbons move with the hour
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_HILLS, 0, 60, 3,
-        69.65, 18.96},
-       "tromso");
-  size_t was = log_all.size();
-  on(3600, true, "the aurora an hour on");
-  play(10, 1, "northern_lights_later");
-  CHECK_MSG(logged("Animation w_aur0:", was), "the aurora an hour on: not made again");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 2},
-       "oslo");
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 1, 21), met::G_HILLS, 0, 60, 2, 69.65,
-        18.96},
-       "new_year");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 0});
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19), met::G_COAST, 0, 60, 2, 69.65,
-        18.96},
-       "coast");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 0});
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 60, 2,
-        67.28, 14.4},
-       "bodo");
+  // the aurora on nights up north, still in the picture and changing with it, under the ground's own night show; the
+  // town's antenna blinking over it
+  auto aurora = [](const Live &c, const char *tag) {
+    show(c, tag);
+    CHECK_MSG(scene_at(met::weather, c.t, met::options, c.lat, c.lon).aurora, "%s with the aurora: no aurora", c.want);
+  };
+  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_HILLS, 0, 30,
+          2, 69.65, 18.96},
+         "aurora");
+  aurora({"Lighthouse and the coastal express", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19),
+          met::G_COAST, 0, 30, 2, 69.65, 18.96},
+         "aurora");
+  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 30, 2,
+          67.28, 14.4},
+         "aurora_bodo");
+  const Live town = {"Evening in town", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_CITY,
+                     0, 30, 2, 69.65, 18.96};
+  aurora(town, "aurora");
+  const met::Scene &sky = scene_at(met::weather, town.t, met::options, town.lat, town.lon);
+  int red = 0, dark = 0;
+  play(6, 0, "", [&] {
+    uint32_t c = sim_pixel(sky.antenna.x + 1, sky.antenna.y);
+    (c >> 16 > 0xD0 && (c >> 8 & 255) < 0x60 ? red : dark)++;
+  });
+  CHECK_MSG(red && dark, "the town with the aurora: the antenna doesn't blink, %d red and %d dark", red, dark);
 
   // stars with the moon up, and a shooting star that keeps clear of it; on a flag day in the polar night
   show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 60, 2},
@@ -150,7 +165,7 @@ static void live_sky() {
   show({"High clouds", "fair_day", 60, 0, 0, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 60, 2}, "calm");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
   show({"High clouds", "fair_day", 80, 0, 0, 0, 7, 8, 0, utc(2026, 4, 20, 12), met::G_HILLS, 0, 60, 2}, "windy");
-  was = log_all.size();
+  size_t was = log_all.size();
   on(3600, true, "high clouds the next hour");
   play(4, 1, "high_clouds_next_hour");
   CHECK_MSG(logged("Animation w_cloud0:", was), "high clouds the next hour: not made again");
@@ -248,17 +263,6 @@ static size_t pool_bytes(const live::Frames &sp) {
   size_t n = overlay::W.phase == overlay::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
   overlay::stop();
   return n;
-}
-
-// A scene for the weather at t, its colours placed, in a buffer of its own
-static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
-                                  double lon = OSLO_LON) {
-  static SceneBuf sc(false);
-  met::Weather w = weather;
-  w.time = t / 3600 * 3600;
-  met::build(sc.s, w, lat, lon, t, false, oslo_offset, o);
-  met::palette(sc.s, nullptr);
-  return sc.s;
 }
 
 // met_live_sky.h's costs against the sprites the panel's encoder made: the least each cost can be and still bound
@@ -387,28 +391,6 @@ static void live_costs() {
   live::make_sprite("flag", sp);
   flag.took((float) pool_bytes(sp), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
   flag.check("FLAG_BYTES");
-  // the aurora's four patches on clear nights up north, all of them in the pool
-  float most = 0;
-  for (int night = 0; night < 40; night++) {
-    met::Weather w;
-    w.ok = true;
-    snprintf(w.symbol, sizeof w.symbol, "clearsky_night");
-    w.temp = -8;
-    met::Options o;
-    o.aurora = met::A_ALWAYS;
-    const met::Scene &t = scene_at(w, utc(2026, 1, 1, 21) + night * 86400u + night % 5 * 3600u, o, 69.65, 18.96);
-    live::Box b[4];
-    live::aur_boxes(t, b);
-    float bytes = 0;
-    for (int k = 0; t.aurora && k < 4; k++)
-      bytes += b[k].w ? (float) pool_bytes(live::aur_patch(t, k == 3, b[k])) : 0;
-    most = std::max(most, bytes);
-  }
-  printf("  the aurora's patches, %d and %d wide, take %.0f of the %d bytes at most\n", live::AUR_HIGH_W,
-         live::AUR_LOW_W, most, live::SKY_POOL);
-  CHECK_MSG(most <= live::SKY_POOL, "met_live_sky.h's AUR_HIGH_W and AUR_LOW_W are too wide: %.0f bytes", most);
-  CHECK_MSG(most >= live::SKY_POOL / 2, "met_live_sky.h's AUR_HIGH_W and AUR_LOW_W are far too narrow: %.0f bytes",
-            most);
   log_level = level;
   overlay::status(overlay::shown());
 }

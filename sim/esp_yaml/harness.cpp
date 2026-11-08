@@ -680,9 +680,10 @@ static bool all_grey(const overlay::Overlay &a, int p) {
 // ---------------------------------------------------------------- the weather picture and its shows
 static const std::string &met_status = panel_weather.state;  // what met.h said last, in met.yaml's Panel Weather
 
-// A real answer kept in esp_yaml: met_sample.json is the first 16 KB of api.met.no's, mars_sample.json five photos of
-// NASA's list of Perseverance's, epic_sample.json three of EPIC's day, perseverance_sample.json and
-// curiosity_sample.json some of each rover's waypoints, horizons_sample.txt JPL Horizons' for each probe, cut short
+// A real answer kept in esp_yaml: met_sample.json is the first 16 KB of api.met.no's, kp_sample.json NOAA's Kp from
+// 1 to 11 November 2026, mars_sample.json five photos of NASA's list of Perseverance's, epic_sample.json three of
+// EPIC's day, perseverance_sample.json and curiosity_sample.json some of each rover's waypoints, horizons_sample.txt
+// JPL Horizons' for each probe, cut short
 static std::string sample(const char *file) {
   std::ifstream in(std::string(SAMPLES) + file);
   std::stringstream body;
@@ -3495,6 +3496,91 @@ static void ask_only(fetch::Asker &a) {
     o->schedule.not_before = o == &a ? 0 : UINT32_MAX;
 }
 
+// NOAA's Kp, asked for while the aurora's on and read from a real answer, and the aurora by it: in Oslo on auto once
+// the Kp reaches 3.3, coloured as is usual at the Kp, brighter the further over, and mostly red in a storm that only
+// just reaches as far south
+static void met_kp() {
+  step("NOAA's Kp, asked for and read, and the aurora by it");
+  met::KpIndex &k = met::kp_index;
+  const std::string &status = panel_weather_kp.state;
+  met::lat = OSLO_LAT;
+  met::lon = OSLO_LON;
+  flexit_panel_time.t.timestamp = utc(2026, 11, 8, 22, 30);  // in the 3 hours from 21, an estimated 4.67
+  panel_weather_aurora.control(1);                           // off
+  ask_only(k);
+  yaml_every(1000);
+  CHECK_MSG(!k.asking && tasks.empty(), "asked NOAA for the Kp with the aurora off");
+  panel_weather_aurora.control(0);  // auto
+  web.status = 200;
+  web.last_modified = web.expires = "";
+  web.body = sample("kp_sample.json");
+  web.type = "application/json";
+  yaml_every(1000);
+  CHECK_MSG(k.asking && tasks.size() == 1, "the Kp not asked for on auto");
+  run_task();
+  const met::KpBlocks &kp = met::kp;
+  CHECK_MSG(web.url == met::KP_URL && !k.asking && kp.n == met::KpBlocks::MAX && kp.b[0].t == utc(2026, 11, 7, 3) &&
+                k.schedule.not_before == fetch::now_s() + 3 * 3600,
+            "the Kp not taken: %d blocks from %u, next in %d s", kp.n, (unsigned) kp.b[0].t,
+            (int) (k.schedule.not_before - fetch::now_s()));
+  CHECK_MSG(fabsf(kp.at(fetch::now_s()) - 4.67f) < 0.01f && fabsf(kp.at(utc(2026, 11, 11, 2, 59)) - 2.33f) < 0.01f &&
+                std::isnan(kp.at(utc(2026, 11, 11, 3))) && std::isnan(kp.at(utc(2026, 11, 7, 2, 59))),
+            "the Kp read wrong: %.2f now", kp.at(fetch::now_s()));
+  CHECK_MSG(status == "Kp 4.7 now, the aurora needs 3.3 here", "Panel Weather Kp says '%s'", status.c_str());
+  // an answer without a Kp from now on keeps the last
+  web.body = "[]";
+  k.schedule.not_before = 0;
+  yaml_every(1000);
+  run_task();
+  CHECK_MSG(kp.n == met::KpBlocks::MAX && status == "Kept the last Kp (HTTP 200)", "an empty answer: '%s'",
+            status.c_str());
+  k.schedule.not_before = UINT32_MAX;
+  // the picture has the Kp for the time it's drawn: in Oslo on auto with 4.67, not with 1.67, always with either
+  auto night = [](uint32_t t, met::Aurora a, const char *name) {
+    weather_of({"", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, t, met::G_HILLS, 0, 0, 0});
+    met::options.aurora = a;
+    met::redraw();
+    CHECK_MSG(picture(name, 6000) >= 0, "%s: not shown", name);
+    return panel_scene().aurora;
+  };
+  CHECK_MSG(night(utc(2026, 11, 8, 22, 30), met::A_AUTO, "Kp 4.67 in Oslo") && met::options.kp > 4.6f,
+            "Kp 4.67 in Oslo: no aurora, Kp %.2f", met::options.kp);
+  pn_shot(outdir, "esp_aurora_kp");
+  CHECK_MSG(!night(utc(2026, 11, 10, 18, 30), met::A_AUTO, "Kp 1.67 in Oslo"), "Kp 1.67 in Oslo: an aurora");
+  CHECK_MSG(night(utc(2026, 11, 10, 18, 30), met::A_ALWAYS, "Kp 1.67 in Oslo, always"), "always: no aurora at Kp 1.67");
+  // what it takes, and the colours by the Kp
+  struct Place {
+    double lat, lon;
+    float need;
+  } const PLACES[] = {{69.65, 18.96, 0}, {63.43, 10.4, 1.7f}, {OSLO_LAT, OSLO_LON, 3.3f}, {55.68, 12.57, 5.4f}};
+  for (const Place &p : PLACES)
+    CHECK_MSG(fabsf(met::kp_needed(p.lat, p.lon) - p.need) < 0.1f, "at %.2f, %.2f it takes Kp %.2f, not %.1f", p.lat,
+              p.lon, met::kp_needed(p.lat, p.lon), p.need);
+  auto at = [](float kpv, double la, double lo) -> const met::Scene & {
+    met::Options o = met::options;
+    o.aurora = met::A_AUTO;
+    o.kp = kpv;
+    return scene_at(met::weather, utc(2026, 11, 8, 22, 30), o, la, lo);
+  };
+  auto rgb = [](uint32_t c, int k) { return (int) (c >> (16 - 8 * k) & 255); };
+  auto lum = [&](uint32_t c) { return rgb(c, 0) * 3 + rgb(c, 1) * 6 + rgb(c, 2); };
+  CHECK_MSG(!at(3.0f, OSLO_LAT, OSLO_LON).aurora && at(3.67f, OSLO_LAT, OSLO_LON).aurora, "Oslo's Kp 3.3 not kept to");
+  uint32_t quiet = at(1, 69.65, 18.96).rgb[met::C_AUR_TOP], storm = at(7, 69.65, 18.96).rgb[met::C_AUR_TOP];
+  CHECK_MSG(rgb(quiet, 0) < rgb(quiet, 1) && rgb(storm, 0) > rgb(storm, 1) && rgb(storm, 0) > rgb(storm, 2),
+            "the top at Kp 1 %06X and 7 %06X", (unsigned) quiet, (unsigned) storm);
+  uint32_t north = at(7.33f, 69.65, 18.96).rgb[met::C_AUR], south = at(7.33f, 52.52, 13.4).rgb[met::C_AUR];
+  CHECK_MSG(rgb(north, 1) > rgb(north, 0) && rgb(south, 0) > rgb(south, 1),
+            "a storm at Kp 7.33 isn't green in Tromso, %06X, and red in Berlin, %06X", (unsigned) north,
+            (unsigned) south);
+  uint32_t far_over = at(4.67f, 69.65, 18.96).rgb[met::C_AUR],
+           just_over = at(4.67f, OSLO_LAT, OSLO_LON).rgb[met::C_AUR];
+  CHECK_MSG(lum(far_over) > lum(just_over) && !at(4.67f, 55.68, 12.57).aurora,
+            "Kp 4.67: in Tromso %06X isn't brighter than in Oslo %06X, or Copenhagen has it", (unsigned) far_over,
+            (unsigned) just_over);
+  met::kp = {};
+  met::options.aurora = met::A_AUTO;
+}
+
 // A photo of the day: its list asked for and read, its photo downloaded and shown, and its marks over it
 static void photo_of_the_day(const char *name, fetch::Asker &list, OnlineImage &img, const char *body,
                              const std::function<void()> &draw) {
@@ -4186,6 +4272,7 @@ int main(int argc, char **argv) {
   met_answers();
   met_forecast_hours();
   met_date_line();
+  met_kp();
   live_sky();
   live_land();
   live_town();
