@@ -8,7 +8,7 @@ MEMORY
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
-_min_stack = 0x1000;
+_min_stack = 0x800;
 
 SECTIONS
 {
