@@ -6,27 +6,27 @@
 #include "plink.h"
 #include <string.h>
 
-// Every slot's frame (w * h / 2 bytes, an animated one's) and then its records, and the frames places of their own,
-// packed from the start. Freeing one moves what's behind it down.
-static uint8_t pool[OVERLAY_POOL];
+// Every slot's frame (w * h / 2 bytes, an animated one's) and then its records, the frames places of their own and
+// their scripts, packed from the start. Freeing one moves what's behind it down.
+uint8_t pool[OVERLAY_POOL];
 static unsigned used;
 
 slot_t slots[OVERLAY_SLOTS];
 place_t places[OVERLAY_PLACES];
 static uint8_t in = OVERLAY_SLOTS;  // the slot a transfer is coming in for
 static lv_timer_t *timer;
-static uint8_t gone_bits, gone_tag[OVERLAY_PLACES];  // places gone after their rounds, for OVERLAY_GONE
+static uint8_t gone_bits, gone_tag[OVERLAY_PLACES];  // places gone after their scripts' END, for OVERLAY_GONE
 _Static_assert(OVERLAY_PLACES <= 8, "a bit per place in gone_bits");
 _Static_assert(OVERLAY_PAL_LEN - PIC_PAL_LEN == sizeof slots[0].opa, "the opacities as they come");
 
-static uint32_t frame_bytes(const slot_t *s) { return s->still ? 0 : (uint32_t) s->w / 2 * s->h; }
+static uint32_t frame_bytes(const slot_t *s) { return s->still ? 0 : row_bytes(s) * s->h; }
 uint8_t *records(const slot_t *s) { return pool + s->off + frame_bytes(s); }
 const uint8_t *place_frame(const place_t *p) { return pool + (p->frame == NO_OFF ? slots[p->slot].off : p->frame); }
 
 // ---------------------------------------------------------------- the pool
 
 // Takes n bytes, ending fade-outs early to make room. NO_OFF if they still don't fit.
-static uint16_t take(uint32_t n) {
+uint16_t take(uint32_t n) {
   for (int k = 0; k < OVERLAY_PLACES && n > OVERLAY_POOL - used; k++)
     if (places[k].slot != OVERLAY_SLOTS && places[k].leaving)
       gone(&places[k]);
@@ -37,20 +37,23 @@ static uint16_t take(uint32_t n) {
 }
 
 // Frees the n bytes at off and moves everything behind down
-static void give(uint16_t off, uint32_t n) {
+void give(uint16_t off, uint32_t n) {
   memmove(pool + off, pool + off + n, used - off - n);
   used -= n;
   for (int i = 0; i < OVERLAY_SLOTS; i++)
     if (slots[i].off != NO_OFF && slots[i].off > off)
       slots[i].off -= (uint16_t) n;
-  for (int i = 0; i < OVERLAY_PLACES; i++)
+  for (int i = 0; i < OVERLAY_PLACES; i++) {
     if (places[i].frame != NO_OFF && places[i].frame > off)
       places[i].frame -= (uint16_t) n;
+    if (places[i].script != NO_OFF && places[i].script > off)
+      places[i].script -= (uint16_t) n;
+  }
 }
 
 // ---------------------------------------------------------------- places
 
-// How a new place starts: still, upright, full size, opaque, on the whole screen
+// How a new place starts: still, upright, full size, opaque, in its own colours, on the whole screen
 static void reset(place_t *p) {
   for (int c = 0; c < OVERLAY_CHANNELS; c++)
     ramp_set(&p->ch[c], no_change(c));
@@ -65,6 +68,7 @@ static void reset(place_t *p) {
   p->now.deg = 0;
   p->now.size = p->now.speed = p->now.opa = FULL;
   p->now.flip = p->flip = 0;
+  p->now.tint = p->tint = NO_TINT;
   p->drifting = 0;
   p->area.x0 = p->area.y0 = 0;
   p->area.x1 = PIC_MAX_W;
@@ -72,9 +76,7 @@ static void reset(place_t *p) {
   p->area.edge[0] = p->area.edge[1] = OVERLAY_EDGE_SCREEN;
   p->wander.on = false;
   p->face.on = false;
-  p->rounds = 0;
   p->leaving = STAY;
-  p->held = false;
   p->depth = OVERLAY_NEAREST;
 }
 
@@ -94,6 +96,7 @@ static void drop_place(place_t *p) {
   if (i == OVERLAY_SLOTS)
     return;
   hide(p);
+  script_drop(p);
   if (p->frame != NO_OFF)
     give(p->frame, frame_bytes(&slots[i]));
   p->slot = OVERLAY_SLOTS;
@@ -118,21 +121,20 @@ static void drop_slot(int i) {
     in = OVERLAY_SLOTS;
 }
 
-// It has faded out and goes, telling the ESP if its rounds ended
+// It has faded out and goes, telling the ESP if its script ended it
 void gone(place_t *p) {
   int k = (int) (p - places);
   if (p->leaving == LEAVE_GONE) {
     gone_bits |= (uint8_t) (1u << k);
-    gone_tag[k] = p->tag;
+    gone_tag[k] = script_tag(p);
   }
   drop_place(p);
 }
 
 // Fades out over ms and goes, at the next step at the soonest: not while frames step. One that isn't shown goes
 // at once.
-static void leave(place_t *p, uint16_t ms, uint8_t how) {
+void leave(place_t *p, uint16_t ms, uint8_t how) {
   p->leaving = how;
-  p->rounds = 0;
   if (!layer) {
     gone(p);
     return;
@@ -157,6 +159,7 @@ void overlay_clear_all(void) {
   for (int i = 0; i < OVERLAY_SLOTS; i++)
     drop_slot(i);
   gone_bits = 0;
+  script_clear();
 }
 
 bool overlay_clear(const uint8_t *b, int n) {
@@ -166,6 +169,7 @@ bool overlay_clear(const uint8_t *b, int n) {
   if (what == OVERLAY_ALL) {
     for (int i = 0; i < OVERLAY_SLOTS; i++)
       clear_slot(i, ms);
+    script_clear();
   } else if (what & OVERLAY_PLACE_BIT) {
     unsigned k = what & ~OVERLAY_PLACE_BIT;
     if (k >= OVERLAY_PLACES || places[k].slot == OVERLAY_SLOTS)
@@ -182,12 +186,13 @@ bool overlay_clear(const uint8_t *b, int n) {
 
 unsigned overlay_used(void) { return used; }
 
-// The nibbles of rectangle a at f, rb bytes a row from its top left, into px a byte each, stride bytes a row
-static void spread(uint8_t *px, int stride, const uint8_t *f, int rb, const lv_area_t *a) {
+// The nibbles of rectangle a at f, rb bytes a row from its top left, into px a byte each, stride bytes a row: those
+// of the frame, w of them
+static void spread(uint8_t *px, int w, const uint8_t *f, int rb, const lv_area_t *a) {
   for (int y = a->y1; y <= a->y2; y++, f += rb)
-    for (int x = a->x1; x <= a->x2; x++) {
+    for (int x = a->x1; x <= a->x2 && x < w; x++) {
       uint8_t b = f[(x - a->x1) / 2];
-      px[y * stride + x] = x & 1 ? b & 15 : b >> 4;
+      px[y * w + x] = x & 1 ? b & 15 : b >> 4;
     }
 }
 
@@ -196,7 +201,7 @@ bool overlay_pixels(int place, uint8_t *px) {
     return false;
   const slot_t *s = &slots[places[place].slot];
   if (!s->still) {
-    spread(px, s->w, place_frame(&places[place]), s->w / 2, &(lv_area_t) {0, 0, s->w - 1, s->h - 1});
+    spread(px, s->w, place_frame(&places[place]), (int) row_bytes(s), &(lv_area_t) {0, 0, s->w - 1, s->h - 1});
     return true;
   }
   uint8_t *piece = lv_mem_alloc(OVERLAY_PIECE_MAX);
@@ -229,7 +234,7 @@ void overlay_abort(void) {
 }
 
 int overlay_open(const uint8_t *b, int n, uint32_t *len) {
-  if (n != OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN)
+  if (n != OVERLAY_BEGIN_LEN)
     return PIC_BAD;
   uint8_t i = b[OVERLAY_BEGIN_SLOT], kind = b[OVERLAY_BEGIN_KIND];
   if (i >= OVERLAY_SLOTS || kind > OVERLAY_STILL)
@@ -244,7 +249,9 @@ int overlay_open(const uint8_t *b, int n, uint32_t *len) {
   *len = plink_number(b + OVERLAY_BEGIN_SIZE, 4);
   pic_palette(s->pal, b + OVERLAY_BEGIN_HEAD);
   memcpy(s->opa, b + OVERLAY_BEGIN_HEAD + PIC_PAL_LEN, sizeof s->opa);
-  if (!s->w || !s->h || s->w % 2 || s->h > 255 || (s->scale != 1 && s->scale != 2) || s->w * s->scale > PIC_MAX_W ||
+  s->glows = plink_get16(b + OVERLAY_BEGIN_GLOWS);
+  s->shade = lv_color_make(b[OVERLAY_BEGIN_SHADE], b[OVERLAY_BEGIN_SHADE + 1], b[OVERLAY_BEGIN_SHADE + 2]);
+  if (!s->w || !s->h || s->h > 255 || (s->scale != 1 && s->scale != 2) || s->w * s->scale > PIC_MAX_W ||
       s->h * s->scale > PIC_MAX_H)
     return PIC_BAD_SIZE;
   if (*len > OVERLAY_POOL || (s->off = take(frame_bytes(s) + *len)) == NO_OFF)
@@ -287,10 +294,12 @@ static uint32_t unpack(const uint8_t *p, const uint8_t *end, unsigned w, unsigne
 // A record is OVERLAY_RECORD_*: delay, x / 2, y, w / 2, h, then the rectangle, deflated or a still's packed rows
 uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area) {
   const uint8_t *r = records(s) + at, *end = records(s) + s->len, *d = r + OVERLAY_RECORD_HEAD;
-  unsigned rb = s->w / 2u;
+  unsigned rb = row_bytes(s);
   if (end - r < OVERLAY_RECORD_HEAD)
     return 0;
   unsigned x = r[OVERLAY_RECORD_X], y = r[OVERLAY_RECORD_Y], w = r[OVERLAY_RECORD_W], h = r[OVERLAY_RECORD_H];
+  if (x == OVERLAY_RECORD_MORE && !w && !h && !s->still && at)
+    x = y = 0;  // nothing changes
   if (x + w > rb || y + h > s->h || !w != !h || (s->still && w * h > OVERLAY_PIECE_MAX))
     return 0;
   uint32_t n = 0;
@@ -306,7 +315,7 @@ uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area) {
 }
 
 // delay is in OVERLAY_TICK_MS at 100 %, scaled by the slot's rate
-static uint32_t period(const slot_t *s, uint8_t delay) {
+uint32_t period(const slot_t *s, uint8_t delay) {
   uint32_t ms = delay * (OVERLAY_TICK_MS * 100u) / LV_MAX(s->rate, 1);
   return ms < OVERLAY_FRAME_MIN_MS ? OVERLAY_FRAME_MIN_MS : ms;
 }
@@ -319,7 +328,7 @@ void wake(void) {
 
 // Applies the record at *next to frame and moves *next on, back to loop_at after the last. area gets what it
 // changed. Returns its delay.
-static uint8_t advance(const slot_t *s, uint8_t *frame, uint16_t *next, lv_area_t *area) {
+uint8_t advance(const slot_t *s, uint8_t *frame, uint16_t *next, lv_area_t *area) {
   uint8_t delay = records(s)[*next + OVERLAY_RECORD_DELAY];
   *next = (uint16_t) (*next + record(s, *next, frame, area));
   if (*next >= s->len)
@@ -328,7 +337,7 @@ static uint8_t advance(const slot_t *s, uint8_t *frame, uint16_t *next, lv_area_
 }
 
 // The first frame into frame, the whole of it in the first record
-static void first_frame(const slot_t *s, uint8_t *frame) { record(s, 0, frame, NULL); }
+void first_frame(const slot_t *s, uint8_t *frame) { record(s, 0, frame, NULL); }
 
 bool overlay_close(void) {
   if (in >= OVERLAY_SLOTS)
@@ -348,13 +357,13 @@ bool overlay_close(void) {
       continue;
     } else if (at) {
       s->last = (uint16_t) at;
-      s->frames++;
+      s->frames += !more(s, at);
     } else {
       s->loop_at = (uint16_t) k;
-      ok = lv_area_get_width(&a) == s->w && lv_area_get_height(&a) == s->h;
+      ok = lv_area_get_width(&a) == 2 * (int) row_bytes(s) && lv_area_get_height(&a) == s->h;
     }
   }
-  if (!ok) {
+  if (!ok || (s->last != NO_OFF && more(s, s->last))) {
     drop_slot(i);
     return false;
   }
@@ -370,16 +379,11 @@ bool overlay_close(void) {
 
 // ---------------------------------------------------------------- playing
 
-// It played to the end of its rounds: fades out, holding the last frame if it's its own
-static void rounds_done(place_t *p) {
-  p->held = p->frame != NO_OFF;
-  leave(p, p->rounds_fade, LEAVE_GONE);
-}
-
-// Applies the next record to frame and redraws what it changed on every place that shows that frame. One that
-// shows the last frame now has played another round.
+// Applies the next record to frame and redraws what it changed on every place that shows that frame. Back to the
+// first frame, a round of them ended for their scripts.
 static void step(const slot_t *s, uint8_t *frame, uint16_t *next, uint32_t *due) {
   lv_area_t a = {0, 0, -1, -1};
+  bool round = *next == s->last;
   *due += period(s, advance(s, frame, next, &a));
   for (int k = 0; k < OVERLAY_PLACES; k++) {
     place_t *p = &places[k];
@@ -387,8 +391,8 @@ static void step(const slot_t *s, uint8_t *frame, uint16_t *next, uint32_t *due)
       continue;
     if (a.x2 >= a.x1)
       changed(p, &a);
-    if (*next == s->last && p->rounds && !--p->rounds)
-      rounds_done(p);
+    if (round)
+      script_round(p);
   }
 }
 
@@ -414,23 +418,14 @@ static void tick(lv_timer_t *t) {
   }
   for (int k = 0; k < OVERLAY_PLACES && layer; k++) {
     place_t *p = &places[k];
-    if (p->slot != OVERLAY_SLOTS && p->frame != NO_OFF && !p->held && looping(&slots[p->slot]) && slots[p->slot].rate)
+    if (p->slot == OVERLAY_SLOTS || p->frame == NO_OFF || !looping(&slots[p->slot]) || !slots[p->slot].rate)
+      continue;
+    if (script_plays(p))
+      wait = LV_MIN(wait, script_play(p, now));
+    else
       wait = LV_MIN(wait, play(&slots[p->slot], pool + p->frame, &p->next, &p->due, now));
   }
   lv_timer_set_period(t, wait < 10 ? 10 : wait);
-}
-
-// A still picture's rounds go by at its frame time, ms more of it
-void still_rounds(place_t *p, uint32_t ms) {
-  const slot_t *s = &slots[p->slot];
-  while (s->rate && p->rounds && ms >= p->due) {
-    ms -= p->due;
-    p->due = period(s, records(s)[OVERLAY_RECORD_DELAY]);
-    if (!--p->rounds)
-      rounds_done(p);
-  }
-  if (s->rate && p->rounds)
-    p->due -= ms;
 }
 
 // ---------------------------------------------------------------- the messages
@@ -446,17 +441,17 @@ static void place_msg(const uint8_t *b) {
   uint16_t fade = plink_get16(b + OVERLAY_PLACE_FADE);
   drop_place(p);
   gone_bits &= (uint8_t) ~(1u << k);
-  if (b[OVERLAY_PLACE_OWN] && !s->still) {  // a frame of its own, started b[OVERLAY_PLACE_START] frames in
+  uint8_t delay = records(s)[OVERLAY_RECORD_DELAY];  // of the first frame
+  if (b[OVERLAY_PLACE_OWN] && !s->still) {
     if ((p->frame = take(frame_bytes(s))) == NO_OFF)
       return;
     first_frame(s, pool + p->frame);
     p->next = s->loop_at;
-    uint8_t delay = records(s)[OVERLAY_RECORD_DELAY];  // of the frame it shows
-    for (int i = looping(s) ? b[OVERLAY_PLACE_START] % s->frames : 0; i > 0; i--)
-      delay = advance(s, pool + p->frame, &p->next, NULL);
-    p->due = lv_tick_get() + period(s, delay);
   }
+  p->due = looping(s) ? lv_tick_get() + period(s, delay) : period(s, delay);  // else ms left of its round
   p->slot = slot;
+  p->shows[0] = s->w;
+  p->shows[1] = s->h;
   p->rng = (lv_tick_get() + 1) * 2654435761u ^ (uint32_t) (k + 1) * 0x9E3779B9u;
   if (!p->rng)
     p->rng = 1;
@@ -527,7 +522,7 @@ static void drift_msg(place_t *p, const uint8_t *b) {
     if (!(b[OVERLAY_DRIFT_CHANNELS] >> c & 1))
       continue;
     take_over(p, c);
-    p->rate[c] = v[c] * (MILLI / 10);  // from tenths
+    p->rate[c] = v[c] * (c == OVERLAY_TURN ? MILLI / 10 : MILLI / 100);  // from tenths, or hundredths of a px
     if (c <= OVERLAY_Y && p->rate[c])
       p->drifting |= (uint8_t) (1u << c);
   }
@@ -614,22 +609,18 @@ static void wave_msg(place_t *p, const uint8_t *b) {
   wave_settle(w);
 }
 
+static void tint_msg(place_t *p, const uint8_t *b) {
+  const uint8_t *c = b + OVERLAY_TINT_RGB;
+  if (b[OVERLAY_TINT_ON] <= 1)
+    p->tint = b[OVERLAY_TINT_ON] ? (int32_t) c[0] << 16 | c[1] << 8 | c[2] : NO_TINT;
+}
+
 static void map_msg(place_t *p, const uint8_t *b) {
   int c = b[OVERLAY_MAP_CHANNEL];
   if (c < OVERLAY_TURN || c >= OVERLAY_CHANNELS)
     return;
   for (int i = 0; i < 4; i++)
     p->map[c - OVERLAY_TURN][i] = plink_i16(b + OVERLAY_MAP_VALUES + 2 * i);
-}
-
-static void rounds_msg(place_t *p, const uint8_t *b) {
-  const slot_t *s = &slots[p->slot];
-  p->rounds = plink_get16(b + OVERLAY_ROUNDS_COUNT);
-  p->rounds_fade = plink_get16(b + OVERLAY_ROUNDS_FADE);
-  p->tag = b[OVERLAY_ROUNDS_TAG];
-  p->held = false;
-  if (!looping(s))
-    p->due = period(s, records(s)[OVERLAY_RECORD_DELAY]);  // counted while it's shown
 }
 
 // The ms left of a frame at rate was, at rate
@@ -660,22 +651,37 @@ static void frames_msg(const uint8_t *b) {
   wake();
 }
 
-void overlay_msg(uint16_t key, const uint8_t *b, int n) {
-  // FRAMES to DEPTH, GLIDE and DRIFT 2 a channel more. GONE is ours.
-  static const uint8_t LEN[] = {OVERLAY_FRAMES_LEN, OVERLAY_PLACE_LEN,  OVERLAY_AREA_LEN,   OVERLAY_GLIDE_HEAD,
-                                OVERLAY_DRIFT_HEAD, OVERLAY_WANDER_LEN, OVERLAY_FACE_LEN,   OVERLAY_FLIP_LEN,
-                                OVERLAY_WAVE_LEN,   OVERLAY_MAP_LEN,    OVERLAY_ROUNDS_LEN, 0,
-                                OVERLAY_DEPTH_LEN};
-  _Static_assert(sizeof LEN == K_OVERLAY_DEPTH - K_OVERLAY_FRAMES + 1, "a length for each");
-  if (key < K_OVERLAY_FRAMES || key > K_OVERLAY_DEPTH || n < 2)
-    return;
+int msg_len(uint16_t key, const uint8_t *b) {
+  // FRAMES to TINT but SCRIPT, GLIDE and DRIFT 2 a channel more. GONE and MARK are ours.
+  static const uint8_t LEN[] = {OVERLAY_FRAMES_LEN,
+                                OVERLAY_PLACE_LEN,
+                                OVERLAY_AREA_LEN,
+                                OVERLAY_GLIDE_HEAD,
+                                OVERLAY_DRIFT_HEAD,
+                                OVERLAY_WANDER_LEN,
+                                OVERLAY_FACE_LEN,
+                                OVERLAY_FLIP_LEN,
+                                OVERLAY_WAVE_LEN,
+                                OVERLAY_MAP_LEN,
+                                0,
+                                0,
+                                OVERLAY_DEPTH_LEN,
+                                0,
+                                OVERLAY_TINT_LEN};
+  _Static_assert(sizeof LEN == K_OVERLAY_TINT - K_OVERLAY_FRAMES + 1, "a length for each");
+  if (key < K_OVERLAY_FRAMES || key > K_OVERLAY_TINT || !LEN[key - K_OVERLAY_FRAMES])
+    return -1;
   unsigned moves = key == K_OVERLAY_GLIDE   ? (1u << OVERLAY_CHANNELS) - 1
                    : key == K_OVERLAY_DRIFT ? (1u << (OVERLAY_TURN + 1)) - 1
                                             : 0;
   unsigned channels = b[OVERLAY_GLIDE_CHANNELS];  // DRIFT's too
   if (moves && (!channels || channels & ~moves))
-    return;  // no channel, or one it doesn't take
-  if (n != LEN[key - K_OVERLAY_FRAMES] + (moves ? 2 * __builtin_popcount(channels) : 0))
+    return -1;  // no channel, or one it doesn't take
+  return LEN[key - K_OVERLAY_FRAMES] + (moves ? 2 * __builtin_popcount(channels) : 0);
+}
+
+void overlay_msg(uint16_t key, const uint8_t *b, int n) {
+  if (n < 2 || (key != K_OVERLAY_SCRIPT && n != msg_len(key, b)))
     return;
   if (key == K_OVERLAY_FRAMES) {
     frames_msg(b);
@@ -715,13 +721,18 @@ void overlay_msg(uint16_t key, const uint8_t *b, int n) {
     case K_OVERLAY_MAP:
       map_msg(p, b);
       break;
-    case K_OVERLAY_ROUNDS:
-      rounds_msg(p, b);
+    case K_OVERLAY_SCRIPT:
+      script_msg(p, b, n);
       break;
     case K_OVERLAY_DEPTH:
       set_depth(p, b[OVERLAY_DEPTH_DEPTH]);
       break;
+    case K_OVERLAY_TINT:
+      tint_msg(p, b);
+      break;
   }
+  if (p->slot == OVERLAY_SLOTS)
+    return;  // its script ended it, and it wasn't shown
   update(p);
   order();
   if (moving(p))
@@ -735,7 +746,7 @@ void overlay_init(void) {
     waves[i].place = OVERLAY_PLACES;
   for (int k = 0; k < OVERLAY_PLACES; k++) {
     places[k].slot = OVERLAY_SLOTS;
-    places[k].frame = NO_OFF;
+    places[k].frame = places[k].script = NO_OFF;
     reset(&places[k]);
   }
   draw_init();

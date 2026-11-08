@@ -2,14 +2,24 @@
 
 // Encounter k over the show that's on, seconds of it with shots as live/TAG_n.ppm. It comes, takes no more than the
 // panel has, and goes again. Where it went.
-static Path rare(int k, const char *sprite, const char *tag, int seconds, int shots) {
+static Path rare(int k, const char *sprite, const char *tag, int seconds, int shots, bool lamp = false) {
   size_t from = log_all.size();
   std::string made = std::string("Animation w_") + sprite + ":";
   show_later();
   CHECK_MSG(live::encounter(k), "%s: no room for %s", tag, live::RARE[k].name);
   CHECK_MSG(!live::encounter(k), "%s: two at a time", tag);
   Path p;
-  play(seconds, shots, tag, [&] { follow(sprite, p); });
+  int dark = 0, lit = 0;  // its LAMP in a dim light: drawn as it is
+  play(seconds, shots, tag, [&] {
+    follow(sprite, p);
+    dark += out_of_light();
+    const overlay::Overlay *a = overlay::find(live::key(sprite));
+    Look l;
+    if (lamp && a && where(sprite, l) && l.light < 1000)
+      lit += draws(*a, a->copies[0].place, live::LAMP, 1).first > 0;
+  });
+  CHECK_MSG(!dark && (!lamp || lit), "%s: %d cycles in another light than the scene's, its lamp lit in %d", tag, dark,
+            lit);
   live_quiet(tag, from);
   CHECK_MSG(logged(made.c_str(), from) && !p.empty(), "%s: %s not shown", tag, sprite);
   CHECK_MSG(live::R.rare.empty() && !overlay::find(std::string("w_") + sprite), "%s: %s still on", tag, sprite);
@@ -137,7 +147,7 @@ static void live_rare() {
   town.town = true;
   CHECK_MSG(live::RARE[7].fits(e) && !live::RARE[7].fits(town), "dusk: a troll %d, in town %d, the ridge %d to %d",
             live::RARE[7].fits(e), live::RARE[7].fits(town), e.ridge_l, e.ridge_r);
-  p = rare(7, "troll", "troll", 30, 6);
+  p = rare(7, "troll", "troll", 30, 6, true);
   int off = 0, lo = met::W, hi = 0;
   for (const Look &l : p) {
     off = std::max(off, abs(l.y + 22 - e.ridge.at(l.x + 8)));
@@ -206,7 +216,7 @@ static void live_rare() {
   show({"A cosy evening", "cloudy", 0, 70, 0, 0, 3, -5, 0, utc(2026, 12, 10, 18), met::G_HILLS, 90, 10, 0}, "advent");
   e = live::SEEN;
   CHECK_MSG(live::RARE[11].fits(e), "a December night: no nisse, snow lying %d", e.at.white);
-  p = rare(11, "nisse", "nisse", 16, 4);
+  p = rare(11, "nisse", "nisse", 16, 4, true);
   CHECK_MSG(!p.empty() && !p.front().hidden && p.back().hidden, "the nisse hidden %d at %d,%d, %d at %d,%d",
             !p.empty() && p.front().hidden, p.empty() ? -1 : p.front().x, p.empty() ? -1 : p.front().y,
             !p.empty() && p.back().hidden, p.empty() ? -1 : p.back().x, p.empty() ? -1 : p.back().y);
@@ -276,20 +286,19 @@ static void live_rare() {
   CHECK_MSG(live::R.rare.empty(), "a calm summer's day: %s", live::R.rare.c_str());
   met::animate(false);
   run(20);
-  // what the sprites take of the pool, in any light the encounters come in, from a gale's 0.3 up
+  // what the sprites take of the pool
   int level = log_level;
   log_level = 0;
   float most = 0;
   for (const char *n :
        {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf", "witch", "huldra",
-        "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"})
-    for (float light = 0.3f; light < 1.01f; light += 0.05f) {
-      live::Frames sp;
-      live::make_sprite(n, sp);
-      float m = (float) pool_bytes(live::dimmed(sp, light));
-      CHECK_MSG(m > 0 && m <= live::RARE_BYTES, "met_live.h's RARE_BYTES is too small: %s takes %.0f", n, m);
-      most = std::max(most, m);
-    }
+        "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"}) {
+    live::Frames sp;
+    live::make_sprite(n, sp);
+    float m = (float) pool_bytes(sp);
+    CHECK_MSG(m > 0 && m <= live::RARE_BYTES, "met_live.h's RARE_BYTES is too small: %s takes %.0f", n, m);
+    most = std::max(most, m);
+  }
   log_level = level;
   printf("  the encounters' sprites take %.0f of the %d bytes at most\n", most, live::RARE_BYTES);
   CHECK_MSG(most >= live::RARE_BYTES * 0.8f, "met_live.h's RARE_BYTES is too large: %.0f would do", most);

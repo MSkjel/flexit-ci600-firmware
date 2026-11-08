@@ -1,4 +1,15 @@
 // The sky shows, see met_live_sky.h
+// A scene for the weather at t, its colours placed, in a buffer of its own
+static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
+                                  double lon = OSLO_LON) {
+  static SceneBuf sc(false);
+  met::Weather w = weather;
+  w.time = t / 3600 * 3600;
+  met::build(sc.s, w, lat, lon, t, false, oslo_offset, o);
+  met::palette(sc.s, nullptr);
+  return sc.s;
+}
+
 static void live_sky() {
   step("the weather animations: the sky (packages/code/met/met_live_sky.h)");
   // the picture drawn again s seconds on, the clouds moved. With hour, a new forecast for the next hour.
@@ -86,8 +97,12 @@ static void live_sky() {
   under("thunder");
   live::flash();
   tick(9);
-  play(1, 9, "thunderstorm_flash");
-  CHECK_MSG(overlay::find("w_bolt"), "thunder: no bolt");
+  bool lit = false;
+  play(1, 9, "thunderstorm_flash", [&] {
+    Look l;
+    lit |= where("bolt", l);
+  });
+  CHECK_MSG(lit, "thunder: no bolt");
   play(16, 1, "thunderstorm_after");
   CHECK_MSG(!overlay::find("w_bolt"), "thunder: the bolt stayed");
   show({"Light rain", "heavyrain", 0, 60, 100, 5, 12, 8, 0, utc(2026, 10, 20, 12), met::G_COAST, 0, 40, 2}, "heavy");
@@ -105,27 +120,31 @@ static void live_sky() {
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 2, 14, 70, utc(2026, 7, 4, 10), met::G_HILLS, 0, 60, 2}, "flag");
   CHECK_MSG(live::R.flag, "fog on a flag day: no flag");
 
-  // the aurora on several nights up north, made again when its ribbons move with the hour
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_HILLS, 0, 60, 3,
-        69.65, 18.96},
-       "tromso");
-  size_t was = log_all.size();
-  on(3600, true, "the aurora an hour on");
-  play(10, 1, "northern_lights_later");
-  CHECK_MSG(logged("Animation w_aur0:", was), "the aurora an hour on: not made again");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 2},
-       "oslo");
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 1, 21), met::G_HILLS, 0, 60, 2, 69.65,
-        18.96},
-       "new_year");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 0});
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19), met::G_COAST, 0, 60, 2, 69.65,
-        18.96},
-       "coast");
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 30, 0});
-  show({"Northern lights", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 60, 2,
-        67.28, 14.4},
-       "bodo");
+  // the aurora on nights up north, still in the picture and changing with it, under the ground's own night show; the
+  // town's antenna blinking over it
+  auto aurora = [](const Live &c, const char *tag) {
+    show(c, tag);
+    CHECK_MSG(scene_at(met::weather, c.t, met::options, c.lat, c.lon).aurora, "%s with the aurora: no aurora", c.want);
+  };
+  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_HILLS, 0, 30,
+          2, 69.65, 18.96},
+         "aurora");
+  aurora({"Lighthouse and the coastal express", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19),
+          met::G_COAST, 0, 30, 2, 69.65, 18.96},
+         "aurora");
+  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 30, 2,
+          67.28, 14.4},
+         "aurora_bodo");
+  const Live town = {"Evening in town", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_CITY,
+                     0, 30, 2, 69.65, 18.96};
+  aurora(town, "aurora");
+  const met::Scene &sky = scene_at(met::weather, town.t, met::options, town.lat, town.lon);
+  int red = 0, dark = 0;
+  play(6, 0, "", [&] {
+    uint32_t c = sim_pixel(sky.antenna.x + 1, sky.antenna.y);
+    (c >> 16 > 0xD0 && (c >> 8 & 255) < 0x60 ? red : dark)++;
+  });
+  CHECK_MSG(red && dark, "the town with the aurora: the antenna doesn't blink, %d red and %d dark", red, dark);
 
   // stars with the moon up, and a shooting star that keeps clear of it; on a flag day in the polar night
   show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 60, 2},
@@ -146,7 +165,7 @@ static void live_sky() {
   show({"High clouds", "fair_day", 60, 0, 0, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 60, 2}, "calm");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
   show({"High clouds", "fair_day", 80, 0, 0, 0, 7, 8, 0, utc(2026, 4, 20, 12), met::G_HILLS, 0, 60, 2}, "windy");
-  was = log_all.size();
+  size_t was = log_all.size();
   on(3600, true, "high clouds the next hour");
   play(4, 1, "high_clouds_next_hour");
   CHECK_MSG(logged("Animation w_cloud0:", was), "high clouds the next hour: not made again");
@@ -172,45 +191,40 @@ static void live_kept() {
   // frames are empty, nothing worse.
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
   tick(1);
-  CHECK_MSG(!live::R.px.capacity(), "the rain's frame kept: %u bytes", (unsigned) (live::R.px.capacity() * 4));
-  {
-    live::Frames tile = *live::frames_of("prec");
-    size_t need = (size_t) tile.w * tile.h * 4, from = log_all.size();
-    live::unload("prec");
-    live::add("prec", tile);
-    ram_block = need - 1;  // what overlay.h takes still fits
-    live::prec_place(panel_scene(), false);
-    int r = run_until(
-        [] {
-          auto *a = overlay::find("w_prec");
-          return a && a->state != overlay::WANT;
-        },
-        3000);
-    CHECK_MSG(r >= 0 && overlay::find("w_prec")->state == overlay::SENT && logged("No RAM to draw the frames of a", from),
-              "the rain without %u bytes for its frame: %s", (unsigned) need, panel_animation_status.state.c_str());
+  CHECK_MSG(!live::R.px.capacity(), "the rain's frame kept: %u bytes", (unsigned) live::R.px.capacity());
+  {  // asked of frame_pixel() itself, as overlay.h takes more than the frame and wouldn't get that far
+    const live::Frames *tile = live::frames_of("prec");
+    size_t need = (size_t) tile->w * tile->h, from = log_all.size();
+    ram_block = need - 1;
+    uint32_t px = live::frame_pixel(tile, 0, 0, 0);
     ram_block = 100 * 1024;
+    CHECK_MSG(!px && live::R.px.empty() && logged("No RAM to draw the frames of a", from),
+              "the rain without %u bytes for its frame", (unsigned) need);
+    live::free_px();
   }
-  // the flag follows the light without the show starting again: up at 9 on the King's birthday, brighter by noon
+  // the flag follows the light on the panel, neither it nor the show made again: up at 9 on the King's birthday,
+  // brighter by noon
   tz_offset_s = 3600;
   show({"Gulls over the cabin", "clearsky_day", 0, 0, 0, 0, 3, 5, 0, utc(2026, 2, 21, 8), met::G_HILLS, 0, 10, 0});
-  int morning = live::R.flag_light;
+  overlay::Overlay *flag = overlay::find(live::key("flag"));
+  int at = flag ? flag->copies[0].place : 0, morning = look(at).light;
   size_t was = log_all.size();
   flexit_panel_time.t.timestamp += 3 * 3600;
   met::redraw();
   CHECK_MSG(picture("the flag at noon", 6000) >= 0, "the flag at noon: not drawn again");
   play(4, 0, "");
-  CHECK_MSG(live::R.flag && morning < 10 && live::R.flag_light == 10 && logged("Animation w_flag:", was) &&
-                !logged("Weather animation:", was),
-            "the flag at 9 and at noon: lit %d and %d tenths, made again %d", morning, live::R.flag_light,
+  CHECK_MSG(flag && live::R.flag && morning > 0 && morning < 1000 && look(at).light == 1000 &&
+                !logged("Animation w_flag:", was) && !logged("Weather animation:", was),
+            "the flag at 9 and at noon: lit %d and %d of 1000, made again %d", morning, look(at).light,
             logged("Animation w_flag:", was));
   tz_offset_s = 0;
   // met.yaml's redraw takes the heater's % for the chimney's smoke
   uint16_t &heat = server->hold[flexit_modbus_server::REG_PERCENTAGE_HEATING], before = heat;
   heat = 40;
   yaml_every(5 * 60000);
-  CHECK_MSG(met::options.heater_pct == 40 && !met::forecasts.asking &&
-                picture("the weather with the heater on", 3000) >= 0,
-            "the heater at 40 %%: %d in the picture", met::options.heater_pct);
+  CHECK_MSG(
+      met::options.heater_pct == 40 && !met::forecasts.asking && picture("the weather with the heater on", 3000) >= 0,
+      "the heater at 40 %%: %d in the picture", met::options.heater_pct);
   heat = before;
   yaml_every(5 * 60000);
   CHECK_MSG(picture("the weather, the heater as it was", 3000) >= 0, "weather picture not shown again");
@@ -219,16 +233,19 @@ static void live_kept() {
 
 // What sp takes of the panel's pool as overlay.h makes it, its frame and records. 0 if it didn't make it whole.
 static size_t pool_bytes(const live::Frames &sp) {
-  std::vector<uint32_t> px;
+  std::vector<uint8_t> px;
+  live::Colours cols;
   int drawn = -1;
   overlay::Source src{sp.w, sp.h, sp.count(), 100, 0, 0, 1, [&](int f, int x, int y) {
-                     if (f != drawn) {
-                       px.assign((size_t) sp.w * sp.h, 0);
-                       sp.draw(f, live::Canvas{sp.w, sp.h, px.data()});
-                       drawn = f;
-                     }
-                     return px[(size_t) y * sp.w + x];
-                   }};
+                        if (f != drawn) {
+                          px.assign((size_t) sp.w * sp.h, 0);
+                          cols = live::Colours();
+                          sp.draw(f, live::Canvas{sp.w, sp.h, px.data(), &cols});
+                          drawn = f;
+                        }
+                        uint8_t i = px[(size_t) y * sp.w + x];
+                        return i ? 0xFF000000u | cols.rgb[i] : 0u;
+                      }};
   src.delays = sp.delays;
   overlay::Overlay a;
   a.name = "cost";
@@ -246,17 +263,6 @@ static size_t pool_bytes(const live::Frames &sp) {
   size_t n = overlay::W.phase == overlay::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
   overlay::stop();
   return n;
-}
-
-// A scene for the weather at t, its colours placed, in a buffer of its own
-static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
-                                  double lon = OSLO_LON) {
-  static SceneBuf sc(false);
-  met::Weather w = weather;
-  w.time = t / 3600 * 3600;
-  met::build(sc.s, w, lat, lon, t, false, oslo_offset, o);
-  met::palette(sc.s, nullptr);
-  return sc.s;
 }
 
 // met_live_sky.h's costs against the sprites the panel's encoder made: the least each cost can be and still bound
@@ -379,36 +385,12 @@ static void live_costs() {
     }
   cirrus.check("CIRRUS_COST");
   cumulus.check("CUMULUS_COST");
-  // the flag in any light
+  // the flag, in whatever light the panel shows it
   Costs flag;
-  for (float light : {0.2f, 0.5f, 0.8f, 1.0f}) {
-    live::Frames sp;
-    live::make_sprite("flag", sp);
-    flag.took((float) pool_bytes(live::dimmed(sp, light)), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
-  }
+  live::Frames sp;
+  live::make_sprite("flag", sp);
+  flag.took((float) pool_bytes(sp), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
   flag.check("FLAG_BYTES");
-  // the aurora's four patches on clear nights up north, all of them in the pool
-  float most = 0;
-  for (int night = 0; night < 40; night++) {
-    met::Weather w;
-    w.ok = true;
-    snprintf(w.symbol, sizeof w.symbol, "clearsky_night");
-    w.temp = -8;
-    met::Options o;
-    o.aurora = met::A_ALWAYS;
-    const met::Scene &t = scene_at(w, utc(2026, 1, 1, 21) + night * 86400u + night % 5 * 3600u, o, 69.65, 18.96);
-    live::Box b[4];
-    live::aur_boxes(t, b);
-    float bytes = 0;
-    for (int k = 0; t.aurora && k < 4; k++)
-      bytes += b[k].w ? (float) pool_bytes(live::aur_patch(t, k == 3, b[k])) : 0;
-    most = std::max(most, bytes);
-  }
-  printf("  the aurora's patches, %d and %d wide, take %.0f of the %d bytes at most\n", live::AUR_HIGH_W,
-         live::AUR_LOW_W, most, live::SKY_POOL);
-  CHECK_MSG(most <= live::SKY_POOL, "met_live_sky.h's AUR_HIGH_W and AUR_LOW_W are too wide: %.0f bytes", most);
-  CHECK_MSG(most >= live::SKY_POOL / 2, "met_live_sky.h's AUR_HIGH_W and AUR_LOW_W are far too narrow: %.0f bytes",
-            most);
   log_level = level;
   overlay::status(overlay::shown());
 }

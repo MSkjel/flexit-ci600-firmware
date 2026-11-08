@@ -24,8 +24,10 @@ know about, but I doubt it. If something's off, open an issue.
    [the ESP docs](https://github.com/MSkjel/esphome-flexit-modbus-server/blob/main/docs/panel.md#setup).
 2. A stock panel is at address 1, so put the ESP at 2 (`flexit_address: "2"`). If the panel already runs this
    firmware, the ESP stays at 1.
-3. Press Flash Panel Firmware and watch Panel Firmware Update. It takes a few minutes, with the screen dark and
-   all three lights on.
+3. Press Flash Panel Firmware and watch Panel Firmware Update. It takes a few minutes, with the screen dark. All
+   three lights come on as the bootloader starts, then the red one stays on and the yellow one blinks while it
+   writes. The panel restarts by itself at the end. If Panel Firmware Update says it didn't, power the unit off and
+   on, the firmware's in by then.
 4. From stock, the new panel comes up at 3, so move the ESP to 1.
 5. Restart the ventilation unit (power off and on).
 6. From stock, do the [first setup](../README.md#first-setup).
@@ -61,9 +63,12 @@ do the [first setup](../README.md#first-setup).
 
 ## When it doesn't work
 
-**It stopped halfway, the screen is dark and all three lights are on.** The panel is in the bootloader, which
+**It stopped halfway and the screen is dark.** The panel is in the bootloader, which
 won't start anything it hasn't fully checked, and waits for another try. Press Flash Panel Firmware again and the
 ESP picks it up there, before any other panel. Or use `fxupload.py --no-enter`.
+
+**The ESP says the panel didn't restart.** The firmware's in, but the bootloader didn't start it. Power the unit
+off and on. It's been seen on a stock 6.0 panel.
 
 **The ESP says something else is at address 1.** Take that off the bus, or give it another address.
 

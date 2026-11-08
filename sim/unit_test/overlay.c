@@ -24,21 +24,35 @@ static const uint32_t *clear15(void) {
 // OVERLAY_BEGIN of kind, w x h at scale, then the data in pieces of piece bytes
 static int32_t send_kind(int kind, int slot, int w, int h, int scale, const uint32_t *pal, uint32_t len,
                          const uint8_t *data, unsigned piece) {
-  uint8_t b[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
-  int n = sim_overlay_begin(b, ++id, slot, kind, w, h, scale, len, pal);
+  uint8_t b[OVERLAY_BEGIN_LEN];
+  int n = sim_overlay_begin(b, ++id, slot, kind, w, h, scale, len, pal, 0, 0);
   return rest(pic_msg(K_OVERLAY_BEGIN, b, n), data, len, piece, plink_crc32(0, data, len));
 }
 
 // An animated OVERLAY_BEGIN at scale 2, colour 15 clear, then the data
 int32_t overlay_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc) {
-  uint8_t h[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
-  int n = sim_overlay_begin(h, ++id, slot, OVERLAY_ANIMATED, w, AH, 2, len, clear15());
+  uint8_t h[OVERLAY_BEGIN_LEN];
+  int n = sim_overlay_begin(h, ++id, slot, OVERLAY_ANIMATED, w, AH, 2, len, clear15(), 0, 0);
   return rest(pic_msg(K_OVERLAY_BEGIN, h, n), data, len, 5, crc);
 }
 
+void script_to(int p, const uint8_t *s, int n) {
+  int at = 0;
+  do {
+    uint8_t m[PBULK_MSG_MAX] = {(uint8_t) p, AT(at), AT(n)};
+    int k = LV_MIN(n - at, (int) sizeof m - OVERLAY_SCRIPT_BYTES);
+    memcpy(m + OVERLAY_SCRIPT_BYTES, s + at, (size_t) k);
+    overlay_msg(K_OVERLAY_SCRIPT, m, OVERLAY_SCRIPT_BYTES + k);
+    at += k;
+  } while (at < n);
+}
+
+// start frames in, as the ESP has a copy start
 void place_in(int p, int slot, int x, int y, int own, int start, int fade) {
-  uint8_t m[10];
-  overlay_msg(K_OVERLAY_PLACE, m, sim_overlay_place(m, p, slot, x, y, own, start, fade));
+  uint8_t m[OVERLAY_PLACE_LEN];
+  overlay_msg(K_OVERLAY_PLACE, m, sim_overlay_place(m, p, slot, x, y, own, fade));
+  if (start)
+    script_to(p, (uint8_t[]) {OVERLAY_DO_FRAME, V16(start)}, 4);
 }
 
 void place(int p, int slot, int x, int y, int own, int start) { place_in(p, slot, x, y, own, start, 0); }
@@ -154,21 +168,27 @@ static void test_anim(void) {
   CHECK(overlay_shows(0, 0));  // and back to the start
   lv_obj_del(overlays);
 
-  // bad sizes, then bad data
-  CHECK_EQ(status(overlay_send(0, AW - 1, n, d, 0)), PIC_BAD_SIZE);
+  // a width that's odd, its rows as many bytes, then bad sizes and bad data
+  CHECK_EQ(status(overlay_send(0, AW - 1, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 0, 10, 0, 0);
+  show_overlays();
+  overlay_look_t l;
+  CHECK(overlay_look(0, &l) && lv_area_get_width(&l.box) == 2 * (AW - 1));
+  lv_obj_del(overlays);
+  CHECK_EQ(status(overlay_send(0, 0, n, d, 0)), PIC_BAD_SIZE);
   CHECK(!placed());  // the slot's gone with it
   CHECK_EQ(status(overlay_send(0, PIC_MAX_W, n, d, 0)), PIC_BAD_SIZE);
   CHECK_EQ(status(overlay_send(0, AW, OVERLAY_POOL, d, 0)), PIC_TOO_BIG);
   CHECK_EQ(status(overlay_send(0, AW, UINT32_MAX, d, 0)), PIC_TOO_BIG);  // doesn't wrap round to fit
-  uint8_t big[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];                     // a frame bigger than the pool, 15000 bytes
-  int bn = sim_overlay_begin(big, ++id, 1, OVERLAY_ANIMATED, 300, 100, 1, 4, clear15());
+  uint8_t big[OVERLAY_BEGIN_LEN];                                        // a frame bigger than the pool, 15000 bytes
+  int bn = sim_overlay_begin(big, ++id, 1, OVERLAY_ANIMATED, 300, 100, 1, 4, clear15(), 0, 0);
   CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn)), PIC_TOO_BIG);
   big[OVERLAY_BEGIN_KIND] = OVERLAY_STILL + 1;  // no such kind
   CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn)), PIC_BAD);
   big[OVERLAY_BEGIN_KIND] = OVERLAY_ANIMATED;
   big[OVERLAY_BEGIN_SLOT] = OVERLAY_SLOTS;  // no such slot
   CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn)), PIC_BAD);
-  CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn - 1)), PIC_BAD);  // the opacities cut short
+  CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn - 1)), PIC_BAD);  // cut short
   uint8_t bad[sizeof d];
   memcpy(bad, d, n);
   bad[4] = AH + 1;
@@ -186,8 +206,8 @@ static void test_anim(void) {
   // A picture coming in cancels an animation coming in. A finished animation stays until the ESP clears it.
   CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   place(0, 0, 0, 10, 0, 0);
-  uint8_t h[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
-  int hn = sim_overlay_begin(h, ++id, 1, OVERLAY_ANIMATED, AW, AH, 1, n, clear15());
+  uint8_t h[OVERLAY_BEGIN_LEN];
+  int hn = sim_overlay_begin(h, ++id, 1, OVERLAY_ANIMATED, AW, AH, 1, n, clear15(), 0, 0);
   CHECK_EQ(pic_msg(K_OVERLAY_BEGIN, h, hn), -1);
   CHECK_EQ(data(d, n / 2), -1);
   fill(0, H, 5);
@@ -236,10 +256,10 @@ static void test_anim_slots(void) {
   CHECK_EQ(overlay_used(), both);
   place(0, 0, 0, 0, 0, 0);
   place(1, 0, 100, 0, 0, 0);    // in step with place 0
-  place(2, 0, 200, 0, 1, 254);  // its own frame, 254 frames ahead: 2 of the 4
+  place(2, 0, 200, 0, 1, 254);  // its own frame, 254 frames ahead: 2 of the 4, a script to get it there
   place(3, 1, 0, 100, 0, 0);    // slot 1
   place(4, 1, 100, 100, 1, 0);  // its own frame, in step as it happens
-  CHECK_EQ(overlay_used(), both + 2 * frame);
+  CHECK_EQ(overlay_used(), both + 2 * frame + OVERLAY_SCRIPT_POOL + 4);
   place(5, 2, 0, 0, 0, 0);                // no animation there
   place(6, 0, -10, PIC_MAX_H - 1, 0, 0);  // partly off the screen, where something can come in from
   place(OVERLAY_PLACES, 0, 0, 0, 0, 0);   // no such place
@@ -313,16 +333,14 @@ void frames_msg(int slot, int rate) {
   overlay_msg(K_OVERLAY_FRAMES, m, sizeof m);
 }
 
-static void rounds_msg(int p, int rounds, int fade, int tag) {
-  uint8_t m[6] = {(uint8_t) p};
-  plink_put16(m + 1, rounds);
-  plink_put16(m + 3, fade);
-  m[5] = (uint8_t) tag;
-  overlay_msg(K_OVERLAY_ROUNDS, m, sizeof m);
+// A script that waits for rounds rounds, then fades out over fade ms and goes, answering GONE with tag
+void rounds_end(int p, int rounds, int fade, int tag) {
+  uint8_t m[] = {OVERLAY_DO_ROUNDS, V16(rounds), OVERLAY_DO_END, V16(fade), (uint8_t) tag};
+  script_to(p, m, sizeof m);
 }
 
-// K_OVERLAY_ROUNDS: plays to the end of its rounds, a frame of its own holds the last one while it fades, then it goes
-// and the panel says so
+// ROUNDS and END: it plays to the end of its rounds, a frame of its own holds the last one while it fades, then it
+// goes and the panel says so
 static void test_anim_rounds(void) {
   no_overlays();
   dot_frames(true);
@@ -333,13 +351,11 @@ static void test_anim_rounds(void) {
     ;
   place(2, 0, 0, 10, 1, 0);
   show_overlays();
-  rounds_msg(2, 1, 200, 7);
-  sim_run(170);
-  CHECK(overlay_shows(2, 2));
+  rounds_end(2, 1, 200, 7);
+  sim_run(250);
+  CHECK(overlay_shows(2, 3));  // the last frame of its round, to 260
   CHECK_EQ(look_opa(2), 1000);
-  sim_run(20);
-  CHECK(overlay_shows(2, 3));  // the end of its round
-  sim_run(100);
+  sim_run(110);
   CHECK(look_opa(2) > 0);
   CHECK(look_opa(2) < 1000);
   CHECK_EQ(overlay_gone(), -1);
@@ -352,7 +368,7 @@ static void test_anim_rounds(void) {
   lv_obj_clean(lv_scr_act());
   place(0, 0, 0, 40, 0, 0);
   show_overlays();
-  rounds_msg(0, 2, 0, 9);
+  rounds_end(0, 2, 0, 9);
   sim_run(250);
   CHECK(overlay_pos(0, &x, &y));
   CHECK_EQ(overlay_gone(), -1);
@@ -362,20 +378,22 @@ static void test_anim_rounds(void) {
   // placed again before the ESP heard, there's nothing to tell
   place(3, 0, 0, 60, 1, 0);
   show_overlays();
-  rounds_msg(3, 1, 0, 1);
+  rounds_end(3, 1, 0, 1);
   sim_run(400);
   CHECK(!overlay_pos(3, &x, &y));
   place(3, 0, 0, 60, 1, 0);
   CHECK_EQ(overlay_gone(), -1);
-  // 0 plays on
+  // another script ends it, one cut short or that's no script at all doesn't start
   lv_obj_clean(lv_scr_act());
   show_overlays();
-  rounds_msg(3, 1, 0, 2);
-  rounds_msg(3, 0, 0, 2);
-  overlay_msg(K_OVERLAY_ROUNDS, (uint8_t[]) {3, 1, 0, 0, 0}, 5);  // the wrong length
+  rounds_end(3, 1, 0, 2);
+  script_to(3, (uint8_t[]) {OVERLAY_DO_ROUNDS, V16(0)}, 4);
+  overlay_msg(K_OVERLAY_SCRIPT, (uint8_t[]) {3, AT(0), AT(7), OVERLAY_DO_ROUNDS, V16(1)}, 8);  // 3 bytes short
+  overlay_msg(K_OVERLAY_SCRIPT, (uint8_t[]) {3, 0}, 2);
   sim_run(1000);
   CHECK(overlay_pos(3, &x, &y));
   CHECK_EQ(overlay_gone(), -1);
+  CHECK_EQ(overlay_used(), AW / 2 * AH + n + AW / 2 * AH);
   // a single frame shows for its frame time each round
   uint8_t one[64];
   uint32_t n1 = plink_overlay_record(NULL, &an[0][0][0], AW, AH, 10, one);
@@ -383,7 +401,7 @@ static void test_anim_rounds(void) {
   lv_obj_clean(lv_scr_act());
   place(4, 1, 100, 100, 0, 0);
   show_overlays();
-  rounds_msg(4, 3, 0, 2);
+  rounds_end(4, 3, 0, 2);
   sim_run(250);
   CHECK(overlay_pos(4, &x, &y));
   sim_run(150);
@@ -392,7 +410,7 @@ static void test_anim_rounds(void) {
   // and only while it's shown, at its frame rate
   lv_obj_clean(lv_scr_act());
   place(4, 1, 100, 100, 0, 0);
-  rounds_msg(4, 2, 0, 3);
+  rounds_end(4, 2, 0, 3);
   frames_msg(1, 50);  // 200 ms a round
   sim_run(3000);
   show_overlays();
@@ -404,13 +422,13 @@ static void test_anim_rounds(void) {
   // cleared while it fades out after its rounds, alone or with its slot: it fades on as it was and still says so
   for (int slot = 0; slot < 2; slot++) {
     place(2, 0, 0, 10, 1, 0);
-    rounds_msg(2, 1, 400, 5);
-    sim_run(200);
+    rounds_end(2, 1, 400, 5);
+    sim_run(300);
     overlay_clear_msg(slot ? 0 | 100 << 8 : OVERLAY_PLACE_BIT | 2 | 100 << 8);
     sim_run(200);
     CHECK(overlay_pos(2, &x, &y));
     CHECK_EQ(overlay_gone(), -1);
-    sim_run(300);
+    sim_run(200);
     CHECK(!overlay_pos(2, &x, &y));
     CHECK_EQ(overlay_gone(), 2 | 5 << 8);
   }
@@ -733,10 +751,10 @@ static void test_still(void) {
   // a frame of its own takes no room, its rounds go by at its delay
   overlay_clear_msg(0);
   CHECK_EQ(overlay_used(), n);
-  place(2, 1, 0, 0, 1, 7);
+  place(2, 1, 0, 0, 1, 7);  // without a frame to start on, its script isn't taken
   CHECK_EQ(overlay_used(), n);
   show_overlays();
-  rounds_msg(2, 3, 0, 4);
+  rounds_end(2, 3, 0, 4);
   int16_t x, y;
   sim_run(250);
   CHECK(overlay_pos(2, &x, &y));
@@ -806,12 +824,17 @@ static void test_still_bad(void) {
   no_overlays();
 }
 
+// Colours 0, 1, 2, 3 across, over and over
+static void four_across(void) {
+  for (int y = 0; y < AH; y++)
+    for (int x = 0; x < AW / 2; x++)
+      an[0][y][x] = (uint8_t) ((x * 2 % 4) << 4 | (x * 2 + 1) % 4);
+}
+
 // Each colour at its own opacity, and the place's on top
 static void test_colour_opacity(void) {
   no_overlays();
-  for (int y = 0; y < AH; y++)
-    for (int x = 0; x < AW / 2; x++)
-      an[0][y][x] = (uint8_t) ((x * 2 % 4) << 4 | (x * 2 + 1) % 4);  // colours 0, 1, 2, 3 across
+  four_across();
   uint32_t pal[16] = {0x80000000 | rgb(0), 0xFF000000 | rgb(1), rgb(2), 0x11000000 | rgb(3)};
   uint8_t d[64];
   uint32_t n = plink_overlay_record(NULL, &an[0][0][0], AW, AH, 10, d), sn;
@@ -845,6 +868,72 @@ static void test_colour_opacity(void) {
   no_overlays();
 }
 
+#define SHADE 0x204080  // what the light goes toward below 100
+#define MID 0x788478    // half way from black to white, as the tint sees it
+
+static void tint_msg(int p, int on, uint32_t c) {
+  uint8_t m[OVERLAY_TINT_LEN] = {(uint8_t) p, (uint8_t) on, (uint8_t) (c >> 16), (uint8_t) (c >> 8), (uint8_t) c};
+  overlay_msg(K_OVERLAY_TINT, m, sizeof m);
+}
+
+// A place's light toward the slot's shade or white, its tint over that, and the colour that glows left as it is
+static void test_colour_light(void) {
+  no_overlays();
+  four_across();
+  uint32_t pal[16] = {0xFF000000, 0xFFFFFFFF, 0xFF000000 | rgb(2), 0xFF000000 | MID};
+  uint8_t d[64], b[OVERLAY_BEGIN_LEN];
+  uint32_t n = plink_overlay_record(NULL, &an[0][0][0], AW, AH, 10, d);
+  int k = sim_overlay_begin(b, ++id, 0, OVERLAY_ANIMATED, AW, AH, 1, n, pal, 1u << 2, SHADE);
+  CHECK_EQ(status(rest(pic_msg(K_OVERLAY_BEGIN, b, k), d, n, 20, plink_crc32(0, d, n))), PIC_DONE);
+  show_overlays();
+  place(0, 0, 10, 10, 0, 0);
+  CHECK_EQ(lv_color_brightness(lv_color_hex(MID)), 128);
+  lv_color_t black = lv_color_black(), white = lv_color_white(), shade = lv_color_hex(SHADE), mid = lv_color_hex(MID),
+             red = lv_color_hex(0xFF0000), buf[AW * AH];
+  const struct {
+    int light, tint;
+    lv_color_t want[3];  // colours 0, 1 and 3
+  } CASES[] = {
+      {100, 0, {black, white, mid}},
+      {0, 0, {shade, shade, shade}},
+      {200, 0, {white, white, white}},
+      {50, 0, {lv_color_mix(black, shade, 128), lv_color_mix(white, shade, 128), lv_color_mix(mid, shade, 128)}},
+      {100, 1, {black, white, red}},
+      {0, 1, {shade, shade, shade}},  // the light over the tint
+  };
+  for (unsigned i = 0; i < sizeof CASES / sizeof *CASES; i++) {
+    glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {CASES[i].light});
+    tint_msg(0, CASES[i].tint, 0xFF0000);
+    sim_run(50);
+    overlay_look_t l;
+    CHECK(draw_box(0, &l, buf, PIC_MAX_H));
+    CHECK_EQ(l.light, CASES[i].light * 10);
+    int off = 0;
+    for (int j = 0; j < AW * AH; j++) {
+      int c = j % 4;
+      lv_color_t want = c == 2 ? lv_color_hex(rgb(2)) : CASES[i].want[c / 2 + c % 2];
+      off += buf[j].full != want.full || l.pal[c].full != want.full;
+    }
+    if (!CHECK_EQ(off, 0))
+      printf("    light %d%s\n", CASES[i].light, CASES[i].tint ? ", tinted" : "");
+    CHECK(!sim_stale());
+  }
+  overlay_look_t l;
+  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {OVERLAY_LIGHT_MAX + 1});  // too bright, so not at all
+  CHECK(overlay_look(0, &l) && l.light == 0);
+  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {100});
+  tint_msg(0, 1, 0xFF0000);
+  tint_msg(0, 2, 0x00FF00);  // neither on nor off
+  CHECK(overlay_look(0, &l) && l.pal[3].full == red.full);
+  tint_msg(0, 0, 0);
+  CHECK(overlay_look(0, &l) && l.pal[3].full == mid.full);
+  tint_msg(0, 1, 0xFF0000);
+  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {50});
+  place(0, 0, 10, 10, 0, 0);  // starts in its own colours
+  CHECK(overlay_look(0, &l) && l.light == 1000 && l.pal[3].full == mid.full);
+  no_overlays();
+}
+
 const check_test_t OVERLAY_TESTS[] = {
     {"overlay", test_anim},
     {"overlay_slots", test_anim_slots},
@@ -854,5 +943,6 @@ const check_test_t OVERLAY_TESTS[] = {
     {"overlay_still", test_still},
     {"overlay_still_bad", test_still_bad},
     {"overlay_colour_opacity", test_colour_opacity},
+    {"overlay_colour_light", test_colour_light},
     {0},
 };

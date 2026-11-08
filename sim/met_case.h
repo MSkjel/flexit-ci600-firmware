@@ -25,11 +25,11 @@ inline int oslo_offset(uint32_t t) {
 // A scene and what it draws into, the forecast's overlay only with ov
 struct SceneBuf {
   flexit::panel::met::Scene s;
-  flexit::panel::met::Sprite sprites[flexit::panel::met::SPRITES];
+  flexit::panel::met::Stamps stamps;
   flexit::panel::met::Land land;
   uint8_t ov[flexit::panel::met::OV_H][flexit::panel::met::W / 4];
   explicit SceneBuf(bool with_ov) {
-    s.sprite = sprites;
+    s.stamps = &stamps;
     s.land = &land;
     s.ov = with_ov ? ov : nullptr;
   }

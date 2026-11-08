@@ -566,7 +566,8 @@ static void test_anim_paths(void) {
   CHECK(overlay_pos(0, &x, &y));
   CHECK_EQ(x, 195);
   area_msg(50, 80, 70, 140, OVERLAY_EDGE_CROSS, OVERLAY_EDGE_BOUNCE);
-  drift_msg(3000, 0);  // across the area many times a step, and still about it
+  glide_msg(0, OVERLAY_SPEED, 1000, 0, 0);
+  drift_msg(300, 0);  // ten times that is across the area many times a step, and still about it
   int lo = 9999, hi = -9999;
   for (int i = 0; i < 40; i++) {
     sim_run(50);
@@ -575,6 +576,7 @@ static void test_anim_paths(void) {
     hi = LV_MAX(hi, x);
   }
   CHECK(lo >= 50 - 16 && hi < 70 && hi > lo);
+  glide_msg(0, OVERLAY_SPEED, 100, 0, 0);
   // a wander about its area, resting now and then. A seed of its own, the time it was placed depends on the tests
   // before.
   places[0].rng = 1;

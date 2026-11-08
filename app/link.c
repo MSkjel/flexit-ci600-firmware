@@ -285,7 +285,7 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if (!link_compatible())
     return;  // different link version, the message can't be trusted
-  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_DEPTH) {
+  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_TINT) {
     overlay_msg(key, b, n);  // a slot's or place's, no picture data or ack
     return;
   }
@@ -374,6 +374,9 @@ void link_poll(void) {
   int32_t gone = link_compatible() && plink_room(&queue) ? overlay_gone() : -1;
   if (gone >= 0)
     plink_send(&queue, K_OVERLAY_GONE, (uint32_t) gone);
+  int32_t mark = link_compatible() && plink_room(&queue) ? overlay_mark() : -1;
+  if (mark >= 0)
+    plink_send(&queue, K_OVERLAY_MARK, (uint32_t) mark);
   send_sync();
   send_settings();
   while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it

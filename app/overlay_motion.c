@@ -9,7 +9,8 @@ static uint32_t moved;  // the tick the motion has got to
 const int32_t SHARE_LO[OVERLAY_CHANNELS] = {[OVERLAY_SIZE] = OVERLAY_SIZE_MIN * FULL / 100},
               SHARE_HI[OVERLAY_CHANNELS] = {[OVERLAY_SIZE] = OVERLAY_SIZE_MAX * FULL / 100,
                                             [OVERLAY_OPACITY] = OVERLAY_OPACITY_MAX * FULL / 100,
-                                            [OVERLAY_SPEED] = OVERLAY_SPEED_MAX * FULL / 100};
+                                            [OVERLAY_SPEED] = OVERLAY_SPEED_MAX * FULL / 100,
+                                            [OVERLAY_LIGHT] = OVERLAY_LIGHT_MAX * FULL / 100};
 
 // Counts *left down by ms, true once it has run out
 static bool run_out(uint16_t *left, uint32_t ms) {
@@ -75,8 +76,9 @@ static uint32_t rnd(place_t *p) {
   return p->rng = x;
 }
 
-static int32_t pick(place_t *p, int32_t lo, int32_t hi) {
-  return hi > lo ? lo + (int32_t) (rnd(p) % (uint32_t) (hi - lo + 1)) : lo;
+int32_t pick(place_t *p, int32_t lo, int32_t hi) {
+  uint32_t span = (uint32_t) hi - (uint32_t) lo + 1u;  // 0 for all of them
+  return hi > lo ? (int32_t) ((uint32_t) lo + (span ? rnd(p) % span : rnd(p))) : lo;
 }
 
 static uint16_t jittered(place_t *p, uint32_t ms, uint8_t jitter) {
@@ -147,9 +149,8 @@ static void wave_step(wave_t *w, unsigned k) {
 
 // Where its middle is across its area, 0..FULL from the left or the top
 static int32_t across(const place_t *p, int axis) {
-  const slot_t *s = &slots[p->slot];
   int lo = axis ? p->area.y0 : p->area.x0, hi = axis ? p->area.y1 : p->area.x1;
-  int mid = (axis ? p->y + s->h * s->scale / 2 : p->x + s->w * s->scale / 2) - lo;
+  int mid = (axis ? p->y : p->x) + shown(p, axis) / 2 - lo;
   return LV_CLAMP(0, mid * FULL / (hi - lo), FULL);
 }
 
@@ -189,6 +190,8 @@ void update(place_t *p) {
   p->now.size = (int16_t) share(p, OVERLAY_SIZE);
   p->now.speed = (int16_t) share(p, OVERLAY_SPEED);
   p->now.opa = (int16_t) (share(p, OVERLAY_OPACITY) * ramp_at(&p->fade) / FULL);
+  p->now.light = (int16_t) share(p, OVERLAY_LIGHT);
+  p->now.tint = p->tint;
   p->now.flip = p->flip;
   if (p->now.deg != was.deg || p->now.size != was.size)
     b = put(p);  // the box's corner goes with its size
@@ -205,6 +208,8 @@ void wake_mover(void) {
   lv_timer_resume(mover);
   moved = lv_tick_get();
 }
+
+uint32_t since_step(void) { return mover->paused ? 0 : lv_tick_get() - moved; }
 
 // Keeps a drifting axis to the area: off the box's corner from x or y, n its size
 static void keep(place_t *p, int axis, int off, int n) {
@@ -304,7 +309,7 @@ static void face_step(place_t *p, const int32_t d[2], uint32_t ms) {
 }
 
 bool moving(const place_t *p) {
-  if (p->wander.on || p->face.on || p->fade.ms || p->leaving || (p->rounds && !looping(&slots[p->slot])))
+  if (p->wander.on || p->face.on || p->fade.ms || p->leaving || script_moves(p))
     return true;
   for (int c = 0; c < OVERLAY_CHANNELS; c++)
     if (p->ch[c].ms || (c <= OVERLAY_TURN && p->rate[c]))
@@ -354,8 +359,7 @@ static void move_place(place_t *p, unsigned k) {
   if (p->face.on)
     face_step(p, d, ms);
   ramp_step(&p->fade, k);
-  if (p->rounds && !looping(&slots[p->slot]))
-    still_rounds(p, ms);
+  script_steps(p, ms);
   keep_in_area(p);
   update(p);
   if (p->leaving && !p->fade.ms)

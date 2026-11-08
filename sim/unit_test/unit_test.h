@@ -19,8 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern const check_test_t PICTURE_TESTS[], OVERLAY_TESTS[], OVERLAY_MOTION_TESTS[], VALUES_TESTS[], CLOCK_TESTS[],
-    UNIT_TESTS[], SETTINGS_TESTS[], UI_TESTS[], LINK_TESTS[];
+extern const check_test_t PICTURE_TESTS[], OVERLAY_TESTS[], OVERLAY_MOTION_TESTS[], OVERLAY_SCRIPT_TESTS[],
+    VALUES_TESTS[], CLOCK_TESTS[], UNIT_TESTS[], SETTINGS_TESTS[], UI_TESTS[], LINK_TESTS[];
 
 // board_stub.c
 extern uint32_t stub_ms, stub_rtc;
@@ -61,6 +61,13 @@ void no_overlays(void);            // none, and nothing on the screen
 void dot_frames(bool moves);       // a dot that moves, and stays put for a frame unless moves
 uint32_t overlay_records(uint8_t *d, int delay);
 int32_t overlay_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc);
+// A value in a script, see K_OVERLAY_SCRIPT
+#define V16(v) OVERLAY_V16, (uint8_t) (v), (uint8_t) ((uint16_t) (v) >> 8)
+#define REG(k) (OVERLAY_VREG + (k))
+#define AT(at) (uint8_t) (at), (uint8_t) ((at) >> 8)  // where a step goes on, or a SCRIPT's at or len
+#define WHOLE AT(0), AT(0)                            // a CLIP's size: all of its frame
+void script_to(int p, const uint8_t *s, int n);       // place p's script, in as many messages as the ESP sends it in
+void rounds_end(int p, int rounds, int fade, int tag);
 void place_in(int p, int slot, int x, int y, int own, int start, int fade);
 void place(int p, int slot, int x, int y, int own, int start);
 void overlay_clear_msg(unsigned v);

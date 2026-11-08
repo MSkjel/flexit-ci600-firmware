@@ -28,8 +28,8 @@ const uint32_t *sim_jpeg_rgb(void);  // the pixels it decoded, 0xRRGGBB
 int sim_pic_begin(uint8_t *b, uint8_t id, int format, int w, int h, uint32_t len, const uint32_t *pal);
 int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const uint32_t *pal);
 int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
-                      const uint32_t *pal);  // pal 0xAARRGGBB
-int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade);
+                      const uint32_t *pal, unsigned glows, uint32_t shade);  // pal 0xAARRGGBB, shade 0xRRGGBB
+int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int fade);
 int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
 int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second
 
@@ -72,7 +72,7 @@ unsigned sim_esp_send_photo(int *quality);  // a photo-like picture, as a JPEG a
 unsigned sim_esp_send_moon(int *y, int *count);
 void sim_esp_send_dawn(void);
 unsigned sim_esp_send_animation(int x, int y);  // into slot 0, placed at x, y
-void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start);
+void sim_esp_place_animation(int place, int slot, int x, int y, int own);
 void sim_esp_move_animation(uint16_t key, int a, int b, int ms);  // GLIDE or DRIFT of place 0: x, y or vx, vy
 void sim_link_run(int cycles);                                    // run that many CX60 cycles
 int sim_link_settle(void);  // run until both ends are idle, returns the cycles it took or -1

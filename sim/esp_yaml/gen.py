@@ -109,6 +109,20 @@ FILES = [
     ("packages/panel/ha_picture.yaml", {"name": "front_door", "entity_id": "camera.front_door"}),
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
     ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64", "drift_x": -10}),
+    (
+        "packages/panel/animation.yaml",
+        {
+            "name": "kite",
+            "file": "z.gif",
+            "resize": "16x16",
+            "x": 100,
+            "y": 100,
+            "fade_ms": 0,
+            "clips": "up 0-3, down 4-7",
+            "script": "# up twice, then down once and away\nclip up\nwait rounds 2\nmark 3\nclip down at end\n"
+            "wait rounds 1\nend",
+        },
+    ),
     ("packages/panel/met.yaml", {"latitude": "59.9139", "longitude": "10.7522", "encoding": "auto"}),
     ("packages/panel/mars_today.yaml", {}),
     ("packages/panel/earth_today.yaml", {}),
@@ -147,13 +161,19 @@ def text_of(v):
     return str(v).lower() if isinstance(v, bool) else str(v)
 
 
+def fill(line, subst):
+    """A line with its ${var}s filled in. A value of several lines stays in the line's block, as ESPHome has it."""
+    pad = re.match(r"\s*", line).group(0)
+    return re.sub(r"\$\{(\w+)\}", lambda m: subst.get(m.group(1), m.group(0)).replace("\n", "\n" + pad), line)
+
+
 def load(esp, path, vars_):
     """Load a package with ${var} filled in from its defaults and vars_."""
     text = open(f"{esp}/{path}").read()
     defaults = yaml.load(text, Loader=Loader).get("defaults", {}) or {}
     subst = {**{k: text_of(v) for k, v in defaults.items()}, **{k: text_of(v) for k, v in vars_.items()}}
     subst = {k: re.sub(r"\$\{(\w+)\}", lambda m: subst.get(m.group(1), m.group(0)), v) for k, v in subst.items()}
-    text = re.sub(r"\$\{(\w+)\}", lambda m: subst.get(m.group(1), m.group(0)), text)
+    text = "\n".join(fill(line, subst) for line in text.split("\n"))
     left = re.findall(r"\$\{\w+\}", text)
     if left:
         sys.exit(f"{path}: no value for {left}")

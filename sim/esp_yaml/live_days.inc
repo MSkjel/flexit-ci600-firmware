@@ -29,6 +29,34 @@ static void live_days() {
        "city");
   show({"New Year's Eve", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2025, 12, 31, 23, 50), met::G_HILLS, 0, 120, 16},
        "hills");
+  {  // both lanes' rockets copies of one animation, going up in their own colours, each burst in one of FW
+    std::set<int> copies;
+    int rising = 0, bursts = 0, tinted = 0, odd = 0;
+    play(40, 0, "", [&] {
+      const overlay::Overlay *a = overlay::find(live::key("firework"));
+      for (size_t i = 0; a && a->state == overlay::SENT && i < a->copies.size(); i++) {
+        const overlay::Copy &c = a->copies[i];
+        Look l = c.used && c.placed ? look(c.place) : Look{};
+        if (!l.shown || l.opa < 1000)
+          continue;
+        copies.insert((int) i);
+        if (i % 2 == 0) {
+          rising += draws(*a, c.place, 0xFFDD88, 1).first > 0;  // the rocket's head
+          continue;
+        }
+        auto t = std::find_if(c.told.begin(), c.told.end(),
+                              [](const overlay::Copy::Told &t) { return t.key == K_OVERLAY_TINT; });
+        const uint8_t *rgb = t == c.told.end() ? nullptr : &t->m[OVERLAY_TINT_RGB];
+        uint32_t tint = rgb ? (uint32_t) rgb[0] << 16 | rgb[1] << 8 | rgb[2] : 0;
+        bursts++;
+        odd += !std::count(std::begin(live::FW), std::end(live::FW), tint);
+        tinted += draws(*a, c.place, tint, 1).first > 0;
+      }
+    });
+    CHECK_MSG(copies == std::set<int>({0, 1, 2, 3}) && rising && bursts && tinted && !odd,
+              "the fireworks: copies %d of one animation, %d rising, %d of %d bursts in their tint, %d not in FW",
+              (int) copies.size(), rising, tinted, bursts, odd);
+  }
   // the bursts under the forecast
   met::with_forecast = true;
   show(
