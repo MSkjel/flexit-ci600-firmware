@@ -9,11 +9,13 @@
 #include "mbserver.h"
 #include "panel.h"
 #include "plat.h"
+#include "plink.h"
 #include "prof.h"
 #include "room.h"
 #include "rs485.h"
 #include "settings.h"
 #include "shot.h"
+#include "stm32f1.h"
 #include "trend.h"
 #include "ui.h"
 #include "unit.h"
@@ -113,6 +115,14 @@ static void keys(uint32_t ms) {
 
 static uint32_t uptime_s;
 
+// Flexit's bootloader never changes, so its CRC is worked out once
+static uint32_t boot_crc(void) {
+  static uint32_t crc;
+  if (!crc)
+    crc = plink_crc32(0, (const void *) FLASH_BASE_ADDR, FLASH_HEADER - FLASH_BASE_ADDR);
+  return crc;
+}
+
 void plat_stats(plat_stats_t *s) {
   uint32_t used = heap_used();
   *s = (plat_stats_t) {.uptime_s = uptime_s,
@@ -124,7 +134,9 @@ void plat_stats(plat_stats_t *s) {
                        .saves = settings_saves(),
                        .heap_size = LV_MEM_SIZE,
                        .heap_used = used,
-                       .heap_peak = used > heap_peak ? used : heap_peak};
+                       .heap_peak = used > heap_peak ? used : heap_peak,
+                       .cpuid = SCB->CPUID,
+                       .boot_crc = boot_crc()};
 }
 
 // Processor speed. The clock only changes at a start. A speed over 72 restarts into a trial at it, saved as 72 until

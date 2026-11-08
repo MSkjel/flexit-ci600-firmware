@@ -26,5 +26,7 @@ typedef struct {
   uint32_t stack_free;                       // bytes of stack never used
   uint32_t saves;                            // settings saves since the flash was erased
   uint32_t heap_size, heap_used, heap_peak;  // LVGL's memory, bytes
+  uint32_t cpuid;                            // the core's CPUID, 411FC231 on an STM32F103
+  uint32_t boot_crc;                         // plink_crc32 of Flexit's bootloader, to tell its versions apart
 } plat_stats_t;
 void plat_stats(plat_stats_t *s);

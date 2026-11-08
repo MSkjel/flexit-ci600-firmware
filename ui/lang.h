@@ -655,16 +655,20 @@
   X(START_WATCHDOG, "Watchdog") \
   X(START_SOFTWARE, "Restart") \
   X(START_CRASH, "Crash at %08lX") \
-  X(RESTARTS, "Restarts") \
+  X(START_ONE_RESTART, "%s, 1 restart") \
+  X(START_RESTARTS, "%s, %lu restarts") \
   X(MEMORY, "Memory") \
   X(MEMORY_USE, "%s of %u KB, peak %s") \
   X(FREE_STACK, "Free stack") \
   X(FULL_REDRAW, "Full redraw") \
   X(REDRAW_SENDING, "%lu ms, %lu sending") \
   X(SETTINGS_SAVES, "Settings saves") \
+  X(CHIP, "Chip") \
+  X(CHIP_IDS, "%08lX, boot %08lX") \
   X(DIAG_PAGE_HELP, \
-    "For finding faults. Restarts counts since the power came on and should stay low. Processor is its clock and the " \
-    "share of the time it's awake. Memory is the screen's, now and at most.") \
+    "Restarts count since the power came on and should stay low. Processor is its clock and the share of the time " \
+    "it's awake. Memory is the screen's, now and at most. Chip is the processor's ID and a checksum of the " \
+    "bootloader.") \
   X(ABOUT_PAGE_HELP, "Software versions of this panel and the unit, and what's installed.") \
   X(NOTICE_FIRMWARE, "Replacement firmware %s") \
   X(NOTICE_REVERSED, "Reverse engineered by") \

@@ -102,11 +102,12 @@ static int diag_rows(kv_t *r) {
         (unsigned) (up / 60 % 60));
   else
     ROW(S_UPTIME, "%02u:%02u:%02u", (unsigned) (up / 3600), (unsigned) (up / 60 % 60), (unsigned) (up % 60));
+  char why[24];
   if (M.reset_cause == RESET_FAULT)
-    ROW(S_LAST_START, _(S_START_CRASH), (unsigned long) M.fault_pc);
+    lv_snprintf(why, sizeof why, _(S_START_CRASH), (unsigned long) M.fault_pc);
   else
-    ROW(S_LAST_START, "%s", tr(STARTS[M.reset_cause]));
-  ROW(S_RESTARTS, "%lu", (unsigned long) s.restarts);
+    lv_snprintf(why, sizeof why, "%s", tr(STARTS[M.reset_cause]));
+  ROW(S_LAST_START, s.restarts == 1 ? _(S_START_ONE_RESTART) : _(S_START_RESTARTS), why, (unsigned long) s.restarts);
   ROW(S_PROCESSOR, _(S_MHZ_BUSY), (unsigned) s.cpu_mhz, M.cpu_busy);
   char used[12], peak[12];
   ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, sizeof used, s.heap_used), (unsigned) (s.heap_size / 1024),
@@ -115,6 +116,7 @@ static int diag_rows(kv_t *r) {
   ROW(S_FULL_REDRAW, _(S_REDRAW_SENDING), (unsigned long) ((s.full_us + 500) / 1000),
       (unsigned long) ((s.full_send_us + 500) / 1000));
   ROW(S_SETTINGS_SAVES, "%lu", (unsigned long) s.saves);
+  ROW(S_CHIP, _(S_CHIP_IDS), (unsigned long) s.cpuid, (unsigned long) s.boot_crc);
   return n;
 }
 #undef ROW

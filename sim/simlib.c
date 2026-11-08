@@ -186,7 +186,9 @@ void plat_stats(plat_stats_t *s) {
                        .saves = 128,
                        .heap_size = 14336,
                        .heap_used = 7810,
-                       .heap_peak = 9560};
+                       .heap_peak = 9560,
+                       .cpuid = 0x411FC231,
+                       .boot_crc = 0x90AEC4A2};
 }
 
 int sim_trial_answer = -1;
