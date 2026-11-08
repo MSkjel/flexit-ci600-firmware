@@ -86,8 +86,12 @@ static void live_sky() {
   under("thunder");
   live::flash();
   tick(9);
-  play(1, 9, "thunderstorm_flash");
-  CHECK_MSG(overlay::find("w_bolt"), "thunder: no bolt");
+  bool lit = false;
+  play(1, 9, "thunderstorm_flash", [&] {
+    Look l;
+    lit |= where("bolt", l);
+  });
+  CHECK_MSG(lit, "thunder: no bolt");
   play(16, 1, "thunderstorm_after");
   CHECK_MSG(!overlay::find("w_bolt"), "thunder: the bolt stayed");
   show({"Light rain", "heavyrain", 0, 60, 100, 5, 12, 8, 0, utc(2026, 10, 20, 12), met::G_COAST, 0, 40, 2}, "heavy");
@@ -183,27 +187,29 @@ static void live_kept() {
               "the rain without %u bytes for its frame", (unsigned) need);
     live::free_px();
   }
-  // the flag follows the light without the show starting again: up at 9 on the King's birthday, brighter by noon
+  // the flag follows the light on the panel, neither it nor the show made again: up at 9 on the King's birthday,
+  // brighter by noon
   tz_offset_s = 3600;
   show({"Gulls over the cabin", "clearsky_day", 0, 0, 0, 0, 3, 5, 0, utc(2026, 2, 21, 8), met::G_HILLS, 0, 10, 0});
-  int morning = live::R.flag_light;
+  overlay::Overlay *flag = overlay::find(live::key("flag"));
+  int at = flag ? flag->copies[0].place : 0, morning = look(at).light;
   size_t was = log_all.size();
   flexit_panel_time.t.timestamp += 3 * 3600;
   met::redraw();
   CHECK_MSG(picture("the flag at noon", 6000) >= 0, "the flag at noon: not drawn again");
   play(4, 0, "");
-  CHECK_MSG(live::R.flag && morning < 10 && live::R.flag_light == 10 && logged("Animation w_flag:", was) &&
-                !logged("Weather animation:", was),
-            "the flag at 9 and at noon: lit %d and %d tenths, made again %d", morning, live::R.flag_light,
+  CHECK_MSG(flag && live::R.flag && morning > 0 && morning < 1000 && look(at).light == 1000 &&
+                !logged("Animation w_flag:", was) && !logged("Weather animation:", was),
+            "the flag at 9 and at noon: lit %d and %d of 1000, made again %d", morning, look(at).light,
             logged("Animation w_flag:", was));
   tz_offset_s = 0;
   // met.yaml's redraw takes the heater's % for the chimney's smoke
   uint16_t &heat = server->hold[flexit_modbus_server::REG_PERCENTAGE_HEATING], before = heat;
   heat = 40;
   yaml_every(5 * 60000);
-  CHECK_MSG(met::options.heater_pct == 40 && !met::forecasts.asking &&
-                picture("the weather with the heater on", 3000) >= 0,
-            "the heater at 40 %%: %d in the picture", met::options.heater_pct);
+  CHECK_MSG(
+      met::options.heater_pct == 40 && !met::forecasts.asking && picture("the weather with the heater on", 3000) >= 0,
+      "the heater at 40 %%: %d in the picture", met::options.heater_pct);
   heat = before;
   yaml_every(5 * 60000);
   CHECK_MSG(picture("the weather, the heater as it was", 3000) >= 0, "weather picture not shown again");
@@ -216,15 +222,15 @@ static size_t pool_bytes(const live::Frames &sp) {
   live::Colours cols;
   int drawn = -1;
   overlay::Source src{sp.w, sp.h, sp.count(), 100, 0, 0, 1, [&](int f, int x, int y) {
-                     if (f != drawn) {
-                       px.assign((size_t) sp.w * sp.h, 0);
-                       cols = live::Colours();
-                       sp.draw(f, live::Canvas{sp.w, sp.h, px.data(), &cols});
-                       drawn = f;
-                     }
-                     uint8_t i = px[(size_t) y * sp.w + x];
-                     return i ? 0xFF000000u | cols.rgb[i] : 0u;
-                   }};
+                        if (f != drawn) {
+                          px.assign((size_t) sp.w * sp.h, 0);
+                          cols = live::Colours();
+                          sp.draw(f, live::Canvas{sp.w, sp.h, px.data(), &cols});
+                          drawn = f;
+                        }
+                        uint8_t i = px[(size_t) y * sp.w + x];
+                        return i ? 0xFF000000u | cols.rgb[i] : 0u;
+                      }};
   src.delays = sp.delays;
   overlay::Overlay a;
   a.name = "cost";
@@ -375,13 +381,11 @@ static void live_costs() {
     }
   cirrus.check("CIRRUS_COST");
   cumulus.check("CUMULUS_COST");
-  // the flag in any light
+  // the flag, in whatever light the panel shows it
   Costs flag;
-  for (float light : {0.2f, 0.5f, 0.8f, 1.0f}) {
-    live::Frames sp;
-    live::make_sprite("flag", sp);
-    flag.took((float) pool_bytes(live::dimmed(sp, light)), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
-  }
+  live::Frames sp;
+  live::make_sprite("flag", sp);
+  flag.took((float) pool_bytes(sp), live::FLAG_BYTES, {{"FLAG_BYTES", live::FLAG_BYTES, 0, 1}});
   flag.check("FLAG_BYTES");
   // the aurora's four patches on clear nights up north, all of them in the pool
   float most = 0;

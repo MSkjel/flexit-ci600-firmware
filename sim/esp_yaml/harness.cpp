@@ -213,6 +213,9 @@ static void cx60_cycle() {
   }
 }
 
+// Whether the panel's clock goes on twice a cycle, so its animations play as they do on the panel, rather than once a
+// second, see play()
+static bool playing;
 static void run(int n) {  // n CX60 cycles of 110 ms
   for (int c = 0; c < n; c++) {
     uint32_t t0 = now_us;
@@ -226,8 +229,10 @@ static void run(int n) {  // n CX60 cycles of 110 ms
     pn_poll();
     for (int r = 0; r < 0x200; r++)
       server->coil[r] = false;  // the CX60 has read everything flagged
+    for (int k = 0; k < 2 && playing; k++)
+      pn_tick(PBUS_CYCLE_US / 2000);
     if (++cycles % 9 == 0)
-      pn_second();
+      pn_second(!playing);
     now_us = t0 + PBUS_CYCLE_US;
   }
 }
@@ -559,6 +564,17 @@ static void draw_ball(Animation &a, int size, int frames, bool noise) {
       }
 }
 
+// A square in a colour of its own each frame, so the frames can be told apart
+static void draw_squares(Animation &a, int size, int frames) {
+  a.w = a.h = size;
+  a.frames.assign(frames, std::vector<uint32_t>((size_t) size * size, 0));
+  for (int f = 0; f < frames; f++)
+    for (int y = 2; y < size - 2; y++)
+      for (int x = 2; x < size - 2; x++)
+        a.frames[f][(size_t) y * size + x] =
+            0xFF000000u | (uint32_t) (40 + f * 30) << 16 | (uint32_t) (230 - f * 25) << 8 | (f & 1 ? 0xE0u : 0x20u);
+}
+
 // The delays of animation name's records, as the panel plays them
 static std::vector<int> overlay_delays(const char *name) {
   std::vector<int> d;
@@ -630,6 +646,37 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
   return true;
 }
 
+// RGB565 colours a and b no more than near steps apart in red and blue, twice that in green
+static bool near565(int a, int b, int near) {
+  return abs((a >> 11) - (b >> 11)) <= near && abs((a >> 5 & 63) - (b >> 5 & 63)) <= 2 * near &&
+         abs((a & 31) - (b & 31)) <= near;
+}
+
+// How many of the pixels place p of animation a draws are near rgb, and how many it draws
+static std::pair<int, int> draws(const overlay::Overlay &a, int p, uint32_t rgb, int near = 0) {
+  uint8_t line[320 * 3];
+  int n = 0, all = 0;
+  for (int y = 0; y < a.h && pn_overlay_line(p, y, a.w, 1, line) == a.w; y++)
+    for (int x = 0; x < a.w; x++)
+      if (line[3 * x + 2]) {
+        all++;
+        n += near565(line[3 * x] | line[3 * x + 1] << 8, sim_rgb565(rgb), near);
+      }
+  return {n, all};
+}
+
+// Whether each pixel place p of animation a draws is a grey
+static bool all_grey(const overlay::Overlay &a, int p) {
+  uint8_t line[320 * 3];
+  for (int y = 0; y < a.h && pn_overlay_line(p, y, a.w, 1, line) == a.w; y++)
+    for (int x = 0; x < a.w; x++) {
+      int c = line[3 * x] | line[3 * x + 1] << 8, k = c >> 11;
+      if (line[3 * x + 2] && !near565(c, k << 11 | k << 6 | k, 1))
+        return false;
+    }
+  return true;
+}
+
 // ---------------------------------------------------------------- the weather picture and its shows
 static const std::string &met_status = panel_weather.state;  // what met.h said last, in met.yaml's Panel Weather
 
@@ -665,8 +712,8 @@ struct Live {
 
 // What a show must never log
 static const char *const LIVE_BAD[] = {
-    "waves at most", "No room for animation", "copies at most",   "too big",  "no room in the", "No weather animation",
-    "no copy",       "doesn't fit",           "the panel didn't", "half size"};
+    "waves at most", "No room for animation", "copies at most",   "too big",   "no room in the", "No weather animation",
+    "no copy",       "doesn't fit",           "the panel didn't", "half size", "'s script"};
 
 static const char *show_on() { return live::R.show >= 0 ? live::SHOWS[live::R.show].name : "none"; }
 
@@ -691,6 +738,7 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
   static std::set<std::string> taken;
   int every = shots ? seconds * 9 / shots : 0;  // 9 cycles a second
   pn_saver(1);
+  playing = true;
   for (int k = 0, n = 0; k < seconds * 9; k++) {
     tick(1);
     if (each)
@@ -703,13 +751,13 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
       sim_shot(live_dir.c_str(), shot.c_str());
     }
   }
+  playing = false;
   pn_saver(0);
 }
 
 // Copy 0 of a weather sprite as the panel has it, or where the ESP placed it, as the panel may have moved it on
-// already, or where the ESP last moved it to, as the panel here only moves it on once a second. False if the panel
-// hasn't it.
-enum At { NOW, PLACED, AIMED };
+// already. False if the panel hasn't it.
+enum At { NOW, PLACED };
 static bool where(const char *sprite, Look &l, At at = NOW) {
   const overlay::Overlay *a = overlay::find(std::string("w_") + sprite);
   if (!a || a->state != overlay::SENT || a->copies.empty() || !a->copies[0].used)
@@ -720,12 +768,6 @@ static bool where(const char *sprite, Look &l, At at = NOW) {
     l.x = c.x;
     l.y = c.y;
   }
-  if (at == AIMED)
-    for (const overlay::Copy::Told &t : c.told)
-      if (t.key == K_OVERLAY_GLIDE && t.ch == (1 << OVERLAY_X | 1 << OVERLAY_Y)) {  // a move
-        l.x = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD]);
-        l.y = (int16_t) plink_get16(&t.m[OVERLAY_GLIDE_HEAD + 2]);
-      }
   l.hidden = l.shown && pn_overlay_covered(c.place, l.x + a->w / 2, l.y + a->h / 2);
   return l.shown;
 }
@@ -736,8 +778,7 @@ static void follow(const char *sprite, Path &p) {
   if (where(sprite, l, p.empty() ? PLACED : NOW) && l.opa > 0)
     p.push_back(l);
 }
-// Its row where it crossed column x, between the places either side, -1 if it didn't. The panel here only moves it
-// on once a second.
+// Its row where it crossed column x, between the places either side, -1 if it didn't
 static int row_at(const Path &p, int x) {
   for (size_t i = 1; i < p.size(); i++) {
     int x0 = p[i - 1].x, x1 = p[i].x;
@@ -797,6 +838,19 @@ static void show(const Live &c, const char *tag = "", bool chances = false) {
   CHECK_MSG(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
 }
 
+// The copies of lit weather sprites the panel shows in another light than the scene's, see in_light(). None while the
+// link has something on its way.
+static int out_of_light() {
+  int n = 0;
+  for (auto &[name, least] : live::R.lit)
+    if (const overlay::Overlay *a = overlay::find(live::key(name)); a && a->state == overlay::SENT && settled())
+      for (const overlay::Copy &c : a->copies) {
+        Look l = c.used && c.placed ? look(c.place) : Look{};
+        n += l.shown && l.light != live::light_of(least) * 10;
+      }
+  return n;
+}
+
 // The show's own timers go ten minutes on, so what's tried now has the time
 static void show_later() {
   for (auto &t : live::R.timers)
@@ -825,15 +879,18 @@ static void visits(const char *tag, int shots = 2, std::initializer_list<const c
       continue;
     std::string name = std::string(tag) + "_" + std::to_string(k);
     std::map<std::string, Path> paths;  // each walker where it's placed, faded in or not, and where it went
+    int dark = 0;
     play((int) (ms + 999) / 1000 + 1, shots, name, [&] {
+      dark += out_of_light();
       for (const char *w : walkers) {
         Path &p = paths[w];
         Look l;
-        if (where(w, l, p.empty() ? PLACED : AIMED))
+        if (where(w, l, p.empty() ? PLACED : NOW))
           p.resize(std::min<size_t>(p.size(), 1)), p.push_back(l);
       }
     });
     live_quiet(name, from);
+    CHECK_MSG(!dark, "%s: %d copies in another light than the scene's", name.c_str(), dark);
     CHECK_MSG(slots_used() <= slots, "%s: %d animations after the visit, %d before", name.c_str(), slots_used(), slots);
     for (auto &[w, p] : paths) {
       if (p.empty())
@@ -865,8 +922,9 @@ static void boot() {
   ha_washer.publish_state("Washing|Vasker");
   draw_ball(panel_animation_ball, 48, 8, false);
   draw_ball(panel_animation_noise, 64, 8, true);  // too big at full size
-  panel_picture.publish_state("dusk");            // restored, shown once on_boot has registered them all
-  panel_anim_ball.publish_state(true);            // restored
+  draw_squares(panel_animation_kite, 16, 8);
+  panel_picture.publish_state("dusk");  // restored, shown once on_boot has registered them all
+  panel_anim_ball.publish_state(true);  // restored
   yaml_boot();
   yaml_time_sync();  // Home Assistant's time, right after boot
   for (fetch::Asker *a : fetch::askers)
@@ -1571,9 +1629,10 @@ static void overlay_copies() {
       a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == OVERLAY_NEAREST && b.depth == OVERLAY_NEAREST,
       "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
   const overlay::Overlay *ball = overlay::find("ball");
-  CHECK_MSG(pn_overlay_used() == ball->frame_bytes() * 2 + ball->data.size(),
+  size_t want = ball->frame_bytes() * 2 + ball->data.size() + OVERLAY_SCRIPT_POOL + 4;  // copy 2's frame and FRAME 5
+  CHECK_MSG(pn_overlay_used() == want && overlay::used_by_others(nullptr) == want,
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
-            (unsigned) (ball->frame_bytes() * 2 + ball->data.size()));
+            (unsigned) overlay::used_by_others(nullptr));
   // copy 1 shows what copy 0 shows, copy 2 started on frame 5 when it was placed, so it's out of step
   int apart = 0;
   for (int i = 0; i < 8; i++, pn_overlay_step(100))
@@ -1778,9 +1837,10 @@ static void overlay_two() {
   unsigned used = pn_overlay_used();
   CHECK_MSG(used == overlay::used_by_others(nullptr) && used <= OVERLAY_POOL,
             "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) overlay::used_by_others(nullptr));
+  size_t copy2 = overlay::find("ball")->frame_bytes() + OVERLAY_SCRIPT_POOL + 4;  // its frame and its script
   panel_remove_animation.execute("ball", 2);
   run(3);
-  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - overlay::find("ball")->frame_bytes() &&
+  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - copy2 &&
                 panel_animation_status.state == "Shown: ball (2 copies), big",
             "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_overlay_used());
   panel_clear_animation.execute("big");
@@ -1826,13 +1886,13 @@ static void overlay_half_size() {
 
 static void overlay_not_fitting() {
   step("animations that don't fit");
-  // flush with the right and bottom edges, half size rounds up, so it moves in
+  // flush with the right and bottom edges, half size rounds the odd height up, so it moves up
   overlay::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
   overlay::clear("big");
   overlay::show("edge");
   int ar = until_anim_status("Shown: edge");
   Look l = look(0);
-  CHECK_MSG(ar >= 0 && overlay::find("edge")->half && l.x == 256 && l.y == 194 && same_anim("edge", 0),
+  CHECK_MSG(ar >= 0 && overlay::find("edge")->half && l.x == 258 && l.y == 194 && same_anim("edge", 0),
             "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), overlay::find("edge")->half, l.x, l.y);
   // the panel draws 2x at most, so scale 2 can't go to half size
   overlay::add("noise2", {80, 80, 4, 100, 16, 16, 2, noise_px});
@@ -1916,7 +1976,8 @@ static void overlay_no_room() {
   run(3);
 }
 
-// A GIF that repeats itself goes once round, and a frame shown twice in a row goes as one twice as long
+// A GIF that repeats itself goes once round, and a frame shown twice in a row is an empty record, so the panel's
+// frames are the GIF's for a script
 static void overlay_repeats() {
   step("animation frames that repeat");
   overlay::add("cycle", {16, 16, 9, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f % 3, x, y); }});
@@ -1928,7 +1989,7 @@ static void overlay_repeats() {
   CHECK_MSG(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
                 overlay_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
             "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) overlay_delays("cycle").size());
-  CHECK_MSG(ar >= 0 && overlay_delays("held") == std::vector<int>({10, 20, 10, 10}) && same_anim("held", 0, 1),
+  CHECK_MSG(ar >= 0 && overlay_delays("held") == std::vector<int>({10, 10, 10, 10, 10}) && same_anim("held", 0, 1),
             "held: %u records", (unsigned) overlay_delays("held").size());
   overlay::clear("");
   run(3);
@@ -2136,8 +2197,8 @@ static void overlay_timing() {
             "a round of F0 F1 F0 shows %s, %u records", seen.c_str(), (unsigned) overlay_delays("aba").size());
   overlay::clear("");
 
-  // Each frame its own time, past a record's 2550 ms in empty records after it: F0 4 s, F1 0.1 s, F2 3 s. In a
-  // loop F0 shows for the record back to it and the empty one after the first record.
+  // Each frame its own time, past a record's 2550 ms in OVERLAY_RECORD_MORE ones after it: F0 4 s, F1 0.1 s, F2
+  // 3 s. In a loop F0 shows for the record back to it and the MORE one after the first record.
   overlay::Source slow{16, 16, 3, 100, 0, 0, 1, noise_px};
   slow.delays = {4000, 100, 3000};
   overlay::add("slow", slow);
@@ -2284,6 +2345,182 @@ static void overlay_on_its_way() {
   run(5);
   CHECK_MSG(same_pool() && !overlay::find("mid"), "cleared on its way: the panel has %u bytes, the ESP thinks %u",
             pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  overlay::clear("");
+  run(3);
+}
+
+// ---- animation scripts, packages/code/panel/overlay_script.h
+// Which of its frames place p shows of animation name's, '?' for none
+static char frame_at(const char *name, int frames, int p) {
+  for (int f = 0; f < frames; f++)
+    if (same_anim(name, f, p, true))
+      return (char) ('0' + f);
+  return '?';
+}
+
+// The animations play for ms, the link going as it does
+static void play_ms(int ms) {
+  for (int t = 0; t < ms; t += 50) {
+    pn_overlay_step(50);
+    if (t % 100 == 0)
+      run(1);
+  }
+}
+
+static bool kite_at(int i, int x, int y) {
+  const overlay::Overlay *a = overlay::find("kite");
+  Look l = look(a ? a->copies[i].place : -1);
+  return l.shown && l.x == x && l.y == y;
+}
+
+// kite's script from its yaml: clip up twice, mark 3, clip down once, and it goes
+static void overlay_yaml_script() {
+  step("an animation's script from its yaml");
+  CHECK_MSG(!logged("Animation kite:"), "kite's yaml script warned about");
+  std::vector<std::string> marks;
+  overlay::marked = [&marks](const std::string &name, int i, int v) {
+    marks.push_back(name + "." + std::to_string(i) + " " + std::to_string(v));
+  };
+  panel_anim_kite.turn_on();
+  run_until(anims_sent, 3000);
+  int p = overlay::find("kite")->copies[0].place;
+  std::string seen, when;  // its frames, and the frame at the mark
+  for (int t = 0; t < 3000 && look(p).shown; t += 10) {
+    char f = frame_at("kite", 8, p);
+    if (seen.empty() || seen.back() != f)
+      seen += f;
+    if (!marks.empty() && when.empty())
+      when = seen;
+    pn_overlay_step(10);
+    if (t % 100 == 0)
+      run(1);
+  }
+  run(5);
+  CHECK_MSG(seen == "012301234567" && marks == std::vector<std::string>{"kite.0 3"} && when.size() >= 9 &&
+                when.size() <= 10 && !overlay::find("kite")->copies[0].used && same_pool(),
+            "up twice and down once: %s, marked at %s, %u marks, %d left", seen.c_str(), when.c_str(),
+            (unsigned) marks.size(), (int) overlay::find("kite")->copies[0].used);
+  overlay::show("kite");  // and again from the start
+  run_until(anims_sent, 3000);
+  steps(200);
+  CHECK_MSG(frame_at("kite", 8, overlay::find("kite")->copies[0].place) == '2', "not up again when shown again");
+  overlay::marked = nullptr;
+  overlay::clear("");
+  run(3);
+}
+
+// panel_script_animation: copy 1 goes to and fro, copy 2 follows it, past a panel restart
+static void overlay_script_action() {
+  step("animation scripts from panel_script_animation");
+  overlay::place("kite", 1, 40, 60, false, 0);
+  overlay::place("kite", 2, 0, 0, false, 0);
+  panel_script_animation.execute("kite", 1,
+                                 "x0 = x\nback: move x0 + 40, y over 500\nwait 1000\n"
+                                 "move x0, y over 500  # and home\nwait 1000\ngoto back");
+  panel_script_animation.execute("kite", 2, "on: move x(kite.1), y(kite.1) + 20; wait 100; goto on");
+  run_until(anims_sent, 3000);
+  for (int again = 0; again < 2; again++) {
+    play_ms(800);
+    bool there = kite_at(1, 80, 60) && kite_at(2, 80, 80);
+    play_ms(1000);
+    CHECK_MSG(there && kite_at(1, 40, 60) && kite_at(2, 40, 80) && same_pool(),
+              "to and fro and followed%s: %s, %u bytes on the panel, %u on the ESP", again ? " after a restart" : "",
+              places().c_str(), pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+    pn_restart();
+    run_until(anims_sent, 3000);
+  }
+  // one that can't be is warned about, and the one it runs runs on
+  struct {
+    int copy;
+    const char *script, *why;
+  } bad[] = {
+      {1, "move x +", "line 1: a number or a name expected"},
+      {1, "wait 100\ngoto nowhere", "line 2: no 'nowhere:'"},
+      {1, "clip fly", "line 1: what's 'fly'?"},
+      {1, "move x(kite.9), 0", "line 1: no copy 9, they're 0 to 7"},
+      {1, "wait 100.5", "only whole numbers"},
+      {1, "mark 256", "marks are 0 to 255"},
+      {2, "clip up", "copy 2 has no frame of its own"},
+      {1, "a = 1; b = 2; c = 3; d = 4; e = 5; f = 6; g = 7; k = 8; m = 9", "only 8 of its own"},
+      {1, "tint 0x1000000", "a tint is a colour like 0xFF77BB"},
+  };
+  std::vector<uint8_t> was = overlay::find("kite")->copies[1].script.bytes;
+  for (auto &b : bad) {
+    size_t warned = log_all.size();
+    panel_script_animation.execute("kite", b.copy, b.script);
+    CHECK_MSG(logged("panel_script_animation: kite's script, ", warned) && logged(b.why, warned),
+              "'%s' on copy %d isn't warned about with '%s': %s", b.script, b.copy, b.why,
+              log_all.substr(warned).c_str());
+  }
+  {  // a clip by name shows its w x h of the frames, one by number all of them, and a tint is told before it starts
+    std::string err;
+    overlay::Program p =
+        overlay::compile("tint 0xFF77BB\nclip stay\nclip 1 to 2\ntint none", err, {{"stay", {4, 9, 17, 300}}});
+    std::vector<uint8_t> clips = {OVERLAY_DO_CLIP,
+                                  OVERLAY_V16,
+                                  4,
+                                  0,
+                                  OVERLAY_V16,
+                                  9,
+                                  0,
+                                  OVERLAY_CLIP_NOW,
+                                  17,
+                                  0,
+                                  44,
+                                  1,
+                                  OVERLAY_DO_CLIP,
+                                  OVERLAY_V16,
+                                  1,
+                                  0,
+                                  OVERLAY_V16,
+                                  2,
+                                  0,
+                                  OVERLAY_CLIP_NOW,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  OVERLAY_DO_SEND,
+                                  K_OVERLAY_TINT - K_OVERLAY_FRAMES,
+                                  OVERLAY_TINT_LEN,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0},
+                         tint = {0, 1, 0xFF, 0x77, 0xBB};
+    CHECK_MSG(
+        err.empty() && p.bytes == clips && p.told.size() == 1 && p.told[0].key == K_OVERLAY_TINT && p.told[0].m == tint,
+        "clips and tints: '%s', %u bytes, %u told", err.c_str(), (unsigned) p.bytes.size(), (unsigned) p.told.size());
+  }
+  std::string long_one;
+  for (int k = 0; k < OVERLAY_SCRIPT_MAX / 4; k++)
+    long_one += "move " + std::to_string(k) + ", 0\n";
+  size_t warned = log_all.size();
+  panel_script_animation.execute("kite", 1, long_one);
+  CHECK_MSG(logged("bytes, the panel takes", warned), "one too long for the panel isn't warned about");
+  run(5);
+  CHECK_MSG(overlay::find("kite")->copies[1].script.bytes == was && same_pool(), "the script copy 1 ran is gone");
+  play_ms(300);
+  panel_script_animation.execute("kite", 1, "");  // it stops, where its last move takes it
+  play_ms(1000);
+  std::string at = places();
+  play_ms(2000);
+  CHECK_MSG(places() == at && same_pool(), "stopped at %s, then %s", at.c_str(), places().c_str());
+  // a long one: where its goto and wait until go on, the copy it looks at and its end's tag past its first 256 bytes
+  std::string longer = "wait 1\n";
+  for (int k = 0; k < 30; k++)
+    longer += "move 40, " + std::to_string(60 + k % 2) + "\n";
+  longer += "goto far\nend\nfar:\nwait until x(kite.2) > -1000\nmove 120, 60\nwait 1000\nend";
+  panel_script_animation.execute("kite", 1, longer);
+  size_t bytes = overlay::find("kite")->copies[1].script.bytes.size();
+  play_ms(1000);  // its bytes take a few messages
+  bool there = kite_at(1, 120, 60);
+  play_ms(1500);
+  run(5);
+  CHECK_MSG(bytes > 300 && there && !overlay::find("kite")->copies[1].used && same_pool(),
+            "%u bytes of script: at 120,60 %d, then %s", (unsigned) bytes, there, places().c_str());
   overlay::clear("");
   run(3);
 }
@@ -3849,6 +4086,43 @@ static void saver_lines() {
     CHECK_MSG(has(i, "", 0), "line %d is still on the panel", i);
 }
 
+// panel_tint_animation and a glide of the light: the ball tinted grey in a dim light, warnings for what can't be,
+// and back in its own colours
+static void overlay_coloured() {
+  step("an animation tinted and lit");
+  overlay::show("ball");
+  CHECK_MSG(run_until(anims_sent, 3000) >= 0, "the ball not shown: '%s'", panel_animation_status.state.c_str());
+  const overlay::Overlay &ball = *overlay::find("ball");
+  int p = ball.copies[0].place;
+  auto own = [p] {
+    for (int f = 0; f < 8; f++)
+      if (same_anim("ball", f, p, true))
+        return true;
+    return false;
+  };
+  CHECK_MSG(own() && !all_grey(ball, p), "the ball: not in its own colours");
+  panel_tint_animation.execute("ball", 0, "#808080");
+  panel_glide_animation.execute("ball", 0, "light", 50, 0, "none");
+  run(3);
+  CHECK_MSG(!own() && look(p).light == 500, "the ball tinted at 50 %% light: in its own colours %d, lit %d", own(),
+            look(p).light);
+  panel_glide_animation.execute("ball", 0, "light", 100, 0, "none");
+  run(3);
+  CHECK_MSG(all_grey(ball, p), "the ball tinted grey: not all grey");
+  size_t bad = log_all.size();
+  panel_tint_animation.execute("ball", 0, "red");
+  panel_glide_animation.execute("ball", 0, "light", OVERLAY_LIGHT_MAX + 1, 0, "none");
+  run(3);
+  CHECK_MSG(logged("panel_tint_animation: 'red' isn't a colour like FF77BB", bad) &&
+                logged("panel_glide_animation: light 201 over 0 ms, it takes 0..200", bad) && look(p).light == 1000,
+            "no warnings about the tint and the light");
+  panel_tint_animation.execute("ball", 0, "none");
+  run(3);
+  CHECK_MSG(own(), "the ball isn't in its own colours again");
+  overlay::clear("");
+  run(3);
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("usage: esp_test OUTDIR [PICTURE.ppm]\n");
@@ -3900,6 +4174,8 @@ int main(int argc, char **argv) {
   overlay_off_screen();
   overlay_shown_again();
   overlay_timing();
+  overlay_yaml_script();
+  overlay_script_action();
   overlay_without_ram();
   overlay_past_pool();
   overlay_waves_settling();
@@ -3944,6 +4220,7 @@ int main(int argc, char **argv) {
   item_icon_typo();
   screen_camera();
   saver_lines();
+  overlay_coloured();
   printf("\n%d checks, %d failed\n", check_count, check_fails);
   return check_fails ? 1 : 0;
 }

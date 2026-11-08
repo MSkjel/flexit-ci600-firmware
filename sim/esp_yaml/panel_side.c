@@ -44,9 +44,14 @@ void pn_bus(const uint8_t *b, int n, uint32_t start_us) {
 int pn_bulk(const uint8_t *f, int n, uint32_t idle_us, uint8_t *answer) {
   return link_bulk_frame(f, n, idle_us, idle_us / 1000, answer);
 }
-void pn_second(void) {
+// A second of the link's, and with clock of the panel's clock, not ticked apart with pn_tick()
+void pn_second(int clock) {
   link_second();
-  lv_tick_inc(1000);
+  if (clock)
+    pn_tick(1000);
+}
+void pn_tick(int ms) {
+  lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
 }
 int pn_online(void) { return M.esp_online; }
@@ -137,7 +142,7 @@ int pn_anim(int place, pn_look_t *out) {
   overlay_look_t l;
   if (!overlay_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth, l.still};
+  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth, l.still, l.light};
   return 1;
 }
 int pn_overlay_covered(int place, int x, int y) { return overlay_covered(place, x, y); }

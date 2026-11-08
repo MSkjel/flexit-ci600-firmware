@@ -1,7 +1,7 @@
 // The land shows, see met_live_land.h
 
-// Watches the copies of sprite fly over the picture, as the panel here moves them on, once a second: how often they
-// went across it, how often of those facing the other way, and how often they turned round
+// Watches the copies of sprite fly over the picture, a look each second: how often they went across it, how often of
+// those facing the other way, and how often they turned round
 struct Facing {
   const char *sprite;
   int moves = 0, wrong = 0, turns = 0, cycle = 0;
@@ -74,7 +74,7 @@ static void live_land() {
   more("cosy_mountains", false, 20, 2);
   show({"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 10, 5, 16, 45), met::G_HILLS, 0, 20, 1});
   more("moose_walk", true, 80, 8);
-  visits("roe_deer", 2, {"roedeerrun"});
+  visits("roe_deer", 2, {"roedeer"});
   show({"A moose at dusk", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 5, 1, 18, 40), met::G_MOUNTAINS, 0, 20, 0});
   more("moose_mountains", true, 80, 4);
   show({"Reindeer and a golden eagle", "clearsky_day", 0, 0, 0, 0, 3, 18, 0, utc(2026, 6, 10, 11), met::G_MOUNTAINS, 0,

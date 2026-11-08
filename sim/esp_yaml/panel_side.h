@@ -10,7 +10,8 @@ void pn_init(void);
 void pn_restart(void);
 void pn_reboot(int wiped);
 void pn_poll(void);
-void pn_second(void);
+void pn_second(int clock);
+void pn_tick(int ms);
 int pn_online(void);
 int pn_get(uint16_t key);
 int pn_reg(uint16_t reg);
@@ -31,7 +32,7 @@ int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
 // A place of the animations as the panel has it, see overlay_look_t
 typedef struct {
-  int x, y, deg, flip, size, opa, depth, still;
+  int x, y, deg, flip, size, opa, depth, still, light;
 } pn_look_t;
 int pn_anim(int place, pn_look_t *l);
 int pn_overlay_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
