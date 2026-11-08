@@ -1,4 +1,5 @@
-// Draws the places, see overlay_int.h: their boxes, what to redraw, and the pixels through turn, size and flip.
+// Draws the places, see overlay_int.h: their boxes, what to redraw, and the pixels through turn, size, flip, tint and
+// light.
 #include "overlay_int.h"
 #include "picture.h"
 #include "plink.h"
@@ -15,13 +16,13 @@ typedef struct {
 } part_t;
 static part_t parts[PIC_PARTS];
 
-static lv_opa_t opa8(int opa) { return (lv_opa_t) ((opa * 255 + FULL / 2) / FULL); }
+static int to255(int v) { return (v * 255 + FULL / 2) / FULL; }  // from 1/1000
+static lv_opa_t opa8(int opa) { return (lv_opa_t) to255(opa); }
 static int zoom(int size, int n) { return size == FULL ? n : LV_MAX(1, (n * size + FULL / 2) / FULL); }
 
-// The box it's drawn in, from x, y: the frame at its size, or the box round that turned, centred on the frame
+// The box it's drawn in, from x, y: what it shows at its size, or the box round that turned, centred on it
 lv_area_t box(const place_t *p) {
-  const slot_t *s = &slots[p->slot];
-  int fw = s->w * s->scale, fh = s->h * s->scale, d = p->now.deg;
+  int fw = shown(p, 0), fh = shown(p, 1), d = p->now.deg;
   int zw = zoom(p->now.size, fw), zh = zoom(p->now.size, fh), w = zw, h = zh;
   if (d) {
     int32_t c = LV_ABS(lv_trigo_cos((int16_t) d)), sn = LV_ABS(lv_trigo_sin((int16_t) d));  // 1/32767
@@ -64,12 +65,12 @@ void refresh(place_t *p, const look_t *was, const lv_area_t *b) {
     bool right = wraps(p, 0) && a.x2 >= PIC_MAX_W, below = wraps(p, 1) && a.y2 >= PIC_MAX_H;
     tiles = 1 | right << 1 | below << 2 | (right && below) << 3;
   }
-  const slot_t *s = &slots[p->slot];
-  int fw = s->w * s->scale, fh = s->h * s->scale;
+  int fw = shown(p, 0), fh = shown(p, 1);
   if (tiles == p->tiles &&
       (!tiles || (!memcmp(&a, &p->drawn, sizeof a) && p->now.deg == was->deg && p->now.flip == was->flip &&
                   opa8(p->now.opa) == opa8(was->opa) && zoom(p->now.size, fw) == zoom(was->size, fw) &&
-                  zoom(p->now.size, fh) == zoom(was->size, fh))))
+                  zoom(p->now.size, fh) == zoom(was->size, fh) && to255(p->now.light) == to255(was->light) &&
+                  p->now.tint == was->tint)))
     return;
   for (int k = 0; k < 4; k++) {
     unsigned o = p->tiles >> k & 1, n = tiles >> k & 1;
@@ -160,14 +161,42 @@ static void cover(int a, int b, int n, int m, bool flip, lv_coord_t *lo, lv_coor
 void changed(const place_t *p, const lv_area_t *a) {
   lv_area_t r = p->drawn;
   if (!p->now.deg) {
-    const slot_t *s = &slots[p->slot];
-    int k = s->scale;
-    cover(a->x1 * k, (a->x2 + 1) * k - 1, s->w * k, lv_area_get_width(&p->drawn), p->now.flip & OVERLAY_FLIP_X, &r.x1,
-          &r.x2);
-    cover(a->y1 * k, (a->y2 + 1) * k - 1, s->h * k, lv_area_get_height(&p->drawn), p->now.flip & OVERLAY_FLIP_Y, &r.y1,
-          &r.y2);
+    int k = slots[p->slot].scale, w = p->shows[0], h = p->shows[1];
+    if (a->x1 >= w || a->y1 >= h)
+      return;  // past what it shows
+    cover(a->x1 * k, (LV_MIN(a->x2, w - 1) + 1) * k - 1, w * k, lv_area_get_width(&p->drawn),
+          p->now.flip & OVERLAY_FLIP_X, &r.x1, &r.x2);
+    cover(a->y1 * k, (LV_MIN(a->y2, h - 1) + 1) * k - 1, h * k, lv_area_get_height(&p->drawn),
+          p->now.flip & OVERLAY_FLIP_Y, &r.y1, &r.y2);
   }
   redraw(&r, p->tiles);
+}
+
+// One of its colours tinted: shades of tint from black through it to white, as c is dark or light
+static lv_color_t tinted(lv_color_t c, lv_color_t tint) {
+  int k = lv_color_brightness(c);
+  return k < 128 ? lv_color_mix(tint, lv_color_black(), (uint8_t) (k * 2))
+                 : lv_color_mix(lv_color_white(), tint, (uint8_t) ((k - 128) * 2));
+}
+
+// The colours p shows: its slot's in its tint and light, but for those that glow. Into buf unless they're the slot's.
+static const lv_color_t *colours(const place_t *p, lv_color_t *buf) {
+  const slot_t *s = &slots[p->slot];
+  int light = to255(p->now.light);
+  if (light == 255 && p->now.tint == NO_TINT)
+    return s->pal;
+  lv_color_t tint = lv_color_hex((uint32_t) p->now.tint);
+  for (int i = 0; i < 16; i++) {
+    lv_color_t c = s->pal[i];
+    if (!(s->glows >> i & 1)) {
+      if (p->now.tint != NO_TINT)
+        c = tinted(c, tint);
+      c = light < 255 ? lv_color_mix(c, s->shade, (uint8_t) light)
+                      : lv_color_mix(lv_color_white(), c, (uint8_t) (light - 255));
+    }
+    buf[i] = c;
+  }
+  return buf;
 }
 
 bool overlay_look(int place, overlay_look_t *l) {
@@ -180,11 +209,13 @@ bool overlay_look(int place, overlay_look_t *l) {
                          .deg = p->now.deg,
                          .size = p->now.size,
                          .opa = p->now.opa,
+                         .light = p->now.light,
                          .flip = p->flip,
                          .tiles = p->tiles,
                          .box = p->drawn,
-                         .still = s->still,
-                         .pal = s->pal};
+                         .still = s->still};
+  lv_color_t buf[16];
+  memcpy(l->pal, colours(p, buf), sizeof l->pal);
   l->depth = p->depth;
   for (int i = 0; i < 16; i++)
     l->colour_opa[i] = colour_opa(s, i);
@@ -300,8 +331,8 @@ static brush_t brush(const place_t *p, const lv_area_t *a, const lv_area_t *c) {
                .sh = 15 + s->scale,
                .top = a->y1,
                .h = lv_area_get_height(a),
-               .fw = s->w * s->scale,
-               .fh = s->h * s->scale,
+               .fw = shown(p, 0),
+               .fh = shown(p, 1),
                .fx = p->now.flip & OVERLAY_FLIP_X,
                .fy = p->now.flip & OVERLAY_FLIP_Y,
                .turned = p->now.deg != 0};
@@ -359,12 +390,11 @@ static void rows(const brush_t *b, int *lo, int *hi) {
   *hi = (int) (mx >> b->sh) + 1;
 }
 
-// Rectangle r of p's frame, in frame pixels, where b puts it. Its pixels are at f, rb bytes a row. The colours in
-// clear aren't drawn, the others at opa, or as they are if opa is NULL.
+// Rectangle r of p's frame, in frame pixels, where b puts it in pal's colours. Its pixels are at f, rb bytes a row.
+// The colours in clear aren't drawn, the others at opa, or as they are if opa is NULL.
 __attribute__((optimize("O3"))) static void fragment(const place_t *p, const brush_t *b, lv_draw_ctx_t *ctx,
-                                                     const uint8_t *f, int rb, const lv_area_t *r, const lv_opa_t *opa,
-                                                     uint16_t clear) {
-  const lv_color_t *pal = slots[p->slot].pal;
+                                                     const lv_color_t *pal, const uint8_t *f, int rb,
+                                                     const lv_area_t *r, const lv_opa_t *opa, uint16_t clear) {
   int sh = b->sh, stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&b->c);
   int32_t w = lv_area_get_width(r) << sh, h = lv_area_get_height(r) << sh, du = b->du, dv = b->dv;
   lv_color_t *row = (lv_color_t *) ctx->buf + (b->c.y1 - ctx->buf_area->y1) * stride + (b->c.x1 - ctx->buf_area->x1);
@@ -408,8 +438,11 @@ static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint
     plain &= k == LV_OPA_TRANSP || k == LV_OPA_COVER;
   }
   brush_t b = brush(p, a, &c);
+  lv_color_t buf[16];
+  const lv_color_t *pal = colours(p, buf);
   if (!s->still) {
-    fragment(p, &b, ctx, place_frame(p), s->w / 2, &(lv_area_t) {0, 0, s->w - 1, s->h - 1}, plain ? NULL : opa, clear);
+    fragment(p, &b, ctx, pal, place_frame(p), (int) row_bytes(s), &(lv_area_t) {0, 0, s->w - 1, s->h - 1},
+             plain ? NULL : opa, clear);
     return;
   }
   int lo, hi;
@@ -422,7 +455,7 @@ static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint
     if (!*piece && !(*piece = lv_mem_alloc(OVERLAY_PIECE_MAX)))
       return;
     record(s, at, *piece, &r);
-    fragment(p, &b, ctx, *piece, lv_area_get_width(&r) / 2, &r, plain ? NULL : opa, clear);
+    fragment(p, &b, ctx, pal, *piece, lv_area_get_width(&r) / 2, &r, plain ? NULL : opa, clear);
   }
 }
 

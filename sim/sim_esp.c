@@ -266,8 +266,8 @@ unsigned sim_esp_send_animation(int x, int y) {
     comp_len += plink_overlay_record(f ? &frames[f - 1][0][0] : NULL, &frames[f % AN_FRAMES][0][0], AN_W, AN_H, 10,
                                      comp + comp_len);
   // into slot 0 at scale 1. Then place 0 at x, y once it's in.
-  uint8_t h[OVERLAY_BEGIN_HEAD + OVERLAY_PAL_LEN];
-  send(K_OVERLAY_BEGIN, h, sim_overlay_begin(h, ++pic_id, 0, OVERLAY_ANIMATED, AN_W, AN_H, 1, comp_len, PAL));
+  uint8_t h[OVERLAY_BEGIN_LEN];
+  send(K_OVERLAY_BEGIN, h, sim_overlay_begin(h, ++pic_id, 0, OVERLAY_ANIMATED, AN_W, AN_H, 1, comp_len, PAL, 0, 0));
   send_data(false);
   place_x = x;
   place_y = y;
@@ -275,9 +275,9 @@ unsigned sim_esp_send_animation(int x, int y) {
   return comp_len;
 }
 
-void sim_esp_place_animation(int place, int slot, int x, int y, int own, int start) {
-  uint8_t m[10];
-  send(K_OVERLAY_PLACE, m, sim_overlay_place(m, place, slot, x, y, own, start, 0));
+void sim_esp_place_animation(int place, int slot, int x, int y, int own) {
+  uint8_t m[OVERLAY_PLACE_LEN];
+  send(K_OVERLAY_PLACE, m, sim_overlay_place(m, place, slot, x, y, own, 0));
 }
 
 void sim_esp_move_animation(uint16_t key, int a, int b, int ms) {
@@ -293,7 +293,7 @@ static void esp_pump(void) {
       send_number(K_PIC_END, plink_crc32(0, comp, comp_len));
       pic_sending = false;
       if (place_after)
-        sim_esp_place_animation(0, 0, place_x, place_y, 0, 0);
+        sim_esp_place_animation(0, 0, place_x, place_y, 0);
       place_after = false;
       break;
     }

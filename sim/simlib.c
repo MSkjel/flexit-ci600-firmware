@@ -126,18 +126,17 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
 }
 
 int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
-                      const uint32_t *pal) {
+                      const uint32_t *pal, unsigned glows, uint32_t shade) {
   return plink_overlay_begin(b, id, (uint8_t) slot, (uint8_t) kind, (uint16_t) w, (uint16_t) h, (uint8_t) scale, len,
-                             pal);
+                             pal, (uint16_t) glows, shade);
 }
 
-int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int start, int fade) {
+int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int fade) {
   b[OVERLAY_MSG_PLACE] = (uint8_t) place;
   b[OVERLAY_PLACE_SLOT] = (uint8_t) slot;
   plink_put16(b + OVERLAY_PLACE_X, (uint16_t) x);
   plink_put16(b + OVERLAY_PLACE_Y, (uint16_t) y);
   b[OVERLAY_PLACE_OWN] = (uint8_t) own;
-  b[OVERLAY_PLACE_START] = (uint8_t) start;
   plink_put16(b + OVERLAY_PLACE_FADE, (uint16_t) fade);
   return OVERLAY_PLACE_LEN;
 }
@@ -162,7 +161,14 @@ int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease
 
 int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v) {
   b[OVERLAY_MSG_PLACE] = (uint8_t) place;
-  return values(b, OVERLAY_DRIFT_HEAD, channels, v, 10);  // in tenths
+  b[OVERLAY_DRIFT_CHANNELS] = (uint8_t) channels;
+  int at = OVERLAY_DRIFT_HEAD;
+  for (int c = 0; c < OVERLAY_CHANNELS; c++)
+    if (channels >> c & 1) {
+      plink_put16(b + at, (uint16_t) (*v++ * (c == OVERLAY_TURN ? 10 : 100)));  // tenths of a degree, else hundredths
+      at += 2;
+    }
+  return at;
 }
 
 // True for string literals. They're in read-only data like on the panel, so writing to one crashes here too.
