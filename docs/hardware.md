@@ -52,9 +52,13 @@ Flexit's bootloader is the reason this can be flashed over the bus. At power-on 
 - the firmware asked for it. That's how both the stock firmware and this one get there when you flash
 - PB4 is held low
 
-While it's running the screen is dark and all three lights are on. It always answers at address 1, whatever
-address the panel had, and only knows one Modbus function, 0x64. Update files are encrypted and signed with
-Flexit's key, so it only takes files made with that key.
+While it's running the screen is dark. All three lights come on as it starts, and while it writes an update the
+red one stays on and the yellow one blinks. It always answers at address 1, whatever address the panel had, and
+only knows one Modbus function, 0x64. Update files are encrypted and signed with Flexit's key, so it only takes
+files made with that key.
+
+System > Diagnostics shows a checksum of it under Chip, after the processor's ID. A 7.x panel shows
+`411FC231, boot 90AEC4A2`. Another checksum is another bootloader, and another ID another chip.
 
 When an update starts it erases everything after itself. The firmware isn't marked valid until the whole file
 has been checked, so a broken or half-done update just leaves the panel in the bootloader, waiting for another

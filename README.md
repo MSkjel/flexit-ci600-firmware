@@ -104,7 +104,7 @@ menu, the clock is right, and that something is at address 1. The CX60 only runs
 **Clock jumps back after setting it.** A stock panel on the bus keeps its own time and sends it every second, so
 set it on that one.
 
-**Update stopped halfway, screen dark, all lights on.** See
+**Update stopped halfway, screen dark.** See
 [When it doesn't work](docs/flashing.md#when-it-doesnt-work).
 
 **Settings gone after an update.** See [Before you start](docs/flashing.md#before-you-start), and do the
