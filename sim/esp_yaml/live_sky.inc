@@ -34,14 +34,15 @@ static void forecast_over(const char *what) {
   CHECK_MSG(bytes <= (size_t) live::FORECAST_BYTES, "%s: the forecast takes %u bytes, the acts leave it %d", what,
             (unsigned) bytes, live::FORECAST_BYTES);
   static marks::Sharp band;
+  const int rows = (int) std::size(band.px) / met::W;
   const marks::Layer &l = marks::all["weather"].layer;
   int whole = 0, off = 0, looks = 0;
   play(4, 0, "", [&] {
     if (looks++ % 9 || looks < 9)
       return;  // once a second, faded in
-    for (int y0 = 0; y0 < met::H; y0 += marks::BAND) {
+    for (int y0 = 0; y0 < met::H; y0 += rows) {
       marks::draw_sharp(l, band, y0);
-      for (int y = y0; y < y0 + marks::BAND; y++)
+      for (int y = y0; y < y0 + rows; y++)
         for (int x = 0; x < met::W; x++)
           if (uint32_t p = band.px[(y - y0) * met::W + x]; p >> 24 == 255) {
             whole++;

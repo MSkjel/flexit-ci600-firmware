@@ -1,5 +1,5 @@
 diff --git a/src/core/lv_obj.c b/src/core/lv_obj.c
-index f0f4d55..337eb73 100644
+index f0f4d55..8664098 100644
 --- a/src/core/lv_obj.c
 +++ b/src/core/lv_obj.c
 @@ -110,7 +110,7 @@ void lv_init(void)
@@ -89,7 +89,18 @@ index f0f4d55..337eb73 100644
  static void lv_obj_draw(lv_event_t * e)
  {
      lv_event_code_t code = lv_event_get_code(e);
-@@ -521,7 +537,7 @@ static void lv_obj_draw(lv_event_t * e)
+@@ -487,6 +503,10 @@ static void lv_obj_draw(lv_event_t * e)
+     if(code == LV_EVENT_COVER_CHECK) {
+         lv_cover_check_info_t * info = lv_event_get_param(e);
+         if(info->res == LV_COVER_RES_MASKED) return;
++        if(obj->flags & LV_OBJ_FLAG_USER_4) {   /*CI600: a blank one has no clip corner or background*/
++            info->res = LV_COVER_RES_NOT_COVER;
++            return;
++        }
+         if(lv_obj_get_style_clip_corner(obj, LV_PART_MAIN)) {
+             info->res = LV_COVER_RES_MASKED;
+             return;
+@@ -521,7 +541,7 @@ static void lv_obj_draw(lv_event_t * e)
          info->res = LV_COVER_RES_COVER;
  
      }
@@ -143,7 +154,7 @@ index d906126..da952ac 100644
  
  lv_layer_type_t _lv_obj_get_layer_type(const lv_obj_t * obj)
 diff --git a/src/core/lv_obj_pos.c b/src/core/lv_obj_pos.c
-index c50ea3a..e940925 100644
+index c50ea3a..75eb2f4 100644
 --- a/src/core/lv_obj_pos.c
 +++ b/src/core/lv_obj_pos.c
 @@ -41,10 +41,131 @@ static uint32_t layout_cnt;
@@ -339,6 +350,43 @@ index c50ea3a..e940925 100644
      lv_res_t res_h;
      lv_style_value_t v_h;
  
+@@ -795,8 +942,19 @@ void lv_obj_move_children_by(lv_obj_t * obj, lv_coord_t x_diff, lv_coord_t y_dif
+     }
+ }
+ 
++/*CI600: an object only has a transform when a style turns or zooms it. Whether any style ever has, see
++ *lv_obj_get_style_prop(). Until one does, no point needs the walk through the parents*/
++static bool any_transform(void)
++{
++    extern uint32_t _lv_style_props_set[];
++    return (_lv_style_props_set[LV_STYLE_TRANSFORM_ANGLE >> 5] >> (LV_STYLE_TRANSFORM_ANGLE & 31) |
++            _lv_style_props_set[LV_STYLE_TRANSFORM_ZOOM >> 5] >> (LV_STYLE_TRANSFORM_ZOOM & 31)) & 1;
++}
++
+ void lv_obj_transform_point(const lv_obj_t * obj, lv_point_t * p, bool recursive, bool inv)
+ {
++    if(!any_transform()) return;  /*CI600*/
++
+     if(obj) {
+         lv_layer_type_t layer_type = _lv_obj_get_layer_type(obj);
+         bool do_tranf = layer_type == LV_LAYER_TYPE_TRANSFORM;
+@@ -821,10 +979,12 @@ void lv_obj_get_transformed_area(const lv_obj_t * obj, lv_area_t * area, bool re
+         {area->x2, area->y2},
+     };
+ 
+-    lv_obj_transform_point(obj, &p[0], recursive, inv);
+-    lv_obj_transform_point(obj, &p[1], recursive, inv);
+-    lv_obj_transform_point(obj, &p[2], recursive, inv);
+-    lv_obj_transform_point(obj, &p[3], recursive, inv);
++    if(any_transform()) {   /*CI600*/
++        lv_obj_transform_point(obj, &p[0], recursive, inv);
++        lv_obj_transform_point(obj, &p[1], recursive, inv);
++        lv_obj_transform_point(obj, &p[2], recursive, inv);
++        lv_obj_transform_point(obj, &p[3], recursive, inv);
++    }
+ 
+     area->x1 = LV_MIN4(p[0].x, p[1].x, p[2].x, p[3].x);
+     area->x2 = LV_MAX4(p[0].x, p[1].x, p[2].x, p[3].x);
 diff --git a/src/core/lv_obj_style.c b/src/core/lv_obj_style.c
 index ecffca9..50c6f32 100644
 --- a/src/core/lv_obj_style.c
@@ -585,7 +633,7 @@ index bfd2748..f53113b 100644
          /*The new border will be the last parents,
           *so the 'younger' brothers of parent will be refreshed*/
 diff --git a/src/draw/lv_draw_label.c b/src/draw/lv_draw_label.c
-index daf4474..a8c8720 100644
+index daf4474..8b21959 100644
 --- a/src/draw/lv_draw_label.c
 +++ b/src/draw/lv_draw_label.c
 @@ -13,6 +13,7 @@
@@ -621,6 +669,31 @@ index daf4474..a8c8720 100644
  
              if(letter_w > 0) {
                  pos.x += letter_w + dsc->letter_space;
+@@ -332,6 +340,12 @@ void LV_ATTRIBUTE_FAST_MEM lv_draw_label(lv_draw_ctx_t * draw_ctx, const lv_draw
+         lv_mem_buf_release(bidi_txt);
+         bidi_txt = NULL;
+ #endif
++        /*Go the next line position*/
++        pos.y += line_height;
++
++        /*CI600: whether the next line is drawn at all before it's laid out, not after*/
++        if(pos.y > draw_ctx->clip_area->y2) return;
++
+         /*Go to next line*/
+         line_start = line_end;
+         line_end += _lv_txt_get_next_line(&txt[line_start], font, dsc->letter_space, w, NULL, dsc->flag);
+@@ -351,11 +365,6 @@ void LV_ATTRIBUTE_FAST_MEM lv_draw_label(lv_draw_ctx_t * draw_ctx, const lv_draw
+                 lv_txt_get_width(&txt[line_start], line_end - line_start, font, dsc->letter_space, dsc->flag);
+             pos.x += lv_area_get_width(coords) - line_width;
+         }
+-
+-        /*Go the next line position*/
+-        pos.y += line_height;
+-
+-        if(pos.y > draw_ctx->clip_area->y2) return;
+     }
+ 
+     LV_ASSERT_MEM_INTEGRITY();
 diff --git a/src/draw/sw/lv_draw_sw.c b/src/draw/sw/lv_draw_sw.c
 index 1c0c6d4..d88b8da 100644
 --- a/src/draw/sw/lv_draw_sw.c
@@ -1078,7 +1151,7 @@ index da7eca0..5fcb91d 100644
  
  #if LV_TXT_ENC == LV_TXT_ENC_UTF8
 diff --git a/src/widgets/lv_label.c b/src/widgets/lv_label.c
-index f4fbe01..f3b99f2 100644
+index f4fbe01..48f164e 100644
 --- a/src/widgets/lv_label.c
 +++ b/src/widgets/lv_label.c
 @@ -87,6 +87,9 @@ void lv_label_set_text(lv_obj_t * obj, const char * text)
@@ -1091,3 +1164,27 @@ index f4fbe01..f3b99f2 100644
      lv_obj_invalidate(obj);
  
      /*If text is NULL then just refresh with the current text*/
+@@ -797,6 +800,12 @@ static void draw_main(lv_event_t * e)
+     lv_area_t txt_coords;
+     lv_obj_get_content_coords(obj, &txt_coords);
+ 
++    /*CI600: its extra draw size brings it into areas none of its text is in. It has nothing to draw there, so it's
++     *left before the dozen style lookups for how it's drawn*/
++    lv_area_t txt_clip;
++    bool is_common = _lv_area_intersect(&txt_clip, &txt_coords, draw_ctx->clip_area);
++    if(!is_common) return;
++
+     lv_text_flag_t flag = LV_TEXT_FLAG_NONE;
+     if(label->recolor != 0) flag |= LV_TEXT_FLAG_RECOLOR;
+     if(label->expand != 0) flag |= LV_TEXT_FLAG_EXPAND;
+@@ -840,10 +849,6 @@ static void draw_main(lv_event_t * e)
+     lv_draw_label_hint_t * hint = NULL;
+ #endif
+ 
+-    lv_area_t txt_clip;
+-    bool is_common = _lv_area_intersect(&txt_clip, &txt_coords, draw_ctx->clip_area);
+-    if(!is_common) return;
+-
+     if(label->long_mode == LV_LABEL_LONG_WRAP) {
+         lv_coord_t s = lv_obj_get_scroll_top(obj);
+         lv_area_move(&txt_coords, 0, -s);

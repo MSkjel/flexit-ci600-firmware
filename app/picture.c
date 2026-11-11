@@ -431,6 +431,7 @@ __attribute__((optimize("O3"))) static const uint8_t *draw_row(const uint8_t *p,
     }
     if (c >= 128) {  // a repeat, the same two pixels over and over
       uint32_t two = pic.pal[*s >> 4].full | (uint32_t) pic.pal[*s & 15].full << 16;
+#pragma GCC unroll 8  // 16 px a loop, as most of a picture is long repeats
       for (; a < b; a += 2, d += 2)
         memcpy(d, &two, 4);
     } else
@@ -494,10 +495,24 @@ void pic_in(int y, int x1, int x2, uint16_t colours, uint32_t *bits, int base) {
   }
 }
 
-// The picture object draws straight into LVGL's draw buffer, only the part being drawn now
-static void pic_event(lv_event_t *e) {
+// The object showing the picture, and the picture it was made for
+typedef struct {
+  lv_obj_t obj;
+  uint8_t gen;
+} pic_obj_t;
+
+// The picture object draws straight into LVGL's draw buffer, only the part being drawn now. A class of its own, not
+// an event callback, so LVGL leaves out the draw events it doesn't take, see draw_events() in lvgl-ci600.patch.
+static void pic_event(const lv_obj_class_t *c, lv_event_t *e);
+static const lv_obj_class_t pic_class = {
+    .base_class = &lv_obj_class, .event_cb = pic_event, .instance_size = sizeof(pic_obj_t)};
+
+static void pic_event(const lv_obj_class_t *c, lv_event_t *e) {
+  (void) c;
+  if (lv_obj_event_base(&pic_class, e) != LV_RES_OK)
+    return;
   lv_obj_t *o = lv_event_get_target(e);
-  bool ours = pic.state == PIC_READY && (uintptr_t) lv_event_get_user_data(e) == pic.gen;
+  bool ours = pic.state == PIC_READY && ((pic_obj_t *) o)->gen == pic.gen;
   if (lv_event_get_code(e) == LV_EVENT_DELETE && o == shown)
     shown = NULL;
   else if (lv_event_get_code(e) == LV_EVENT_COVER_CHECK) {
@@ -523,7 +538,9 @@ static void pic_event(lv_event_t *e) {
 lv_obj_t *pic_show(lv_obj_t *parent) {
   if (pic.state != PIC_READY)
     return NULL;
-  lv_obj_t *o = shown = lv_obj_create(parent);
+  lv_obj_t *o = shown = lv_obj_class_create_obj(&pic_class, parent);
+  ((pic_obj_t *) o)->gen = pic.gen;
+  lv_obj_class_init_obj(o);
   lv_obj_remove_style_all(o);
   lv_obj_set_size(o, pic.w, pic.h);
   if (pic.format == PIC_JPEG)  // its MCU rows between the lines LVGL's strips end on
@@ -531,6 +548,5 @@ lv_obj_t *pic_show(lv_obj_t *parent) {
   else
     lv_obj_center(o);
   lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(o, pic_event, LV_EVENT_ALL, (void *) (uintptr_t) pic.gen);
   return o;
 }
