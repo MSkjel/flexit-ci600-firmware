@@ -47,10 +47,10 @@ static void live_rare() {
   rare(1, "umbrella", "umbrella", 20, 3);
   rare(2, "shirt", "shirt", 20, 3);
   rare(3, "cow", "cow", 20, 4);
-  // in a strong wind short of a gale the rain takes every place, and nothing blows by
+  // in a strong wind short of a gale nothing blows by, though the rain leaves room for it
   show({"Light rain", "rain", 0, 70, 90, 1.5f, 15, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 0, 10, 0});
   show_later();
-  CHECK_MSG(!live::encounter(0) && live::R.rare.empty(), "rain in a strong wind: room for a trampoline");
+  CHECK_MSG(live::rare_room(live::RARE_WAIT + live::RARE[0].ms), "rain in a strong wind: no room for a trampoline");
   CHECK_MSG(!live::RARE[0].fits(live::SEEN), "a strong wind: a trampoline would blow by");
   {
     met::At a = live::SEEN.at;
@@ -94,12 +94,14 @@ static void live_rare() {
   int sat = 0;
   for (const Look &l : p) {
     on = on && l.x == e.den_x && l.y >= e.den_y && l.y <= e.den_y + 15 && l.depth == e.den_depth &&
-         !(l.flip & OVERLAY_FLIP_X) == (e.moon_x >= e.den_x + 8);
+         !(l.flip & OVERLAY_VIEW_FLIP_X) == (e.moon_x >= e.den_x + 8);
     sat += l.y == e.den_y && !l.hidden;
   }
-  CHECK_MSG(on && sat * 4 >= (int) p.size() * 3, "the wolf at %d,%d flipped %d, %d of %zu cycles up, its place %d,%d, "
-            "the moon at %d", p.empty() ? -1 : p[0].x, p.empty() ? -1 : p[0].y, p.empty() ? -1 : p[0].flip, sat,
-            p.size(), e.den_x, e.den_y, e.moon_x);
+  CHECK_MSG(on && sat * 4 >= (int) p.size() * 3,
+            "the wolf at %d,%d flipped %d, %d of %zu cycles up, its place %d,%d, "
+            "the moon at %d",
+            p.empty() ? -1 : p[0].x, p.empty() ? -1 : p[0].y, p.empty() ? -1 : p[0].flip, sat, p.size(), e.den_x,
+            e.den_y, e.moon_x);
   p = rare(9, "witch", "witch", 14, 6);
   int over = 0;
   for (const Look &l : p)
@@ -290,9 +292,8 @@ static void live_rare() {
   int level = log_level;
   log_level = 0;
   float most = 0;
-  for (const char *n :
-       {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf", "witch", "huldra",
-        "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"}) {
+  for (const char *n : {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf",
+                        "witch", "huldra", "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"}) {
     live::Frames sp;
     live::make_sprite(n, sp);
     float m = (float) pool_bytes(sp);

@@ -62,11 +62,22 @@ void dot_frames(bool moves);       // a dot that moves, and stays put for a fram
 uint32_t overlay_records(uint8_t *d, int delay);
 int32_t overlay_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_t crc);
 // A value in a script, see K_OVERLAY_SCRIPT
+#define BYTES(...) (const uint8_t[]){__VA_ARGS__}, (int) sizeof((const uint8_t[]) {__VA_ARGS__})
+// For sim_overlay_glide() and _drift(): channels and their values, and how many
+#define EACH(...) (const int[]){__VA_ARGS__}, (int) (sizeof((const int[]) {__VA_ARGS__}) / sizeof(int) / 2)
+#define V8(v) OVERLAY_V8, (uint8_t) (v)
+#define V32(v) \
+  OVERLAY_V32, (uint8_t) (v), (uint8_t) ((uint32_t) (v) >> 8), (uint8_t) ((uint32_t) (v) >> 16), \
+      (uint8_t) ((uint32_t) (v) >> 24)
 #define V16(v) OVERLAY_V16, (uint8_t) (v), (uint8_t) ((uint16_t) (v) >> 8)
 #define REG(k) (OVERLAY_VREG + (k))
-#define AT(at) (uint8_t) (at), (uint8_t) ((at) >> 8)  // where a step goes on, or a SCRIPT's at or len
-#define WHOLE AT(0), AT(0)                            // a CLIP's size: all of its frame
-void script_to(int p, const uint8_t *s, int n);       // place p's script, in as many messages as the ESP sends it in
+#define X(...) OVERLAY_VEXPR, __VA_ARGS__, OVERLAY_OP_END  // a value worked out by those OPs
+#define OWN(what) OVERLAY_OP_OWN, what
+#define SCRIPT_REGS 6                                        // registers script_to()'s scripts have of their own
+#define SCRIPT_POOL (OVERLAY_SCRIPT_HEAD + 4 * SCRIPT_REGS)  // what one takes of the pool besides its bytes
+#define AT(at) (uint8_t) (at), (uint8_t) ((at) >> 8)         // where a step goes on, or a SCRIPT's at or len
+#define WHOLE AT(0), AT(0)                                   // a CLIP's size: all of its frame
+void script_to(int p, const uint8_t *s, int n);  // place p's script, in as many messages as the ESP sends it in
 void rounds_end(int p, int rounds, int fade, int tag);
 void place_in(int p, int slot, int x, int y, int own, int start, int fade);
 void place(int p, int slot, int x, int y, int own, int start);

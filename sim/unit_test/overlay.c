@@ -39,7 +39,7 @@ int32_t overlay_send(int slot, int w, uint32_t len, const uint8_t *data, uint32_
 void script_to(int p, const uint8_t *s, int n) {
   int at = 0;
   do {
-    uint8_t m[PBULK_MSG_MAX] = {(uint8_t) p, AT(at), AT(n)};
+    uint8_t m[PBULK_MSG_MAX] = {(uint8_t) p, AT(at), AT(n), SCRIPT_REGS};
     int k = LV_MIN(n - at, (int) sizeof m - OVERLAY_SCRIPT_BYTES);
     memcpy(m + OVERLAY_SCRIPT_BYTES, s + at, (size_t) k);
     overlay_msg(K_OVERLAY_SCRIPT, m, OVERLAY_SCRIPT_BYTES + k);
@@ -183,7 +183,7 @@ static void test_anim(void) {
   uint8_t big[OVERLAY_BEGIN_LEN];                                        // a frame bigger than the pool, 15000 bytes
   int bn = sim_overlay_begin(big, ++id, 1, OVERLAY_ANIMATED, 300, 100, 1, 4, clear15(), 0, 0);
   CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn)), PIC_TOO_BIG);
-  big[OVERLAY_BEGIN_KIND] = OVERLAY_STILL + 1;  // no such kind
+  big[OVERLAY_BEGIN_KIND] = OVERLAY_FIELD + 1;  // no such kind
   CHECK_EQ(status(pic_msg(K_OVERLAY_BEGIN, big, bn)), PIC_BAD);
   big[OVERLAY_BEGIN_KIND] = OVERLAY_ANIMATED;
   big[OVERLAY_BEGIN_SLOT] = OVERLAY_SLOTS;  // no such slot
@@ -259,7 +259,7 @@ static void test_anim_slots(void) {
   place(2, 0, 200, 0, 1, 254);  // its own frame, 254 frames ahead: 2 of the 4, a script to get it there
   place(3, 1, 0, 100, 0, 0);    // slot 1
   place(4, 1, 100, 100, 1, 0);  // its own frame, in step as it happens
-  CHECK_EQ(overlay_used(), both + 2 * frame + OVERLAY_SCRIPT_POOL + 4);
+  CHECK_EQ(overlay_used(), both + 2 * frame + SCRIPT_POOL + 4);
   place(5, 2, 0, 0, 0, 0);                // no animation there
   place(6, 0, -10, PIC_MAX_H - 1, 0, 0);  // partly off the screen, where something can come in from
   place(OVERLAY_PLACES, 0, 0, 0, 0, 0);   // no such place
@@ -487,8 +487,8 @@ static void part_msg(int k, int x0, int y0, int x1, int y1, unsigned colours, in
 }
 
 static void depth_msg(int p, int depth) {
-  uint8_t m[OVERLAY_DEPTH_LEN] = {(uint8_t) p, (uint8_t) depth};
-  overlay_msg(K_OVERLAY_DEPTH, m, OVERLAY_DEPTH_LEN);
+  uint8_t m[OVERLAY_GLIDE_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, 0, 0, EACH(OVERLAY_DEPTH, depth)));
 }
 
 static int look_depth(int p) {
@@ -580,15 +580,13 @@ static void test_anim_parts(void) {
   part_msg(0, 0, 0, 0, 0, 0, 0);  // empty, gone
   CHECK(behind(0, pic, px0 + 2, py0 + 1, px0 + 5, py0 + 4, PIC_ALL_COLOURS));
   part_msg(PIC_PARTS, 0, 0, PIC_MAX_W, PIC_MAX_H, PIC_ALL_COLOURS, 255);  // no such part
-  uint8_t bad[OVERLAY_DEPTH_LEN + 1] = {0, 0, 0};
-  overlay_msg(K_OVERLAY_DEPTH, bad, sizeof bad);  // the wrong length
+  depth_msg(0, OVERLAY_NEAREST + 1);                                      // no such depth
   CHECK_EQ(look_depth(0), 9);
   CHECK(behind(0, pic, px0 + 2, py0 + 1, px0 + 5, py0 + 4, PIC_ALL_COLOURS));
 
   // Turned, the same
-  int deg = 30;
   uint8_t m[16];
-  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, 0, 1u << OVERLAY_TURN, 0, 0, &deg));
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, 0, 0, 0, EACH(OVERLAY_TURN, 30)));
   part_msg(0, px0, py0, px0 + W, py0 + H, colours, 10);
   part_msg(1, 0, 0, 0, 0, 0, 0);
   depth_msg(0, OVERLAY_NEAREST);
@@ -631,12 +629,17 @@ static void still_frame(void) {
     }
 }
 
-static void glide_now(int p, unsigned channels, const int *to) {
+// GLIDE of place p's channels to their values, at once
+static void glide_now(int p, const int *v, int n) {
   uint8_t m[32];
-  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, channels, 0, 0, to));
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, 0, 0, v, n));
 }
+#define GLIDE_NOW(p, ...) glide_now(p, EACH(__VA_ARGS__))
 
-static void flip_now(int p, int flip) { overlay_msg(K_OVERLAY_FLIP, (uint8_t[]) {(uint8_t) p, (uint8_t) flip}, 2); }
+static void flip_now(int p, int flip) {
+  uint8_t m[OVERLAY_VIEW_LEN];
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, p, OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y, (unsigned) flip));
+}
 
 typedef struct {
   int x, y, flip;
@@ -648,7 +651,7 @@ typedef struct {
 static bool draw_as(int slot, const still_look_t *k, overlay_look_t *l, lv_color_t *buf) {
   static lv_color_t strips[PIC_MAX_W * PIC_MAX_H];
   place(0, slot, k->x, k->y, 0, 0);
-  glide_now(0, 1u << OVERLAY_TURN | 1u << OVERLAY_SIZE | 1u << OVERLAY_OPACITY, k->to);
+  GLIDE_NOW(0, OVERLAY_TURN, k->to[0], OVERLAY_SIZE, k->to[1], OVERLAY_OPACITY, k->to[2]);
   flip_now(0, k->flip);
   if (!draw_box(0, l, buf, PIC_MAX_H))
     return false;
@@ -674,9 +677,9 @@ static void test_still(void) {
       {60, 50, 0, {90, 100, 100}},
       {60, 50, 0, {180, 100, 100}},
       {60, 50, 0, {211, 81, 100}},
-      {60, 50, OVERLAY_FLIP_X, {0, 100, 100}},
-      {60, 50, OVERLAY_FLIP_Y, {0, 100, 100}},
-      {60, 50, OVERLAY_FLIP_X | OVERLAY_FLIP_Y, {45, 120, 100}},
+      {60, 50, OVERLAY_VIEW_FLIP_X, {0, 100, 100}},
+      {60, 50, OVERLAY_VIEW_FLIP_Y, {0, 100, 100}},
+      {60, 50, OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y, {45, 120, 100}},
       {60, 50, 0, {0, 100, 50}},
       {60, 50, 0, {30, 100, 50}},
       {-15, PIC_MAX_H - 12, 0, {0, 100, 100}},  // partly off the screen
@@ -786,6 +789,633 @@ static void test_still(void) {
   no_overlays();
 }
 
+// ---------------------------------------------------------------- views
+
+// A place's box, where its frame is in it, its OVERLAY_VIEW_* and its shape's runs, width, top and bottom each
+typedef struct {
+  int pan[2], w, h;
+  unsigned view;
+  int runs;
+  int16_t shape[9];
+} box_view_t;
+
+// What pixel u, y of the box with view v shows of sf at scale k, worked out on its own: its colour, -1 for none
+static int view_px(const box_view_t *v, int k, int u, int y) {
+  if (v->view & OVERLAY_VIEW_FLIP_X)
+    u = v->w - 1 - u;
+  if (v->view & OVERLAY_VIEW_FLIP_Y)
+    y = v->h - 1 - y;
+  bool in = !v->runs;
+  for (int i = 0, x = 0; i < v->runs; x += v->shape[3 * i++])
+    in |= u >= x && u < x + v->shape[3 * i] && y >= v->shape[3 * i + 1] && y < v->shape[3 * i + 2];
+  if (!in)
+    return -1;
+  int at[2] = {u - v->pan[0], y - v->pan[1]}, n[2] = {SW * k, SH * k};
+  for (int a = 0; a < 2; a++) {
+    int t = at[a] >= 0 ? at[a] / n[a] : -((n[a] - 1 - at[a]) / n[a]);
+    if (!(v->view & (a ? OVERLAY_VIEW_REPEAT_Y : OVERLAY_VIEW_REPEAT_X)) && t)
+      return -1;
+    at[a] -= t * n[a];
+    if (v->view & OVERLAY_VIEW_MIRROR && t & 1)
+      at[a] = n[a] - 1 - at[a];
+    at[a] /= k;
+  }
+  int c = at[0] & 1 ? sf[at[1]][at[0] / 2] & 15 : sf[at[1]][at[0] / 2] >> 4;
+  return c == 15 ? -1 : c;
+}
+
+// Place 0 showing slot with view v at 20, 30, turned turn, and its shape run by a script
+static void view_place(int slot, const box_view_t *v, int turn) {
+  place(0, slot, 20, 30, 0, 0);
+  GLIDE_NOW(0, OVERLAY_PAN_X, v->pan[0], OVERLAY_PAN_Y, v->pan[1], OVERLAY_W, v->w, OVERLAY_H, v->h, OVERLAY_TURN,
+            turn);
+  uint8_t m[OVERLAY_VIEW_LEN];
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, 0, 0xFF, v->view));
+  if (!v->runs)
+    return;
+  uint8_t sc[2 + 2 * LEN(v->shape)] = {OVERLAY_DO_SHAPE, (uint8_t) (3 * v->runs)};
+  for (int i = 0; i < 3 * v->runs; i++)
+    plink_put16(sc + 2 + 2 * i, (uint16_t) v->shape[i]);
+  script_to(0, sc, 2 + 6 * v->runs);
+}
+
+// Views: a box of any size showing its frame where pan puts it, once or round and round, every other one mirrored,
+// only what a shape leaves, flipped and turned with it. Stills and animations alike, in strips too.
+static void test_views(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  still_frame();
+  static uint8_t a[OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(SW / 2 * SH)], st[2048];
+  uint32_t an_n = plink_overlay_record(NULL, &sf[0][0], SW, SH, 10, a);
+  uint32_t n = plink_overlay_pieces(&sf[0][0], SW, SH, 1u << 15, 10, st, sizeof st);
+  const unsigned F = OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y;
+  static const box_view_t VIEWS[] = {
+      {{0, 0}, SW, SH, 0, 0, {0}},
+      {{7, -5}, SW, SH, 0, 0, {0}},  // its frame partly out of its box
+      {{-10, -4}, 25, 20, 0, 0, {0}},
+      {{13, -9}, 100, 70, OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_REPEAT_Y, 0, {0}},
+      {{-17, 0}, 130, SH, OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_MIRROR, 0, {0}},
+      {{5, 11},
+       90,
+       75,
+       OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_REPEAT_Y | OVERLAY_VIEW_MIRROR | OVERLAY_VIEW_FLIP_X,
+       0,
+       {0}},
+      {{3, 4}, 60, 50, OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_REPEAT_Y, 3, {20, 5, 25, 0, 0, 0, 30, 0, 40}},
+      {{-6, 0}, 70, 40, OVERLAY_VIEW_REPEAT_Y | OVERLAY_VIEW_FLIP_Y, 2, {10, 0, 40, 25, 12, 30}},
+  };
+  show_overlays();
+  static lv_color_t whole[PIC_MAX_W * PIC_MAX_H], strips[PIC_MAX_W * PIC_MAX_H];
+  static int px[PIC_MAX_W * PIC_MAX_H], turned[PIC_MAX_W * PIC_MAX_H];
+  for (int scale = 1; scale <= 2; scale++) {
+    CHECK_EQ(status(send_kind(OVERLAY_ANIMATED, 0, SW, SH, scale, clear15(), an_n, a, 200)), PIC_DONE);
+    CHECK_EQ(status(send_kind(OVERLAY_STILL, 1, SW, SH, scale, clear15(), n, st, 200)), PIC_DONE);
+    for (int i = 0; i < (int) LEN(VIEWS); i++)
+      for (int slot = 0; slot < 2; slot++) {
+        box_view_t v = VIEWS[i];
+        v.w *= i ? 1 : scale;
+        v.h *= i ? 1 : scale;
+        view_place(slot, &v, 0);
+        overlay_look_t l;
+        int wrong = 0, ink = 0;
+        bool ok = drawn(0, &l, px) && l.w == v.w && l.h == v.h && lv_area_get_width(&l.box) == v.w &&
+                  lv_area_get_height(&l.box) == v.h;
+        for (int y = 0; ok && y < v.h; y++)
+          for (int x = 0; x < v.w; x++) {
+            wrong += px[y * v.w + x] != view_px(&v, scale, x, y);
+            ink += px[y * v.w + x] >= 0;
+          }
+        size_t bytes = (size_t) v.w * v.h * sizeof *whole;
+        ok &= draw_box(0, &l, whole, PIC_MAX_H) && draw_box(0, &l, strips, 8) && !memcmp(whole, strips, bytes) &&
+              draw_box(0, &l, strips, 3) && !memcmp(whole, strips, bytes);
+        // turned half round it's flipped both ways
+        box_view_t f = v;
+        f.view ^= F;
+        view_place(slot, &f, 180);
+        ok &= drawn(0, &l, turned) && !memcmp(px, turned, (size_t) v.w * v.h * sizeof *px);
+        if (!CHECK(ok && !wrong && ink > 100))
+          printf("    view %d, slot %d at scale %d: %d wrong\n", i, slot, scale, wrong);
+      }
+  }
+  // an empty box draws nothing, and a shape goes with its script
+  overlay_look_t l;
+  box_view_t v = {{0, 0}, 0, SH, 0, 0, {0}};
+  view_place(1, &v, 0);
+  CHECK(overlay_look(0, &l) && !l.tiles);
+  v = (box_view_t) {{0, 0}, SW, SH, 0, 1, {5, 0, SH}};
+  view_place(1, &v, 0);
+  CHECK(drawn(0, &l, px) && px[1 * SW + 10] == -1);
+  script_to(0, (uint8_t[]) {OVERLAY_DO_MARK, 1}, 2);
+  CHECK(drawn(0, &l, px));
+  int c = sf[1][10 / 2] >> 4;
+  CHECK_EQ(px[1 * SW + 10], c == 15 ? -1 : c);
+  no_overlays();
+}
+
+// ---------------------------------------------------------------- blends and soft edges
+
+// Screen pixel x, y of the overlays drawn over behind
+static lv_color_t over(int x, int y, uint32_t behind) {
+  lv_color_t c;
+  lv_area_t a = {x, y, x, y};
+  sim_draw(overlays, &a, lv_color_hex(behind), &c);
+  return c;
+}
+
+// s over d at opacity a as an OVERLAY_BLEND_* says, worked out on its own a channel at a time
+static lv_color_t blended(unsigned mode, lv_color_t s, lv_color_t d, int a) {
+  lv_color_t w = lv_color_white();
+  int c[3] = {LV_COLOR_GET_R(s), LV_COLOR_GET_G(s), LV_COLOR_GET_B(s)};
+  int e[3] = {LV_COLOR_GET_R(d), LV_COLOR_GET_G(d), LV_COLOR_GET_B(d)};
+  int m[3] = {LV_COLOR_GET_R(w), LV_COLOR_GET_G(w), LV_COLOR_GET_B(w)};
+  for (int k = 0; k < 3; k++) {
+    int t = c[k] * a / 255;
+    e[k] = mode == OVERLAY_BLEND_ADD      ? LV_MIN(m[k], e[k] + t)
+           : mode == OVERLAY_BLEND_SCREEN ? e[k] + t - e[k] * t / m[k]
+                                          : e[k] * (m[k] - (m[k] - c[k]) * a / 255) / m[k];
+  }
+  LV_COLOR_SET_R(d, e[0]);
+  LV_COLOR_SET_G(d, e[1]);
+  LV_COLOR_SET_B(d, e[2]);
+  return d;
+}
+
+// Blends: a colour added to, screened over or multiplied with what's behind it, at full and half opacity, and back to
+// mixed. Soft edges: it fades in from the top of its box, and from a shape's run, but not past its other edges.
+static void test_blends(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  static uint8_t solid[SH][SW / 2];
+  static uint8_t st[2048];
+  memset(solid, 0x55, sizeof solid);  // colour 5 all over
+  uint32_t n = plink_overlay_pieces(&solid[0][0], SW, SH, 1u << 15, 10, st, sizeof st);
+  CHECK_EQ(status(send_kind(OVERLAY_STILL, 1, SW, SH, 1, clear15(), n, st, 200)), PIC_DONE);
+  show_overlays();
+  place(0, 1, 20, 30, 0, 0);
+  const uint32_t G = 0x8040C0;  // behind it
+  lv_color_t c = lv_color_hex(rgb(5)), g = lv_color_hex(G);
+  uint8_t m[OVERLAY_VIEW_LEN];
+  for (unsigned mode = OVERLAY_BLEND_ADD; mode <= OVERLAY_BLEND_MULTIPLY; mode += OVERLAY_BLEND_ADD) {
+    overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, 0, OVERLAY_VIEW_BLEND, mode));
+    GLIDE_NOW(0, OVERLAY_OPACITY, 100);
+    bool full = over(30, 40, G).full == blended(mode, c, g, 255).full;
+    GLIDE_NOW(0, OVERLAY_OPACITY, 50);
+    lv_color_t half = over(30, 40, G);
+    if (!CHECK(full && half.full == blended(mode, c, g, 128).full))
+      printf("    blend %u\n", mode);
+  }
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, 0, OVERLAY_VIEW_BLEND, OVERLAY_BLEND_MIX));
+  GLIDE_NOW(0, OVERLAY_OPACITY, 100);
+  CHECK(over(30, 40, G).full == c.full);
+  // fading in over the 8 rows from its top, more of it on each, all of it from the eighth on and at its sides
+  script_to(0, (uint8_t[]) {OVERLAY_DO_SOFT, 0, 0, 0, 0, 8, 0, 0, 0}, 9);
+  int was = -1;
+  bool more = true;
+  for (int y = 0; y < 8; y++) {  // further from what's behind on each row
+    lv_color_t k = over(30, 30 + y, G);
+    int away = abs(LV_COLOR_GET_R(k) - LV_COLOR_GET_R(g)) + abs(LV_COLOR_GET_G(k) - LV_COLOR_GET_G(g)) +
+               abs(LV_COLOR_GET_B(k) - LV_COLOR_GET_B(g));
+    more &= away > was && k.full != c.full;
+    was = away;
+  }
+  CHECK(more && over(30, 38, G).full == c.full && over(20, 45, G).full == c.full && over(59, 45, G).full == c.full);
+  // and from each run's top, the shape's set after it
+  script_to(0, (uint8_t[]) {OVERLAY_DO_SOFT, 0, 0, 0, 0, 4, 0, 0, 0, OVERLAY_DO_SHAPE, 3, SW, 0, 10, 0, SH, 0}, 17);
+  CHECK(over(30, 39, G).full != c.full && over(30, 40, G).full != c.full && over(30, 44, G).full == c.full);
+  // none
+  script_to(0, (uint8_t[]) {OVERLAY_DO_SOFT, 0, 0, 0, 0, 0, 0, 0, 0}, 9);
+  CHECK(over(30, 30, G).full == c.full);
+  no_overlays();
+}
+
+// ---------------------------------------------------------------- fields
+
+// A field into slot: kind with a and b, w x h, its 16 colours pal
+static int32_t send_field(int slot, int kind, int a, int b, int w, int h, const uint32_t *pal) {
+  uint8_t d[OVERLAY_FIELD_LEN] = {(uint8_t) kind, (uint8_t) a, (uint8_t) b, (uint8_t) (b >> 8)};
+  return send_kind(OVERLAY_FIELD, slot, w, h, 1, pal, sizeof d, d, 200);
+}
+
+// How far c is from d, each channel's
+static int apart(lv_color_t c, lv_color_t d) {
+  return abs(LV_COLOR_GET_R(c) - LV_COLOR_GET_R(d)) + abs(LV_COLOR_GET_G(c) - LV_COLOR_GET_G(d)) +
+         abs(LV_COLOR_GET_B(c) - LV_COLOR_GET_B(d));
+}
+
+static void bind_now(int p, unsigned what, const uint8_t *v, int n) {
+  uint8_t m[OVERLAY_BIND_VALUE + 64];
+  overlay_msg(K_OVERLAY_BIND, m, sim_overlay_bind(m, p, what, v, n));
+}
+#define BIND(p, what, ...) bind_now(p, what, BYTES(__VA_ARGS__))
+
+// Fields: the panel works out what a place shows, from left to right, round its middle, in a wedge or cloudy, and
+// draws it by how far along the slot's colours that is, with the place's level and phase. Sized, turned and blended
+// like a frame.
+static void test_fields(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  const uint32_t G = 0x204060;  // behind it
+  lv_color_t g = lv_color_hex(G), c = lv_color_hex(rgb(5));
+  uint32_t fade[16], steps[16];  // one colour more and more opaque, and 16 of them
+  for (int i = 0; i < 16; i++) {
+    fade[i] = (uint32_t) (i * 17) << 24 | rgb(5);
+    steps[i] = 0xFF000000 | rgb(i);
+  }
+  enum { X = 20, Y = 30, FW = 64, FH = 16 };
+  show_overlays();
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_LINEAR, 0, 0, FW, FH, fade)), PIC_DONE);
+  CHECK_EQ(overlay_used(), OVERLAY_FIELD_LEN);
+  place(0, 0, X, Y, 1, 0);  // a frame of its own is nothing to it
+  CHECK_EQ(overlay_used(), OVERLAY_FIELD_LEN);
+  overlay_look_t l;
+  CHECK(overlay_look(0, &l) && l.w == FW && l.h == FH && l.still);
+  bool more = true, same = true;
+  for (int x = 1; x < FW; x++) {  // more of it to the right, the same all the way down
+    more &= apart(over(X + x, Y + 3, G), g) >= apart(over(X + x - 1, Y + 3, G), g);
+    same &= over(X + x, Y, G).full == over(X + x, Y + FH - 1, G).full;
+  }
+  CHECK(more && same && over(X, Y, G).full == g.full && apart(over(X + FW - 1, Y, G), c) < 3);
+  CHECK(over(X - 1, Y, G).full == g.full && over(X + FW, Y, G).full == g.full);
+  GLIDE_NOW(0, OVERLAY_LEVEL, 200);  // twice as much: all of it from the middle on
+  CHECK(over(X + FW / 2, Y, G).full == c.full && over(X + FW / 4, Y, G).full != c.full);
+  GLIDE_NOW(0, OVERLAY_LEVEL, 0);
+  CHECK(over(X + FW - 1, Y, G).full == g.full);
+  GLIDE_NOW(0, OVERLAY_TURN, 180, OVERLAY_LEVEL, 100);  // turned round, from the right
+  CHECK(over(X + FW - 1, Y, G).full == g.full && apart(over(X, Y, G), c) < 3);
+  GLIDE_NOW(0, OVERLAY_TURN, 0, OVERLAY_SIZE_X, 50);  // half as wide, round its middle
+  CHECK(over(X + FW / 4 - 1, Y, G).full == g.full && apart(over(X + 3 * FW / 4 - 1, Y, G), c) < 6);
+  GLIDE_NOW(0, OVERLAY_SIZE_X, 100);
+  uint8_t m[OVERLAY_VIEW_LEN];
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, 0, OVERLAY_VIEW_BLEND, OVERLAY_BLEND_ADD));
+  CHECK(over(X + FW - 1, Y, G).full == blended(OVERLAY_BLEND_ADD, c, g, 251).full);
+  // up to the middle and back down, and from the top
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_LINEAR, OVERLAY_LINEAR_MIRROR, 0, FW, FH, fade)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  same = true;
+  for (int x = 0; x < FW / 2; x++)
+    same &= over(X + x, Y, G).full == over(X + FW - 1 - x, Y, G).full;
+  CHECK(same && over(X, Y, G).full == g.full && apart(over(X + FW / 2, Y, G), c) < 12);
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_LINEAR, OVERLAY_LINEAR_DOWN, 0, FW, FH, fade)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  CHECK(apart(over(X + 9, Y, G), g) < 6 && over(X + 9, Y, G).full == over(X + 50, Y, G).full);
+  CHECK(apart(over(X + 9, Y + FH - 1, G), c) < 12 && over(X + 9, Y + 8, G).full == over(X + 50, Y + 8, G).full);
+  // round the middle: most there, the same either side of it, none in the corners
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_RADIAL, 0, 0, FW, FH, fade)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  same = more = true;
+  for (int x = 0; x < FW / 2; x++) {
+    same &= over(X + x, Y + 5, G).full == over(X + FW - 1 - x, Y + 5, G).full &&
+            over(X + x, Y + 5, G).full == over(X + x, Y + FH - 1 - 5, G).full;
+    more &= !x || apart(over(X + x, Y + FH / 2, G), g) >= apart(over(X + x - 1, Y + FH / 2, G), g);
+  }
+  CHECK(same && more && over(X, Y, G).full == g.full && over(X + FW - 1, Y + FH - 1, G).full == g.full);
+  CHECK(apart(over(X + FW / 2, Y + FH / 2, G), c) < 12);
+  // a wedge from the middle of its left side: nothing above and below it there, all of its right side
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_CONE, 0, 0, FW, FH, fade)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  CHECK(over(X + 4, Y + 1, G).full == g.full && over(X + 4, Y + FH - 2, G).full == g.full);
+  CHECK(apart(over(X + 4, Y + FH / 2, G), c) < 80 && over(X + FW - 1, Y + 2, G).full != g.full);
+  CHECK(apart(over(X + FW - 1, Y + FH / 2, G), g) > apart(over(X + FW - 1, Y + 2, G), g));
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_CONE, 255, 0, FW, FH, fade)), PIC_DONE);  // as wide at the left
+  place(0, 0, X, Y, 0, 0);
+  CHECK(over(X + 4, Y + 2, G).full == over(X + FW - 1, Y + 2, G).full && over(X + 4, Y + 2, G).full != g.full);
+  // cloudy: here more and there less, the same wherever it's placed again, on by its pan, each place its own
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_NOISE, 2, 8, FW, FH, fade)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  place(1, 0, X, Y + 40, 0, 0);
+  int lo = 9999, hi = 0, other = 0;
+  static lv_color_t was[FH][FW];
+  for (int y = 0; y < FH; y++)
+    for (int x = 0; x < FW; x++) {
+      was[y][x] = over(X + x, Y + y, G);
+      lo = LV_MIN(lo, apart(was[y][x], g));
+      hi = LV_MAX(hi, apart(was[y][x], g));
+      other += over(X + x, Y + 40 + y, G).full != was[y][x].full;
+    }
+  CHECK(hi - lo > 20 && other > FW * FH / 2);
+  GLIDE_NOW(0, OVERLAY_PAN_X, 3, OVERLAY_PAN_Y, 2);
+  same = true;
+  for (int y = 2; y < FH; y++)
+    for (int x = 3; x < FW; x++)
+      same &= over(X + x, Y + y, G).full == was[y - 2][x - 3].full;
+  CHECK(same);
+  // and round: 64 of its 8 px on it's the same again, so a pan that drifts goes on for good
+  bool round = true;
+  GLIDE_NOW(0, OVERLAY_PAN_X, 64 * 8 - 5, OVERLAY_PAN_Y, 0);
+  uint8_t dm[OVERLAY_DRIFT_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_DRIFT, dm, sim_overlay_drift(dm, 0, EACH(OVERLAY_PAN_X, 100)));
+  sim_run(100);  // 10 px on, 5 past where it comes round
+  overlay_msg(K_OVERLAY_DRIFT, dm, sim_overlay_drift(dm, 0, EACH(OVERLAY_PAN_X, 0)));
+  for (int y = 0; y < FH; y++)
+    for (int x = 5; x < FW; x++)
+      round &= over(X + x, Y + y, G).full == was[y][x - 5].full;
+  CHECK(overlay_look(0, &l) && l.pan[0] == 5 && round);
+  // along 16 colours: each its own at its place, and phase on, round to the first again
+  CHECK_EQ(status(send_field(0, OVERLAY_FIELD_LINEAR, 0, 0, 256, 8, steps)), PIC_DONE);
+  place(0, 0, X, Y, 0, 0);
+  bool own = true, on = true, half = true;
+  for (int k = 0; k < 16; k++)
+    own &= over(X + 17 * k, Y, G).full == lv_color_hex(rgb(k)).full;
+  GLIDE_NOW(0, OVERLAY_PHASE, 3);
+  for (int k = 0; k < 16; k++)
+    on &= over(X + 17 * k, Y, G).full == lv_color_hex(rgb((k + 3) % 16)).full;
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_PHASE, V16(-2500));  // half a colour on
+  for (int k = 0; k < 16; k++)
+    half &=
+        over(X + 17 * k, Y, G).full == lv_color_mix(lv_color_hex(rgb((k + 1) % 16)), lv_color_hex(rgb(k)), 128).full;
+  CHECK(own && on && half);
+  // what isn't one
+  uint8_t bad[OVERLAY_FIELD_LEN + 1] = {OVERLAY_FIELD_NOISE, 2, 8, 0, 0};
+  CHECK_EQ(status(send_kind(OVERLAY_FIELD, 1, FW, FH, 1, fade, OVERLAY_FIELD_LEN - 1, bad, 200)), PIC_BAD);
+  CHECK_EQ(status(send_kind(OVERLAY_FIELD, 1, FW, FH, 1, fade, OVERLAY_FIELD_LEN + 1, bad, 200)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELDS, 0, 0, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELD_NOISE, 0, 8, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELD_NOISE, OVERLAY_NOISE_LAYERS + 1, 8, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELD_NOISE, 1, OVERLAY_NOISE_MIN - 1, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELD_NOISE, 1, OVERLAY_NOISE_MAX + 1, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(status(send_field(1, OVERLAY_FIELD_LINEAR, 4, 0, FW, FH, fade)), PIC_BAD);
+  CHECK_EQ(overlay_used(), OVERLAY_FIELD_LEN + 4);  // the first, and what its phase is bound to
+  no_overlays();
+}
+
+// ---------------------------------------------------------------- rows, smooth and cycling colours
+
+// Slot 1: a still w x h of colour 5 where there(x, y), clear elsewhere, and place 0 showing it at X, Y
+enum { X = 100, Y = 60, RW = 40, RH = 16 };
+static void shape_still(bool (*there)(int x, int y)) {
+  static uint8_t f[RH][RW / 2], st[1024];
+  for (int y = 0; y < RH; y++)
+    for (int x = 0; x < RW; x++) {
+      uint8_t *b = &f[y][x / 2], k = there(x, y) ? 5 : 15;
+      *b = x & 1 ? (uint8_t) ((*b & 0xF0) | k) : (uint8_t) ((*b & 0x0F) | k << 4);
+    }
+  uint32_t n = plink_overlay_pieces(&f[0][0], RW, RH, 1u << 15, 10, st, sizeof st);
+  CHECK_EQ(status(send_kind(OVERLAY_STILL, 1, RW, RH, 1, clear15(), n, st, 200)), PIC_DONE);
+  place(0, 1, X, Y, 0, 0);
+}
+static bool a_bar(int x, int y) { return x >= 20 && x < 22 && y >= 0; }
+static bool a_block(int x, int y) { return x >= 10 && x < 30 && y >= 4 && y < 12; }
+static bool all_of_it(int x, int y) { return x >= 0 && y >= 0; }
+
+static void view_now(int p, unsigned mask, unsigned flags) {
+  uint8_t m[OVERLAY_VIEW_LEN];
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, p, mask, flags));
+}
+
+// What's bound to a place's rows: each row of its frame shifted, sized across round its pivot, fainter, in another
+// light, by where the row is. Redrawn only when that's another, and not when it's turned.
+static void test_rows(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  const uint32_t G = 0x204060;
+  lv_color_t g = lv_color_hex(G), c = lv_color_hex(rgb(5));
+  show_overlays();
+  shape_still(a_bar);
+  CHECK(over(X + 20, Y + 9, G).full == c.full && over(X + 29, Y + 9, G).full == g.full);
+  // a px to the right for each row down
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SHIFT, X(OWN(OVERLAY_GET_ROW), V16(1000), OVERLAY_OP_MUL));
+  bool leans = true;
+  for (int y = 0; y < RH; y++)
+    leans &= over(X + 19 + y, Y + y, G).full == g.full && over(X + 20 + y, Y + y, G).full == c.full &&
+             over(X + 21 + y, Y + y, G).full == c.full && over(X + 22 + y, Y + y, G).full == g.full;
+  CHECK(leans);
+  sim_run(100);  // the same each step, so nothing's drawn again
+  unsigned long px = sim_px;
+  sim_run(300);
+  CHECK_EQ(sim_px, px);
+  // by how long it's been there, it's drawn again as it changes
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SHIFT, X(OWN(OVERLAY_GET_MS), V8(10), OVERLAY_OP_MUL));
+  sim_run(300);
+  CHECK(sim_px > px && !sim_stale());
+  // and by the step's time, not by when it's drawn: before the next step it's still as the step left it
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SHIFT,
+       X(OWN(OVERLAY_GET_MS), V16(150), OVERLAY_OP_MOD, V8(100), OVERLAY_OP_MUL));
+  static int then[RW * RH], later[RW * RH];
+  overlay_look_t at;
+  do {
+    px = sim_px;
+    sim_run(5);
+  } while (sim_px == px);
+  px = sim_px;
+  CHECK(drawn(0, &at, then));
+  sim_run(20);
+  CHECK(drawn(0, &at, later));
+  CHECK(sim_px == px && !memcmp(then, later, sizeof then));
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_SHIFT);
+  CHECK(over(X + 20, Y + 9, G).full == c.full && over(X + 29, Y + 9, G).full == g.full);
+  // half as wide round its middle on its lower half: the bar a px wide there, what's 10 px from the middle 5
+  shape_still(a_block);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SIZE,
+       X(OWN(OVERLAY_GET_ROW), V8(8), OVERLAY_OP_LT, V16(1000), V16(500), OVERLAY_OP_IF));
+  CHECK(over(X + 10, Y + 5, G).full == c.full && over(X + 9, Y + 5, G).full == g.full);
+  CHECK(over(X + 15, Y + 9, G).full == c.full && over(X + 14, Y + 9, G).full == g.full);
+  CHECK(over(X + 24, Y + 9, G).full == c.full && over(X + 25, Y + 9, G).full == g.full);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_SIZE);
+  // fainter from the top down, and dark below the middle
+  shape_still(all_of_it);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_OPACITY, X(OWN(OVERLAY_GET_ROW), V8(100), OVERLAY_OP_MUL));
+  CHECK(over(X + 5, Y, G).full == g.full && over(X + 5, Y + 5, G).full == lv_color_mix(c, g, 128).full);
+  CHECK(over(X + 5, Y + 10, G).full == c.full);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_LIGHT,
+       X(OWN(OVERLAY_GET_ROW), V8(12), OVERLAY_OP_LT, V16(1000), V8(0), OVERLAY_OP_IF));
+  CHECK(over(X + 5, Y + 10, G).full == c.full && over(X + 5, Y + 12, G).full == lv_color_black().full);
+  // a frame that repeats goes all the way across its rows at any size: a box three frames wide, half as wide and as
+  // narrow as a row gets, and shifted as far as one can be
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_OPACITY);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_LIGHT);
+  GLIDE_NOW(0, OVERLAY_W, 3 * RW);
+  view_now(0, OVERLAY_VIEW_REPEAT_X, OVERLAY_VIEW_REPEAT_X);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SIZE, V16(500));
+  CHECK(over(X, Y + 5, G).full == c.full && over(X + 3 * RW - 1, Y + 5, G).full == c.full);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SIZE, V8(1));
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_ROW_SHIFT, V32(INT32_MAX));
+  CHECK(over(X, Y + 5, G).full == c.full && over(X + 3 * RW - 1, Y + 5, G).full == c.full);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_SIZE);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_BIND_ROW_SHIFT);
+  view_now(0, OVERLAY_VIEW_REPEAT_X, 0);
+  GLIDE_NOW(0, OVERLAY_W, RW);
+  // turned, its rows aren't the screen's, and it's drawn as it is
+  GLIDE_NOW(0, OVERLAY_TURN, 90);
+  overlay_look_t l;
+  CHECK(overlay_look(0, &l));
+  CHECK(over(l.box.x1 + 2, l.box.y1 + 2, G).full == c.full && over(l.box.x2 - 2, l.box.y2 - 2, G).full == c.full);
+  no_overlays();
+}
+
+// OVERLAY_VIEW_SMOOTH: on whole pixels it's drawn as without, part of a pixel on its edges are part of what's behind,
+// and turned they're soft. Its box is a pixel more each way.
+static void test_smooth(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  const uint32_t G = 0x204060;
+  lv_color_t g = lv_color_hex(G), c = lv_color_hex(rgb(5));
+  show_overlays();
+  shape_still(a_block);
+  static lv_color_t hard[RH][RW];
+  for (int y = 0; y < RH; y++)
+    for (int x = 0; x < RW; x++)
+      hard[y][x] = over(X + x, Y + y, G);
+  overlay_look_t l;
+  view_now(0, OVERLAY_VIEW_SMOOTH, OVERLAY_VIEW_SMOOTH);
+  CHECK(overlay_look(0, &l) && l.box.x1 == X - 1 && l.box.x2 == X + RW && l.box.y1 == Y - 1 && l.box.y2 == Y + RH);
+  bool same = true;
+  for (int y = 0; y < RH; y++)
+    for (int x = 0; x < RW; x++)
+      same &= over(X + x, Y + y, G).full == hard[y][x].full;
+  CHECK(same);
+  // half a px to the right: half of it on the pixel at each end
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_X, V16(500));
+  lv_color_t half = lv_color_mix(c, g, 128);
+  CHECK(apart(over(X + 10, Y + 8, G), half) < 3 && apart(over(X + 30, Y + 8, G), half) < 3);
+  CHECK(over(X + 11, Y + 8, G).full == c.full && over(X + 29, Y + 8, G).full == c.full);
+  CHECK(over(X + 9, Y + 8, G).full == g.full && over(X + 31, Y + 8, G).full == g.full);
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_Y, V16(250));  // and a quarter down: three quarters of the top row
+  CHECK(apart(over(X + 15, Y + 4, G), lv_color_mix(c, g, 192)) < 3);
+  CHECK(apart(over(X + 15, Y + 12, G), lv_color_mix(c, g, 64)) < 3);
+  // without it that's where it was, and nothing's drawn anew
+  view_now(0, OVERLAY_VIEW_SMOOTH, 0);
+  same = true;
+  for (int y = 0; y < RH; y++)
+    for (int x = 0; x < RW; x++)
+      same &= over(X + x, Y + y, G).full == hard[y][x].full;
+  CHECK(same);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_X);
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_Y);
+  // a tenth of a px a step: drawn again each px, and smooth each quarter of one, not each step
+  uint8_t m[OVERLAY_DRIFT_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, 0, EACH(OVERLAY_X, 2)));
+  sim_run(50);
+  unsigned long px = sim_px, plain;
+  sim_run(2000);
+  plain = sim_px - px;
+  view_now(0, OVERLAY_VIEW_SMOOTH, OVERLAY_VIEW_SMOOTH);
+  sim_run(50);
+  px = sim_px;
+  sim_run(2000);
+  CHECK(sim_px - px >= 3 * plain && sim_px - px <= 5 * plain && !sim_stale());
+  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, 0, EACH(OVERLAY_X, 0)));
+  // turned an eighth: some of its pixels between its colour and what's behind, none without
+  place(0, 1, X, Y, 0, 0);
+  GLIDE_NOW(0, OVERLAY_TURN, 45);
+  int soft[2] = {0, 0};
+  for (int on = 0; on < 2; on++) {
+    view_now(0, OVERLAY_VIEW_SMOOTH, on ? OVERLAY_VIEW_SMOOTH : 0);
+    CHECK(overlay_look(0, &l));
+    for (int y = l.box.y1; y <= l.box.y2; y++)
+      for (int x = l.box.x1; x <= l.box.x2; x++) {
+        lv_color_t k = over(x, y, G);
+        soft[on] += k.full != c.full && k.full != g.full;
+      }
+  }
+  CHECK(!soft[0] && soft[1] > 20);
+  no_overlays();
+}
+
+// The cycling colours of a slot: a place's phase takes each on to the one after it, round them, part of the way
+// between two, and drifts
+static void test_cycle(void) {
+  no_overlays();
+  pic_msg(K_PIC_CLEAR, NULL, 0);
+  const uint32_t G = 0x204060;
+  static uint8_t f[4][4] = {{0x12, 0x34, 0x56, 0xFF}}, st[64];  // colours 1 to 6 across, then clear
+  for (int y = 1; y < 4; y++)
+    memcpy(f[y], f[0], sizeof f[0]);
+  uint32_t n = plink_overlay_pieces(&f[0][0], 8, 4, 1u << 15, 10, st, sizeof st);
+  uint8_t b[OVERLAY_BEGIN_LEN];
+  int bn = sim_overlay_begin(b, ++id, 0, OVERLAY_STILL, 8, 4, 1, n, clear15(), 0, 0);
+  plink_put16(b + OVERLAY_BEGIN_CYCLES, 1u << 2 | 1u << 3 | 1u << 5);  // 2, 3 and 5 go round
+  CHECK_EQ(status(rest(pic_msg(K_OVERLAY_BEGIN, b, bn), st, n, 200, plink_crc32(0, st, n))), PIC_DONE);
+  show_overlays();
+  place(0, 0, X, Y, 0, 0);
+#define SHOWS(x, k) (over(X + (x), Y, G).full == lv_color_hex(rgb(k)).full)
+  CHECK(SHOWS(0, 1) && SHOWS(1, 2) && SHOWS(2, 3) && SHOWS(3, 4) && SHOWS(4, 5) && SHOWS(5, 6));
+  GLIDE_NOW(0, OVERLAY_PHASE, 1);
+  CHECK(SHOWS(0, 1) && SHOWS(1, 3) && SHOWS(2, 5) && SHOWS(3, 4) && SHOWS(4, 2) && SHOWS(5, 6));
+  GLIDE_NOW(0, OVERLAY_PHASE, 2);
+  CHECK(SHOWS(1, 5) && SHOWS(2, 2) && SHOWS(4, 3));
+  GLIDE_NOW(0, OVERLAY_PHASE, -3);  // all the way round
+  CHECK(SHOWS(1, 2) && SHOWS(2, 3) && SHOWS(4, 5));
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_PHASE, V16(500));  // half way on to the next
+  CHECK(over(X + 1, Y, G).full == lv_color_mix(lv_color_hex(rgb(3)), lv_color_hex(rgb(2)), 128).full && SHOWS(0, 1));
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_PHASE);
+  uint8_t m[OVERLAY_DRIFT_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, 0, EACH(OVERLAY_PHASE, 2)));  // 2 colours a second
+  sim_run(1000);
+  CHECK(SHOWS(1, 5) && SHOWS(2, 2) && SHOWS(4, 3) && !sim_stale());
+  sim_run(500);
+  CHECK(SHOWS(1, 2) && SHOWS(2, 3) && SHOWS(4, 5) && !sim_stale());
+  no_overlays();
+}
+
+// ---------------------------------------------------------------- sheets
+
+// The dot's frames as a sheet, frame f delay + f ticks: the record that starts it, then its pieces
+static uint32_t sheet_records(uint8_t *d, int delay) {
+  uint32_t n = 0;
+  for (int f = 0; f < 4; f++) {
+    memcpy(d + n, (uint8_t[]) {(uint8_t) (delay + f), OVERLAY_RECORD_FRAME, 0, 0, 0}, OVERLAY_RECORD_HEAD);
+    n += OVERLAY_RECORD_HEAD;
+    n += plink_overlay_pieces(&an[f][0][0], AW, AH, 1u << 15, 0, d + n, 256);
+  }
+  return n;
+}
+
+// Which of the 4 frames place k shows, -1 for none
+static int frame_shown(int k) {
+  for (int f = 0; f < 4; f++)
+    if (overlay_shows(k, f))
+      return f;
+  return -1;
+}
+
+// A sheet plays its frames as an animated slot does, in step or on its own and in scripts, keeping no frame for
+// either, and one that doesn't start with a frame is turned down
+static void test_sheet(void) {
+  no_overlays();
+  dot_frames(true);
+  uint8_t a[512], sh[512];
+  uint32_t an_n = 0;
+  for (int f = 0; f <= 4; f++)  // the first frame as long each round, as a sheet's is
+    an_n +=
+        plink_overlay_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, (uint8_t) (5 + f % 4), a + an_n);
+  uint32_t sh_n = sheet_records(sh, 5);
+  CHECK_EQ(status(send_kind(OVERLAY_ANIMATED, 0, AW, AH, 2, clear15(), an_n, a, 200)), PIC_DONE);
+  CHECK_EQ(status(send_kind(OVERLAY_SHEET, 1, AW, AH, 2, clear15(), sh_n, sh, 200)), PIC_DONE);
+  CHECK_EQ(overlay_used(), AW / 2 * AH + an_n + sh_n);
+  place(0, 0, 0, 0, 0, 0);
+  place(2, 1, 40, 0, 0, 0);
+  place(1, 0, 80, 0, 1, 2);  // frames of its own, from the third
+  place(3, 1, 120, 0, 1, 2);
+  CHECK_EQ(overlay_used(), 2 * (AW / 2 * AH) + an_n + sh_n + 2 * (SCRIPT_POOL + 4));
+  show_overlays();
+  CHECK(frame_shown(1) == 2 && frame_shown(3) == 2);
+  bool same = true;
+  for (int t = 0; t < 2000; t += 50, sim_run(50))  // 0 and 2 in step with their slots, 1 and 3 on their own
+    same &= frame_shown(0) >= 0 && frame_shown(0) == frame_shown(2) && frame_shown(1) == frame_shown(3);
+  CHECK(same);
+  // a clip, a frame, its rate and its rounds alike
+  static const uint8_t S[] = {OVERLAY_DO_CLIP, V16(1),           V16(2), OVERLAY_CLIP_NOW, WHOLE,   OVERLAY_DO_ROUNDS,
+                              V16(2),          OVERLAY_DO_FRAME, V16(3), OVERLAY_DO_RATE,  V16(50), OVERLAY_DO_ROUNDS,
+                              V16(1),          OVERLAY_DO_MARK,  4};
+  script_to(1, S, sizeof S);
+  script_to(3, S, sizeof S);
+  same = true;
+  for (int t = 0; t < 2500; t += 50, sim_run(50))
+    same &= frame_shown(1) >= 0 && frame_shown(1) == frame_shown(3);
+  CHECK(same);
+  CHECK_EQ(overlay_mark(), 1 | 4 << 8);
+  CHECK_EQ(overlay_mark(), 3 | 4 << 8);
+  CHECK(!sim_stale());
+  lv_obj_clean(lv_scr_act());
+  // its first record a piece, or one that makes nothing longer
+  CHECK_EQ(status(send_kind(OVERLAY_SHEET, 1, AW, AH, 2, clear15(), sh_n - OVERLAY_RECORD_HEAD,
+                            sh + OVERLAY_RECORD_HEAD, 200)),
+           PIC_BAD);
+  sh[OVERLAY_RECORD_X] = OVERLAY_RECORD_MORE;
+  CHECK_EQ(status(send_kind(OVERLAY_SHEET, 1, AW, AH, 2, clear15(), sh_n, sh, 200)), PIC_BAD);
+  no_overlays();
+}
+
 // Pieces that don't fit their still, or run past their rows or the end
 static void test_still_bad(void) {
   no_overlays();
@@ -848,7 +1478,7 @@ static void test_colour_opacity(void) {
     for (int half = 0; half < 2; half++) {
       place(0, slot, 10, 10, 0, 0);
       if (half)
-        glide_now(0, 1u << OVERLAY_OPACITY, (int[]) {50});
+        GLIDE_NOW(0, OVERLAY_OPACITY, 50);
       overlay_look_t l;
       CHECK(draw_box(0, &l, buf, PIC_MAX_H));
       CHECK(l.colour_opa[0] == 136 && l.colour_opa[1] == 255 && l.colour_opa[2] == 0 && l.colour_opa[3] == 17 &&
@@ -902,7 +1532,7 @@ static void test_colour_light(void) {
       {0, 1, {shade, shade, shade}},  // the light over the tint
   };
   for (unsigned i = 0; i < sizeof CASES / sizeof *CASES; i++) {
-    glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {CASES[i].light});
+    GLIDE_NOW(0, OVERLAY_LIGHT, CASES[i].light);
     tint_msg(0, CASES[i].tint, 0xFF0000);
     sim_run(50);
     overlay_look_t l;
@@ -919,16 +1549,16 @@ static void test_colour_light(void) {
     CHECK(!sim_stale());
   }
   overlay_look_t l;
-  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {OVERLAY_LIGHT_MAX + 1});  // too bright, so not at all
+  GLIDE_NOW(0, OVERLAY_LIGHT, OVERLAY_LIGHT_MAX + 1);  // too bright, so not at all
   CHECK(overlay_look(0, &l) && l.light == 0);
-  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {100});
+  GLIDE_NOW(0, OVERLAY_LIGHT, 100);
   tint_msg(0, 1, 0xFF0000);
   tint_msg(0, 2, 0x00FF00);  // neither on nor off
   CHECK(overlay_look(0, &l) && l.pal[3].full == red.full);
   tint_msg(0, 0, 0);
   CHECK(overlay_look(0, &l) && l.pal[3].full == mid.full);
   tint_msg(0, 1, 0xFF0000);
-  glide_now(0, 1u << OVERLAY_LIGHT, (int[]) {50});
+  GLIDE_NOW(0, OVERLAY_LIGHT, 50);
   place(0, 0, 10, 10, 0, 0);  // starts in its own colours
   CHECK(overlay_look(0, &l) && l.light == 1000 && l.pal[3].full == mid.full);
   no_overlays();
@@ -942,7 +1572,14 @@ const check_test_t OVERLAY_TESTS[] = {
     {"overlay_parts", test_anim_parts},
     {"overlay_still", test_still},
     {"overlay_still_bad", test_still_bad},
+    {"overlay_views", test_views},
+    {"overlay_blends", test_blends},
+    {"overlay_sheet", test_sheet},
     {"overlay_colour_opacity", test_colour_opacity},
     {"overlay_colour_light", test_colour_light},
+    {"overlay_fields", test_fields},
+    {"overlay_rows", test_rows},
+    {"overlay_smooth", test_smooth},
+    {"overlay_cycle", test_cycle},
     {0},
 };

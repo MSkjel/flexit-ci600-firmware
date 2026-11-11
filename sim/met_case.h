@@ -22,16 +22,14 @@ inline int oslo_offset(uint32_t t) {
   return t >= last_sunday(3) && t < last_sunday(10) ? 7200 : 3600;
 }
 
-// A scene and what it draws into, the forecast's overlay only with ov
+// A scene and what it draws into
 struct SceneBuf {
   flexit::panel::met::Scene s;
   flexit::panel::met::Stamps stamps;
   flexit::panel::met::Land land;
-  uint8_t ov[flexit::panel::met::OV_H][flexit::panel::met::W / 4];
-  explicit SceneBuf(bool with_ov) {
+  SceneBuf() {
     s.stamps = &stamps;
     s.land = &land;
-    s.ov = with_ov ? ov : nullptr;
   }
   SceneBuf(const SceneBuf &) = delete;
 };

@@ -253,9 +253,26 @@ frames, `plink_keys.h` and `plink_values.h` the messages. The ESP repo keeps a c
 tile at a time, JPEG-coded as it's drawn again on its way to the LCD (`app/shot.c`), so the panel keeps nothing but
 the tile being sent. Overlays over the screensaver's picture have 16 colours, each with its own opacity
 (`K_OVERLAY_BEGIN`). An animated one keeps its frame and the deflated rectangles that change it, a still one only its
-packed pieces, unpacked one at a time as a strip is drawn. A 16-colour picture can have parts, a box and some of its
-colours each, in front of the overlays farther off than them (`K_PIC_PART`, `K_OVERLAY_DEPTH`): the panel leaves an
-overlay's pixels undrawn where a nearer part's colours are. An overlay without a depth is in front of them all.
+packed pieces, unpacked one at a time as a strip is drawn, and a sheet its frames as a still's pieces each, so a place
+that plays them on its own costs nothing more. A field has no pixels at all: the panel works out how much of it
+there is at each one, from left to right, round its middle, in a wedge or cloudy, and draws that far along its 16
+colours (`OVERLAY_FIELD_*`, `field_at()` in `app/overlay_draw.c`). A place shows its overlay in a box of any size,
+the frame where pan puts it, once or round and round (`K_OVERLAY_VIEW`), and only the runs of columns its script's
+shape leaves (`OVERLAY_DO_SHAPE`), fading in at its edges with soft ones (`OVERLAY_DO_SOFT`). Its colours cover
+what's behind, or add to it, screen it or multiply it (`OVERLAY_BLEND_*`), and with `OVERLAY_VIEW_SMOOTH` each pixel
+is between the four of its frame it falls among.
+
+What a place shows is numbers, its channels: where it is, its box, turn, sizes, opacity, light, pivot and depth.
+Glides and drifts set them, from a pool all places share (`moves[]` in `app/overlay_motion.c`), so a place that
+stands still takes none, and one that wanders or faces where it goes keeps how in the overlays' memory while it
+does (`roam_t`). A place's script (`K_OVERLAY_SCRIPT`, `app/overlay_script.c`) is steps the panel runs
+itself, and each value in one can be worked out by a few operations from the time, random numbers, sines and where
+the places are (`OVERLAY_OP_*`). A value can also be bound to a channel, a register, the frame it shows or each row
+it's drawn in (`OVERLAY_DO_BIND`, `K_OVERLAY_BIND`): then the panel works it out again every motion step, 20 a
+second, with nothing more from the script or the ESP. A wave is such a value, and so is following where it is across
+its area. A 16-colour picture can have parts, a box and some of its colours each, in front of the overlays farther
+off than them (`K_PIC_PART`): the panel leaves an overlay's pixels undrawn where a nearer part's colours are. An
+overlay as near as it starts is in front of them all.
 
 ### Adding things
 

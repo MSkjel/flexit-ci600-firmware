@@ -2,12 +2,68 @@
 // A scene for the weather at t, its colours placed, in a buffer of its own
 static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
                                   double lon = OSLO_LON) {
-  static SceneBuf sc(false);
+  static SceneBuf sc;
   met::Weather w = weather;
   w.time = t / 3600 * 3600;
   met::build(sc.s, w, lat, lon, t, false, oslo_offset, o);
   met::palette(sc.s, nullptr);
   return sc.s;
+}
+
+// The forecast over the weather picture: a still of its own on the panel, in front of every animation, so each pixel
+// marks.h draws whole is on the screen whatever moves under it. A redraw with the same forecast leaves it be.
+static void forecast_over(const char *what) {
+  std::string k = marks::overlay_of("weather");
+  auto sent = [&] {
+    const overlay::Overlay *a = overlay::find(k);
+    return a && a->state == overlay::SENT && a->still && a->copies.size() && a->copies[0].placed;
+  };
+  CHECK_MSG(run_until([&] { return sent() && settled(); }, 600) >= 0, "%s: no forecast over it", what);
+  if (!sent())
+    return;
+  int behind = 0, animations = 0;
+  for (const overlay::Overlay &a : overlay::overlays)
+    for (const overlay::Copy &c : a.copies)
+      if (a.name != k && c.used) {
+        animations++;
+        behind += c.depth < overlay::find(k)->copies[0].depth;
+      }
+  CHECK_MSG(animations && behind == animations, "%s: %d of %d animations behind the forecast", what, behind,
+            animations);
+  size_t bytes = overlay::find(k)->data.size();
+  CHECK_MSG(bytes <= (size_t) live::FORECAST_BYTES, "%s: the forecast takes %u bytes, the shows leave it %d", what,
+            (unsigned) bytes, live::FORECAST_BYTES);
+  static marks::Sharp band;
+  const marks::Layer &l = marks::all["weather"].layer;
+  int whole = 0, off = 0, looks = 0;
+  play(4, 0, "", [&] {
+    if (looks++ % 9 || looks < 9)
+      return;  // once a second, faded in
+    for (int y0 = 0; y0 < met::H; y0 += marks::BAND) {
+      marks::draw_sharp(l, band, y0);
+      for (int y = y0; y < y0 + marks::BAND; y++)
+        for (int x = 0; x < met::W; x++)
+          if (uint32_t p = band.px[(y - y0) * met::W + x]; p >> 24 == 255) {
+            whole++;
+            off += sim_rgb565(sim_pixel(x, y)) != sim_rgb565(p & 0xFFFFFF);
+          }
+    }
+  });
+  CHECK_MSG(whole > 2000 && !off, "%s: %d of the forecast's %d pixels not on the screen", what, off, whole);
+  met::redraw();
+  run(3);  // so the last "Shown" isn't taken for this one
+  bool kept = true;
+  int r = run_until(
+      [&] {
+        kept = kept && sent();
+        return panel_picture_status.state.rfind("Shown", 0) == 0 && settled() && panel_pic() == 2;
+      },
+      3000);
+  CHECK_MSG(r >= 0 && kept, "%s: the forecast went with a redraw that didn't change it", what);
+  met::with_forecast = false;
+  met::redraw();
+  CHECK_MSG(run_until([&] { return !overlay::find(k) && settled(); }, 600) >= 0, "%s: the forecast stayed when off",
+            what);
 }
 
 static void live_sky() {
@@ -22,35 +78,48 @@ static void live_sky() {
     met::redraw();
     CHECK_MSG(picture(what, 6000) >= 0, "%s: not drawn again", what);
   };
-  // No rain or snow over a middle or low cloud: the scene the panel has, and where the tiles are on it
+  // Both layers of rain or snow on the panel, none of it over a middle or low cloud and nearly all of the sky under
+  // them falling from just below them: the scene the panel has, and the box and shape of each layer's copy
   auto under = [](const char *what) {
     const met::Scene &sc = panel_scene();
-    auto *a = overlay::find("w_prec");
-    CHECK_MSG(a && a->state == overlay::SENT, "%s: no rain or snow", what);
-    if (!a)
-      return;
-    int tiles = 0, over = 0;
-    for (auto &c : a->copies) {
-      if (!c.used || !c.placed)
+    int layers = 0, over = 0, falls = 0;
+    for (int i = 0; i < 2; i++) {
+      const overlay::Overlay *a = overlay::find(live::key(live::fall_name(i)));
+      if (!a || a->state != overlay::SENT || a->copies.empty() || !a->copies[0].placed)
         continue;
-      Look l = look(c.place);
-      if (!l.shown)
+      Look l = look(a->copies[0].place);
+      const std::vector<uint8_t> &sh = a->copies[0].script.bytes;  // its SHAPE alone
+      if (!l.shown || sh.size() < 2 || sh[0] != OVERLAY_DO_SHAPE || sh.size() != 2u + 2 * sh[1])
         continue;
-      tiles++;
-      for (int i = 0; i < sc.nclouds; i++) {
-        if (!sc.cloud_layer[i])
+      layers++;
+      auto shows = [&](int x, int y) {  // whether its box's shape shows x, y on the screen
+        for (int k = 0, at = l.x; k < sh[1]; k += 3) {
+          int w = plink_i16(&sh[2 + 2 * k]), top = plink_i16(&sh[4 + 2 * k]), bottom = plink_i16(&sh[6 + 2 * k]);
+          if (x >= at && x < at + w)
+            return y >= l.y + top && y < l.y + bottom && x < l.x + l.w && y < l.y + l.h;
+          at += w;
+        }
+        return false;
+      };
+      for (int c = 0; c < sc.nclouds; c++) {
+        if (!sc.cloud_layer[c])
           continue;
-        const met::Cloud &cl = sc.cloud[i];
-        int x0 = met::cloud_x(sc, i);
-        for (int y = std::max<int>(cl.top, l.y); y <= cl.base; y++)
+        const met::Cloud &cl = sc.cloud[c];
+        int x0 = met::cloud_x(sc, c);
+        for (int y = cl.top; y <= cl.base; y++)
           for (int j = 0; j < cl.n; j++) {
             int h = met::half(y - cl.e[j].y, cl.e[j].rx, cl.e[j].ry), cx = x0 + cl.e[j].x;
             for (int k = 0; k < 2 && h >= 0; k++, cx -= met::FIELD)
-              over += std::max(0, std::min(cx + h, l.x + a->w - 1) - std::max(cx - h, l.x) + 1);
+              for (int x = std::max(0, cx - h); x <= std::min(met::W - 1, cx + h); x++)
+                over += shows(x, y);
           }
       }
+      for (int x = 0; x < met::W; x++)
+        falls += shows(x, std::min(met::H - 1, sc.prec_top[x] + 8));
     }
-    CHECK_MSG(tiles >= 7 && !over, "%s: %d tiles, %d px of them over clouds", what, tiles, over);
+    CHECK_MSG(layers == 2 && !over && falls >= 2 * met::W * 9 / 10,
+              "%s: %d layers, %d px of them over clouds, %d of %d columns falling from under them", what, layers, over,
+              falls, 2 * met::W);
   };
 
   // show, symbol, clouds high mid low, rain, wind, temperature, fog, UTC, ground, heater, seconds, shots, lat lon
@@ -110,6 +179,25 @@ static void live_sky() {
   show({"Thunderstorm", "heavyrainandthunder", 0, 90, 100, 6, 10, 20, 0, utc(2026, 7, 10, 15), met::G_CITY, 0, 40, 2},
        "town");
   under("heavy thunder in town");
+  // and with the forecast over the busiest of them
+  met::with_forecast = true;
+  show({"Thunderstorm", "heavyrainandthunder", 0, 90, 100, 6, 10, 20, 0, utc(2026, 7, 10, 15), met::G_CITY, 0, 40, 2},
+       "town_forecast");
+  forecast_over("heavy thunder in town");
+  // and a whole forecast on the coast with the waves, the most it takes
+  met::with_forecast = true;
+  met::sea = {};
+  met::sea.ok = true;
+  met::sea.hours = 1;
+  met::sea.time[0] = utc(2026, 10, 20, 12);
+  met::sea.height[0] = 3.4f;
+  show({"Light rain", "heavyrain", 0, 60, 100, 5, 12, 8, 0, utc(2026, 10, 20, 12), met::G_COAST, 0, 10, 0});
+  for (int i = met::weather.hours; i < met::HOURS; i++)
+    met::weather.hour[met::weather.hours++] = {met::weather.time + 3600u * i, -18.0f + (float) i, met::I_THUNDER};
+  met::redraw();
+  CHECK_MSG(picture("a whole forecast on the coast", 6000) >= 0, "a whole forecast on the coast: not drawn");
+  forecast_over("a whole forecast and the waves on the coast");
+  met::sea = {};
 
   // fog, thick and thin, and on a flag day
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 60, 2}, "thick");
@@ -132,11 +220,11 @@ static void live_sky() {
   aurora({"Lighthouse and the coastal express", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19),
           met::G_COAST, 0, 30, 2, 69.65, 18.96},
          "aurora");
-  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 30, 2,
-          67.28, 14.4},
+  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 30,
+          2, 67.28, 14.4},
          "aurora_bodo");
-  const Live town = {"Evening in town", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_CITY,
-                     0, 30, 2, 69.65, 18.96};
+  const Live town = {"Evening in town",        "clearsky_night", 0, 0,  0, 0,     2,    -8, 0,
+                     utc(2026, 1, 15, 21, 10), met::G_CITY,      0, 30, 2, 69.65, 18.96};
   aurora(town, "aurora");
   const met::Scene &sky = scene_at(met::weather, town.t, met::options, town.lat, town.lon);
   int red = 0, dark = 0;
@@ -187,13 +275,13 @@ static void live_sky() {
 // flag's light) and the heater's smoke
 static void live_kept() {
   step("the weather animations: the rain's frame, the flag's light and the heater (packages/code/met/met_live.h)");
-  // The rain tile's whole frame for overlay.h is freed once the tile is made. Without the RAM for it the tile's
-  // frames are empty, nothing worse.
+  // A rain still's whole frame for overlay.h is freed once the still is made. Without the RAM for it the still is
+  // empty, nothing worse.
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
   tick(1);
   CHECK_MSG(!live::R.px.capacity(), "the rain's frame kept: %u bytes", (unsigned) live::R.px.capacity());
   {  // asked of frame_pixel() itself, as overlay.h takes more than the frame and wouldn't get that far
-    const live::Frames *tile = live::frames_of("prec");
+    const live::Frames *tile = live::frames_of(live::fall_name(0));
     size_t need = (size_t) tile->w * tile->h, from = log_all.size();
     ram_block = need - 1;
     uint32_t px = live::frame_pixel(tile, 0, 0, 0);
@@ -260,7 +348,7 @@ static size_t pool_bytes(const live::Frames &sp) {
     else
       overlay::make(0, true);
   }
-  size_t n = overlay::W.phase == overlay::SEND && !a.half ? a.frame_bytes() + a.data.size() : 0;
+  size_t n = overlay::W.phase == overlay::SEND && !a.half ? a.panel_frame() + a.data.size() : 0;
   overlay::stop();
   return n;
 }
@@ -301,44 +389,52 @@ static void live_costs() {
             (unsigned) overlay::used_by_others(nullptr));
   int level = log_level;
   log_level = 0;
-  // rain, snow and sleet tiles, as wide as the shows make them, short and tall, upright and slanting, as dense as
-  // fits the pool
+  // the stills of rain, snow and sleet, upright and slanting, sparse to dense
   const met::Scene &s = panel_scene();
-  for (int k = 0; k < 3; k++) {
-    const live::TileCost &c = live::TILE_COST[k];
-    static const char *const PART[] = {"start", "row", "each", "slant"};
-    char what[4][32];
-    for (int i = 0; i < 4; i++)
-      snprintf(what[i], sizeof what[i], "TILE_COST[%d].%s", k, PART[i]);
-    Costs costs;
-    for (int w : {40, 46})
-      for (int slant : {0, 2, 4, 12, 24})
-        for (int h : {80, 120, 150})
-          for (float d : {0.0005f, 0.002f, 0.004f, 0.008f}) {
-            if (k != 1 && slant > 4)
-              continue;  // only snow is blown more
-            live::SKY.tw = w;
-            live::SKY.h = h;
-            live::SKY.kind = k;
-            live::SKY.slant = slant;
-            live::SKY.dens = d;
-            float per = (float) (c.slant * abs(slant) / 2), frame = (float) (w / 2 * h);
-            float most = ((float) OVERLAY_POOL - frame - (float) (c.start + c.row * h)) / ((float) c.each + per),
-                  n = d * met::clamp01(most / (d * (float) (w * h))) * (float) (w * h);  // as prec_tile() thins it
-            float m = (float) pool_bytes(live::prec_tile(s, OVERLAY_POOL));
-            CHECK_MSG(
-                m, "met_live_sky.h's TILE_COST[%d] is too small: a %dx%d tile with %.0f streaks or flakes didn't fit",
-                k, w, h, n);
-            costs.took(m, frame + (float) (c.start + c.row * h) + n * ((float) c.each + per),
-                       {{what[0], c.start, frame + (float) (c.row * h) + n * ((float) c.each + per), 1},
-                        {what[1], c.row, frame + (float) c.start + n * ((float) c.each + per), (float) h},
-                        {what[2], c.each, frame + (float) (c.start + c.row * h) + n * per, n},
-                        {what[3], c.slant, frame + (float) (c.start + c.row * h) + n * (float) c.each,
-                         n * (float) abs(slant) / 2}});
-          }
-    snprintf(what[0], sizeof what[0], "TILE_COST[%d]", k);
-    costs.check(what[0]);
-  }
+  const live::FallCost &c = live::FALL_COST;
+  Costs falls;
+  for (int k = 0; k < 3; k++)
+    for (int slant : {0, 2, 4, 12, 24})
+      for (float d : {0.0005f, 0.002f, 0.004f, 0.008f, 0.012f}) {
+        if (k != 1 && slant > 4)
+          continue;  // only snow is blown more
+        live::SKY.kind = k;
+        live::SKY.slant = slant;
+        live::layers(s, k, d, false);
+        for (int i = 0; i < 2; i++) {
+          const live::Layer &l = live::SKY.layer[i];
+          float rows = 0, m = (float) pool_bytes(live::fall_still(i));
+          for (int j = 0; j < l.falls; j++)
+            rows += l.fall[j].dens * (float) (l.w * l.h) * l.fall[j].size;
+          CHECK_MSG(m, "a %dx%d still of rain or snow didn't fit", l.w, l.h);
+          falls.took(m, live::fall_bytes(l),
+                     {{"FALL_COST.start", (float) c.start, (float) (c.row * l.h) + (float) c.each * rows, 1},
+                      {"FALL_COST.row", (float) c.row, (float) c.start + (float) c.each * rows, (float) l.h},
+                      {"FALL_COST.each", (float) c.each, (float) (c.start + c.row * l.h), rows}});
+        }
+      }
+  falls.check("FALL_COST");
+  // the tiles of snow and sleet whose flakes sway each on its own
+  Costs sway;
+  const live::SwayCost &w = live::SWAY_COST;
+  for (int k = 1; k < 3; k++)
+    for (float d : {0.0005f, 0.002f, 0.004f, 0.008f, 0.012f}) {
+      live::SKY.kind = k;
+      live::layers(s, k, d, true);
+      for (int i = 0; i < 2; i++) {
+        const live::Layer &l = live::SKY.layer[i];
+        if (!l.frames)
+          continue;
+        float flakes = 0, frame = (float) ((l.w + 1) / 2 * l.h), m = (float) pool_bytes(live::fall_still(i));
+        for (int j = 0; j < l.falls; j++)
+          flakes += l.fall[j].dens * (float) (l.w * l.h);
+        CHECK_MSG(m, "a %dx%d tile of swaying snow didn't fit", l.w, l.h);
+        sway.took(m, live::fall_bytes(l),
+                  {{"SWAY_COST.start", (float) w.start, frame + (float) w.each * flakes, 1},
+                   {"SWAY_COST.each", (float) w.each, frame + (float) w.start, flakes}});
+      }
+    }
+  sway.check("SWAY_COST");
   // the scene's bolt, a day of thunderstorms
   Costs bolt;
   met::Weather storm;
@@ -352,11 +448,10 @@ static void live_costs() {
     const met::Scene &t = scene_at(storm, utc(2026, 7, 10, hour), {});
     int x, y, n = (int) std::size(t.bolt_x);
     live::Box b = live::bolt_box(t.bolt_x, t.bolt_y, n);
-    float m = (float) pool_bytes(live::bolt(t.bolt_x, t.bolt_y, n, &x, &y)), frame = (float) ((b.w + 1) / 2 * b.h),
-          rows = (float) b.h;
-    bolt.took(m, frame + live::BOLT_ROW * rows + live::BOLT_START,
-              {{"BOLT_START", live::BOLT_START, frame + live::BOLT_ROW * rows, 1},
-               {"BOLT_ROW", live::BOLT_ROW, frame + live::BOLT_START, rows}});
+    float m = (float) pool_bytes(live::bolt(t.bolt_x, t.bolt_y, n, &x, &y)), rows = (float) b.h;
+    bolt.took(m, live::BOLT_ROW * rows + live::BOLT_START,
+              {{"BOLT_START", live::BOLT_START, live::BOLT_ROW * rows, 1},
+               {"BOLT_ROW", live::BOLT_ROW, live::BOLT_START, rows}});
   }
   bolt.check("BOLT_START and BOLT_ROW");
   // the clouds of a few days, high, middle and low

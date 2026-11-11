@@ -142,7 +142,10 @@ int pn_anim(int place, pn_look_t *out) {
   overlay_look_t l;
   if (!overlay_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth, l.still, l.light};
+  *out = (pn_look_t) {l.x,     l.y,      l.deg,    l.view & (OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y),
+                      l.size,  l.opa,    l.depth,  l.still,
+                      l.light, l.pan[0], l.pan[1], l.w,
+                      l.h,     l.view};
   return 1;
 }
 int pn_overlay_covered(int place, int x, int y) { return overlay_covered(place, x, y); }

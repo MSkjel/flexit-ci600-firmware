@@ -54,12 +54,8 @@ $(OBJ_DIR)/esp_met/%.o: $(ESP_MET)/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
-# packages/code/marks/*.cpp and space/*.cpp, the space pictures' glyphs and the rovers' maps
-MARKS_OBJ := $(patsubst $(ESP_CODE)/%.cpp,$(OBJ_DIR)/esp_%.o,\
-                         $(wildcard $(ESP_CODE)/marks/*.cpp $(ESP_CODE)/space/*.cpp))
-$(OBJ_DIR)/esp_marks/%.o: $(ESP_CODE)/marks/%.cpp $(BUILD_MK)
-	@mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
+# packages/code/space/*.cpp, the rovers' maps
+SPACE_OBJ := $(patsubst $(ESP_CODE)/space/%.cpp,$(OBJ_DIR)/esp_space/%.o,$(wildcard $(ESP_CODE)/space/*.cpp))
 $(OBJ_DIR)/esp_space/%.o: $(ESP_CODE)/space/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
@@ -75,7 +71,7 @@ $(OBJ_DIR)/esp_panel/%.o: $(ESP_CODE)/panel/%.cpp $(BUILD_MK)
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
 # gen.py also checks the ESP's copies of proto/ against proto.lock, and lists the headers in packages/code
-ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/* $(ESP_CODE)/marks/* $(ESP_CODE)/space/*)
+ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/* $(ESP_CODE)/space/*)
 $(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML) $(ESP_PROTO)
 	@test -d $(ESP_REPO) || { echo "needs the ESP repo: ESP_REPO=<esphome-flexit-modbus-server>"; exit 1; }
 	@mkdir -p $(dir $@)
@@ -90,12 +86,13 @@ $(BUILD)/esp_yaml/%_sample.ppm: esp_yaml/%_sample.png
 	@mkdir -p $(dir $@)
 	$(TO_PPM) $< $@
 $(BUILD)/esp_test: $(SIMLIB) $(CHECK_OBJ) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) \
-                   $(PANEL_OBJ) $(MET_OBJ) $(MARKS_OBJ) | $(ESP_PICTURES)
+                   $(PANEL_OBJ) $(MET_OBJ) $(SPACE_OBJ) | $(ESP_PICTURES)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 # met_render draws the ESP's weather picture from packages/code/met/met_scene.h for a set of weathers and times
 $(OBJ_DIR)/sim/met_render.o: CPPFLAGS += -I$(ESP_MET)
-$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ)
+$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ) \
+                     $(OBJ_DIR)/esp_panel/marks_font.o
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 $(OBJ_DIR)/%.o: $(ROOT)/%.cpp $(BUILD_MK)

@@ -281,10 +281,9 @@ void sim_esp_place_animation(int place, int slot, int x, int y, int own) {
 }
 
 void sim_esp_move_animation(uint16_t key, int a, int b, int ms) {
-  uint8_t m[9];
-  int v[2] = {a, b};
-  unsigned xy = 1u << OVERLAY_X | 1u << OVERLAY_Y;
-  send(key, m, key == K_OVERLAY_GLIDE ? sim_overlay_glide(m, 0, xy, ms, 0, v) : sim_overlay_drift(m, 0, xy, v));
+  uint8_t m[OVERLAY_GLIDE_HEAD + 2 * OVERLAY_GLIDE_EACH];
+  int v[] = {OVERLAY_X, a, OVERLAY_Y, b};
+  send(key, m, key == K_OVERLAY_GLIDE ? sim_overlay_glide(m, 0, ms, 0, v, 2) : sim_overlay_drift(m, 0, v, 2));
 }
 
 static void esp_pump(void) {

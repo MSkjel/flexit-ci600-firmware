@@ -128,7 +128,7 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
 int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
                       const uint32_t *pal, unsigned glows, uint32_t shade) {
   return plink_overlay_begin(b, id, (uint8_t) slot, (uint8_t) kind, (uint16_t) w, (uint16_t) h, (uint8_t) scale, len,
-                             pal, (uint16_t) glows, shade);
+                             pal, (uint16_t) glows, shade, 0);
 }
 
 int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int fade) {
@@ -141,34 +141,41 @@ int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, in
   return OVERLAY_PLACE_LEN;
 }
 
-// The channels, then from at a value for each of them, times k
-static int values(uint8_t *b, int at, unsigned channels, const int *v, int k) {
-  b[OVERLAY_GLIDE_CHANNELS] = (uint8_t) channels;  // DRIFT's too
-  for (int c = 0; c < OVERLAY_CHANNELS; c++)
-    if (channels >> c & 1) {
-      plink_put16(b + at, (uint16_t) (*v++ * k));
-      at += 2;
-    }
+// From at the n channels of v and their values: a GLIDE's as they are, a DRIFT's px or degrees a second in its
+// hundredths, tenths of a degree on turn
+static int values(uint8_t *b, int at, const int *v, int n, bool drift) {
+  for (; n > 0; n--, v += 2, at += OVERLAY_GLIDE_EACH) {
+    b[at] = (uint8_t) v[0];
+    plink_put16(b + at + 1, (uint16_t) (v[1] * (!drift ? 1 : v[0] == OVERLAY_TURN ? 10 : 100)));
+  }
   return at;
 }
 
-int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to) {
+int sim_overlay_glide(uint8_t *b, int place, int ms, int ease, const int *v, int n) {
   b[OVERLAY_MSG_PLACE] = (uint8_t) place;
   plink_put16(b + OVERLAY_GLIDE_MS, (uint16_t) ms);
   b[OVERLAY_GLIDE_EASE] = (uint8_t) ease;
-  return values(b, OVERLAY_GLIDE_HEAD, channels, to, 1);
+  return values(b, OVERLAY_GLIDE_HEAD, v, n, false);
 }
 
-int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v) {
+int sim_overlay_drift(uint8_t *b, int place, const int *v, int n) {
   b[OVERLAY_MSG_PLACE] = (uint8_t) place;
-  b[OVERLAY_DRIFT_CHANNELS] = (uint8_t) channels;
-  int at = OVERLAY_DRIFT_HEAD;
-  for (int c = 0; c < OVERLAY_CHANNELS; c++)
-    if (channels >> c & 1) {
-      plink_put16(b + at, (uint16_t) (*v++ * (c == OVERLAY_TURN ? 10 : 100)));  // tenths of a degree, else hundredths
-      at += 2;
-    }
-  return at;
+  return values(b, OVERLAY_DRIFT_HEAD, v, n, true);
+}
+
+int sim_overlay_view(uint8_t *b, int place, unsigned mask, unsigned flags) {
+  b[OVERLAY_MSG_PLACE] = (uint8_t) place;
+  b[OVERLAY_VIEW_MASK] = (uint8_t) mask;
+  b[OVERLAY_VIEW_FLAGS] = (uint8_t) flags;
+  return OVERLAY_VIEW_LEN;
+}
+
+int sim_overlay_bind(uint8_t *b, int place, unsigned what, const uint8_t *value, int n) {
+  b[OVERLAY_MSG_PLACE] = (uint8_t) place;
+  b[OVERLAY_BIND_WHAT] = (uint8_t) what;
+  if (n)
+    memcpy(b + OVERLAY_BIND_VALUE, value, (size_t) n);
+  return OVERLAY_BIND_VALUE + n;
 }
 
 // True for string literals. They're in read-only data like on the panel, so writing to one crashes here too.

@@ -30,8 +30,14 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
 int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
                       const uint32_t *pal, unsigned glows, uint32_t shade);  // pal 0xAARRGGBB, shade 0xRRGGBB
 int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int fade);
-int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
-int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second
+// channels: a bit for each, in whose order to and v have a value each
+// A GLIDE or DRIFT of n channels, v a channel and its value for each: a GLIDE's as it takes them, a DRIFT's px or
+// degrees a second
+int sim_overlay_glide(uint8_t *b, int place, int ms, int ease, const int *v, int n);
+int sim_overlay_drift(uint8_t *b, int place, const int *v, int n);
+int sim_overlay_view(uint8_t *b, int place, unsigned mask, unsigned flags);  // OVERLAY_VIEW_*
+// what: an OVERLAY_BIND_* op | what it binds, to the n bytes of value
+int sim_overlay_bind(uint8_t *b, int place, unsigned what, const uint8_t *value, int n);
 
 // ppm.c, doesn't need LVGL
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error

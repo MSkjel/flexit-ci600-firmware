@@ -18,9 +18,9 @@ struct Facing {
       int dx = l.x - was[i].x, dy = l.y - was[i].y;
       if (in(l) && in(was[i]) && abs(dx) >= 2 && abs(dx) >= abs(dy)) {
         moves++;
-        wrong += (dx < 0) != (bool) (l.flip & OVERLAY_FLIP_X);
+        wrong += (dx < 0) != (bool) (l.flip & OVERLAY_VIEW_FLIP_X);
       }
-      turns += was[i].shown && ((l.flip ^ was[i].flip) & OVERLAY_FLIP_X);
+      turns += was[i].shown && ((l.flip ^ was[i].flip) & OVERLAY_VIEW_FLIP_X);
       was[i] = l;
     }
   }

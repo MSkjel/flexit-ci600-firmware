@@ -1,7 +1,7 @@
 // Draws the ESP's weather picture from packages/code/met/met_scene.h in the ESP repo for a set of weathers
-// and times, as the panel would get it. Writes PPMs to OUTDIR, which make met turns into PNGs and a contact
-// sheet. Prints each one's colour count and packed size, and flags a scene that wanted more than 16 colours and
-// had some folded into others. Over 14 KB packed, the ESP sends it as a JPEG.
+// and times, as the panel shows it with the forecast over it. Writes PPMs to OUTDIR, which make met turns into PNGs
+// and a contact sheet. Prints each one's colour count and packed size, and flags a scene that wanted more than 16
+// colours and had some folded into others. Over 14 KB packed, the ESP sends it as a JPEG.
 //   build/met_render OUTDIR [complete.json from api.met.no]
 #include "met_raster.h"
 #include "met_case.h"
@@ -15,6 +15,7 @@
 extern "C" unsigned plink_pack_row(const uint8_t *row, unsigned n, uint8_t *out);
 
 using namespace flexit::panel::met;
+namespace marks = flexit::panel::marks;
 
 struct Case {
   std::string name;
@@ -48,7 +49,7 @@ static Weather wx(const Wx &a) {
 }
 
 static void render(const char *dir, const Case &c) {
-  static SceneBuf sc(true);
+  static SceneBuf sc;
   Scene &s = sc.s;
   Weather w = c.w;
   if (w.ok && !w.time)
@@ -75,6 +76,18 @@ static void render(const char *dir, const Case &c) {
     for (int x = 0; x < W; x += 2)
       r[x / 2] = (uint8_t) (idx[x] << 4 | idx[x + 1]);
     packed += plink_pack_row(r, W / 2, out);
+  }
+  static marks::Sharp over;  // and the forecast over it, as the panel shows its overlay
+  marks::Layer l = forecast_marks(s, w, c.t, oslo_offset);
+  for (int y0 = 0; y0 < H; y0 += marks::BAND) {
+    marks::draw_sharp(l, over, y0);
+    for (int y = y0; y < std::min(y0 + marks::BAND, H); y++)
+      for (int x = 0; x < W; x++) {
+        uint32_t p = over.px[(y - y0) * W + x], a = p >> 24, &q = img[y * W + x], o = 0;
+        for (int k = 0; k < 24; k += 8)
+          o |= ((p >> k & 255) + (q >> k & 255) * (255 - a) / 255) << k;
+        q = o;
+      }
   }
   Pos sun = sun_at(c.lat, c.lon, c.t);
   float ph;

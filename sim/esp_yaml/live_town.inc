@@ -84,7 +84,7 @@ static void live_town() {
     const overlay::Overlay *flag = overlay::find("w_flag");
     Look l = flag ? look(flag->copies[0].place) : Look{};
     int pole = panel_scene().pole_x;
-    CHECK_MSG(l.shown && l.x == pole + 1 && l.flip == OVERLAY_FLIP_X,  // its left next to the pole
+    CHECK_MSG(l.shown && l.x == pole + 1 && l.flip == OVERLAY_VIEW_FLIP_X,  // its left next to the pole
               "the flag in an east wind: at %d, flip %d, the pole at %d", l.x, l.flip, pole);
   }
   show({"A day in town", "partlycloudy_day", 0, 40, 30, 0, 6, 12, 0, utc(2026, 9, 20, 10), met::G_CITY, 0, 30, 1},

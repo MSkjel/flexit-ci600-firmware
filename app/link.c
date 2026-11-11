@@ -285,7 +285,7 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if (!link_compatible())
     return;  // different link version, the message can't be trusted
-  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_TINT) {
+  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_SCRIPT) {
     overlay_msg(key, b, n);  // a slot's or place's, no picture data or ack
     return;
   }
