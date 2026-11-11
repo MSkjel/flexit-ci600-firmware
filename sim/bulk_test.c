@@ -480,10 +480,9 @@ static void panel(void) {
     panel_answer_n = 0;
   }
   if (now >= panel_drain_at) {  // the main loop, which LVGL can keep busy for a while
-    uint8_t p[PBULK_MAX];
-    int n;
-    while ((n = pbulk_panel_take(&PRX, p)) > 0)
-      pbulk_parse(p, n, panel_msg, NULL);
+    const uint8_t *in;
+    for (int n; (in = pbulk_panel_take(&PRX, &n)) != NULL; pbulk_panel_taken(&PRX))
+      pbulk_parse(in, n, panel_msg, NULL);
     while (what && pbulk_panel_free(&PRX)) {  // the stream fills every answer, as link.c fills it with a screenshot
       uint8_t m[PBULK_ANSWER_MAX];
       int n = (PBULK_ANSWER_MAX - PBULK_MSG_HEAD) & ~3;  // DATA, which an answer takes as much of as fits

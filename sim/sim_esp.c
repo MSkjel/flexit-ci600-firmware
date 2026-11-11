@@ -3,6 +3,7 @@
 #include "model.h"
 #include "plink_icons.h"
 #include "sim.h"
+#include "enc.h"
 #include "link.h"
 #include "plink.h"
 #include "pbulk.h"
@@ -312,10 +313,11 @@ static void item(int i) {
   uint8_t d[ITEM_DEF_LEN] = {it.type, it.flags, it.icon, it.dec};
   plink_put16(d + 4, it.step);
   plink_put16(d + 6, it.id);
-  plink_put32(d + 8, (uint32_t) it.min);
-  plink_put32(d + 12, (uint32_t) it.max);
-  for (int k = 0; k < 4; k++)
-    plink_put16(d + 16 + 2 * k, (uint16_t) it.level[k]);
+  bool words = it.type == ITEM_TOGGLE || it.type == ITEM_TEXT;  // their words are where the range would be
+  plink_put32(d + 8, words ? 0 : (uint32_t) it.u.min);
+  plink_put32(d + 12, words ? it.type == ITEM_TOGGLE : (uint32_t) it.u.max);
+  for (int k = 0; k < 4 && !words; k++)
+    plink_put16(d + 16 + 2 * k, (uint16_t) it.u.level[k]);
   send(K_ITEM_DEF + i, d, sizeof d);
   send_text(K_ITEM_LABEL + i, it.label);
   send_text(K_ITEM_UNIT + i, it.unit);

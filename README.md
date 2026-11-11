@@ -245,8 +245,8 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
 - **How deep the stack goes:** `make -C hw stack` builds `hw/build/stack` with the compiler's call graph and lists
   main, the interrupts and every callback with the deepest chain of calls below it, in bytes
   (`tools/stack.py`). The linker keeps `_min_stack` of the RAM for it (`hw/ci600.ld`) and fails the build without
-  that much left: 3 KB, for the 2.3 KB of a script that comes in over the link and decodes its place's frame, under
-  the bus interrupt and the two it nests with, 0.5 KB. Diagnostics shows how much of it was never used.
+  that much left: 2.5 KB, for the 1.8 KB of an animation's script that steps on and inflates its place's next frame,
+  under the bus interrupt and the two it nests with, 0.5 KB. Diagnostics shows how much of it was never used.
 
 ### The ESP link
 
@@ -287,7 +287,7 @@ overlay as near as it starts is in front of them all.
   in flash.
 - **Optional equipment:** a line in `app/equipment.h`. Anything with `.need = FBIT(FEAT_x)` hides without it.
 - **A text:** name and English text in `ui/lang.h`, the translation in each `ui/lang_*.c`.
-- **A language:** copy `ui/lang_no.c`, add it to `LANGS` in `ui/lang.c` and bump `N_LANGS`
+- **A language:** copy `ui/lang_no.c` and name it in its last line, add it to `LANGS` in `ui/lang.c` and bump `N_LANGS`
   (`proto/plink_values.h`). `make check` catches missing texts, mismatched placeholders and characters the fonts
   don't have (`TEXT_RANGE` in `tools/mkfonts.py`).
 - **An icon:** add it to `ICONS` in `tools/mkfonts.py` and run it. Its place in the list is its id on the link.

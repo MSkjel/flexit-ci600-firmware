@@ -2,6 +2,7 @@
 #include "lcd.h"
 #include "board.h"
 #include "stm32f1.h"
+#include <string.h>
 
 // First byte of every SPI transfer, 0111 0 RS RW
 #define START_INDEX 0x70
@@ -23,11 +24,11 @@ static void spi_mode(uint32_t bits) {
   SPI1->CR1 |= SPI_CR1_SPE;
 }
 
-// SPI_CR1_BR for at most want, at the clock now. Never over LCD_SPI_MAX_HZ, see lcd_spi_div()
+// SPI_CR1_BR for at most want, at the clock now
 static uint32_t spi_speed(uint32_t want) { return SPI_CR1_BR_DIV(lcd_spi_div(board_hz(), want)); }
-// Registers and pixels, Fast display's pixels, and the pixels' now. Set by lcd_init(), which runs after the clock
-static uint32_t reg_br, fast_br, pixel_br;
-static int win_x1, win_x2;  // the column window in the controller, -1 = unknown. lcd_init() sets them
+static uint32_t reg_br, pixel_br;  // the registers' and the pixels'. Set by lcd_init(), which runs after the clock
+static uint32_t pixel_ns;          // what a pixel takes
+static uint16_t window[4];  // registers 0x50 to 0x53 as the controller has them: the first and last row, then column
 
 // Deselecting waits until the last byte is out.
 static void cs(int on) {
@@ -144,12 +145,13 @@ bool lcd_init(void) {
       break;
   }
   wreg(0x03, 0x5038);  // entry mode, BGR as stock but along a screen row first, see lcd_draw
-  pixel_br = reg_br = spi_speed(LCD_REG_HZ);
-  fast_br = spi_speed(LCD_FAST_HZ);
+  reg_br = spi_speed(LCD_REG_HZ);
+  pixel_br = spi_speed(LCD_PIXEL_HZ);
+  pixel_ns = 16000 * lcd_spi_div(board_hz(), LCD_PIXEL_HZ) / (board_hz() / 1000000);
   spi_mode(reg_br);
   RCC->AHBENR |= RCC_AHBENR_DMA1EN;
   irq_enable(IRQ_DMA1_CH3);
-  win_x1 = win_x2 = -1;
+  memset(window, 0xFF, sizeof window);  // none it will be asked for, so the first area sets them
   return known;
 }
 
@@ -160,17 +162,32 @@ volatile uint32_t lcd_send_us;
 static volatile bool sending;
 static void (*send_done)(void);
 static uint32_t send_start;
+static struct {
+  const uint16_t *px;       // the next row
+  uint16_t w, pitch, rows;  // rows still to go, w pixels each, pitch apart
+} left;
 
-void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(void)) {
+// The next rows to the DMA: all that are left if they follow each other in memory, else one, and its interrupt sends
+// the next. The display takes the pause between two as it comes.
+static void send_rows(void) {
+  unsigned rows = left.pitch == left.w ? left.rows : 1;
+  dma_ch_t *ch = DMA1_CH(3);  // SPI1 TX
+  ch->CCR = 0;
+  ch->CPAR = (uint32_t) &SPI1->DR;
+  ch->CMAR = (uint32_t) left.px;
+  ch->CNDTR = left.w * rows;
+  left.px += left.pitch * rows;
+  left.rows = (uint16_t) (left.rows - rows);
+  // last: the interrupt may come before the next line, and it's here again
+  ch->CCR = DMA_CCR_MSIZE_16 | DMA_CCR_PSIZE_16 | DMA_CCR_MINC | DMA_CCR_DIR_TO_PERIPH | DMA_CCR_TCIE | DMA_CCR_EN;
+}
+
+void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, unsigned pitch, void (*done)(void)) {
   lcd_wait();
-  wreg(0x50, (uint16_t) y1);
-  wreg(0x51, (uint16_t) y2);
-  if (x1 != win_x1 || x2 != win_x2) {  // the strips of a redraw share their columns
-    wreg(0x52, (uint16_t) x1);
-    wreg(0x53, (uint16_t) x2);
-    win_x1 = x1;
-    win_x2 = x2;
-  }
+  const uint16_t want[4] = {(uint16_t) y1, (uint16_t) y2, (uint16_t) x1, (uint16_t) x2};
+  for (int i = 0; i < 4; i++)  // areas after each other share their rows or their columns
+    if (window[i] != want[i])
+      wreg((uint8_t) (0x50 + i), window[i] = want[i]);
   wreg(0x20, (uint16_t) y1);
   wreg(0x21, (uint16_t) x1);
   index_reg(0x22);  // GRAM
@@ -181,17 +198,20 @@ void lcd_draw(int x1, int y1, int x2, int y2, const uint16_t *px, void (*done)(v
   sending = true;
   send_done = done;
   send_start = board_us();
-  dma_ch_t *ch = DMA1_CH(3);  // SPI1 TX
-  ch->CCR = 0;
-  ch->CPAR = (uint32_t) &SPI1->DR;
-  ch->CMAR = (uint32_t) px;
-  ch->CNDTR = (uint32_t) (x2 - x1 + 1) * (uint32_t) (y2 - y1 + 1);
+  left.px = px;
+  left.w = (uint16_t) (x2 - x1 + 1);
+  left.pitch = (uint16_t) pitch;
+  left.rows = (uint16_t) (y2 - y1 + 1);
   SPI1->CR2 |= SPI_CR2_TXDMAEN;
-  ch->CCR = DMA_CCR_MSIZE_16 | DMA_CCR_PSIZE_16 | DMA_CCR_MINC | DMA_CCR_DIR_TO_PERIPH | DMA_CCR_TCIE | DMA_CCR_EN;
+  send_rows();
 }
 
 void DMA1_Channel3_IRQHandler(void) {
   DMA1_IFCR = DMA_IFCR_CH3;
+  if (left.rows) {
+    send_rows();
+    return;
+  }
   DMA1_CH(3)->CCR = 0;
   spi_drain();  // the last pixel out of the shift register
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
@@ -203,7 +223,7 @@ void DMA1_Channel3_IRQHandler(void) {
     send_done();
 }
 
-void lcd_fast(bool on) { pixel_br = on ? fast_br : reg_br; }
+uint32_t lcd_us(uint32_t px) { return px * pixel_ns / 1000; }
 
 void lcd_wait(void) {
   while (sending)

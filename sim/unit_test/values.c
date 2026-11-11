@@ -73,10 +73,10 @@ static void test_items(void) {
   *co2 = (item_t) {.type = ITEM_SENSOR,
                    .flags = ITEMF_VIEW | ITEMF_TREND | ITEMF_LEVELS,
                    .id = 77,
-                   .max = 2000,
-                   .level = {0, 0, 800, 1200}};
-  *target = (item_t) {.type = ITEM_NUMBER, .flags = ITEMF_MENU, .id = 78, .step = 50, .min = 400, .max = 1500};
-  *button = (item_t) {.type = ITEM_BUTTON, .flags = ITEMF_VIEW, .id = 79, .max = 1};
+                   .u.max = 2000,
+                   .u.level = {0, 0, 800, 1200}};
+  *target = (item_t) {.type = ITEM_NUMBER, .flags = ITEMF_MENU, .id = 78, .step = 50, .u.min = 400, .u.max = 1500};
+  *button = (item_t) {.type = ITEM_BUTTON, .flags = ITEMF_VIEW, .id = 79, .u.max = 1};
   val_t v = V_ITEM_FIRST + 2;
   CHECK(!val_known(V_ITEM_FIRST));
   CHECK(val_known(v));

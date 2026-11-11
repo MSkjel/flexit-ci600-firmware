@@ -2434,10 +2434,6 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
  *  ALL CUSTOM DATA
  *--------------------*/
 
-#if LVGL_VERSION_MAJOR == 8
-/*Store all the custom data of the font*/
-static  lv_font_fmt_txt_glyph_cache_t cache;
-#endif
 
 #if LVGL_VERSION_MAJOR >= 8
 static const lv_font_fmt_txt_dsc_t font_dsc = {
@@ -2453,9 +2449,6 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
     .bpp = 4,
     .kern_classes = 0,
     .bitmap_format = 0,
-#if LVGL_VERSION_MAJOR == 8
-    .cache = &cache
-#endif
 };
 
 

@@ -113,29 +113,27 @@ static void test_cpu_clock(void) {
   bool revert;
   for (int s = 0; s < N_CPU_SPEEDS; s++) {
     CHECK_EQ(CPU_MHZ[s], MHZ[s]);
-    CHECK_EQ(cpu_speed_of(MHZ[s]), s);
     // after a power cut, as the setting says
-    CHECK_EQ(cpu_clock_choice(s, 0, RESET_POWER, &revert), MHZ[s]);
+    CHECK_EQ(cpu_clock_choice(s, 0, RESET_POWER, &revert), s);
     CHECK(!revert);
     // a crash or the watchdog over 72 MHz sets it back to 72, at 72 they don't count
-    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_FAULT, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_FAULT, &revert), 0);
     CHECK_EQ(revert, s > 0);
-    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_WATCHDOG, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_WATCHDOG, &revert), 0);
     CHECK_EQ(revert, s > 0);
     // nor do the panel's own restarts, the reset pin or a crash at 72 before
-    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert), MHZ[s]);
+    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert), s);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_PIN, &revert), MHZ[s]);
+    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(s, 0), RESET_PIN, &revert), s);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(0, 0), RESET_FAULT, &revert), MHZ[s]);
+    CHECK_EQ(cpu_clock_choice(s, CLOCK_MARK(0, 0), RESET_FAULT, &revert), s);
     CHECK(!revert);
     // set back to 72 at this speed
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(s, 0), RESET_SOFTWARE, &revert), 0);
     CHECK(!revert);
   }
-  CHECK_EQ(cpu_speed_of(8), 0);  // on HSI without the crystal
   // a mark with speeds there aren't, from other firmware
-  CHECK_EQ(cpu_clock_choice(1, CLOCK_MARK(7, 9), RESET_FAULT, &revert), 80);
+  CHECK_EQ(cpu_clock_choice(1, CLOCK_MARK(7, 9), RESET_FAULT, &revert), 1);
   CHECK(!revert);
 }
 
@@ -143,29 +141,28 @@ static void test_cpu_clock(void) {
 static void test_cpu_trial(void) {
   bool revert;
   for (int t = 1; t < N_CPU_SPEEDS; t++) {
-    int mhz = CPU_MHZ[t];
     for (int from = 0; from < N_CPU_SPEEDS; from++) {  // picked at any speed
-      CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(from, t), RESET_SOFTWARE, &revert), mhz);
+      CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(from, t), RESET_SOFTWARE, &revert), t);
       CHECK(!revert);
     }
     // a restart during it carries on with it, a crash ends it
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_SOFTWARE, &revert), mhz);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_SOFTWARE, &revert), t);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_FAULT, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_FAULT, &revert), 0);
     CHECK(revert);
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_WATCHDOG, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, t), RESET_WATCHDOG, &revert), 0);
     CHECK(revert);
     // a hang before the restart counts at the speed it ran at, over 72
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(0, t), RESET_WATCHDOG, &revert), mhz);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(0, t), RESET_WATCHDOG, &revert), t);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(4, t), RESET_WATCHDOG, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(4, t), RESET_WATCHDOG, &revert), 0);
     CHECK(revert);
     // OK keeps it. BACK or no answer restart at 72, and a power cut loses the mark, see hw/main.c
-    CHECK_EQ(cpu_clock_choice(t, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert), mhz);
+    CHECK_EQ(cpu_clock_choice(t, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert), t);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, CLOCK_MARK(t, 0), RESET_SOFTWARE, &revert), 0);
     CHECK(!revert);
-    CHECK_EQ(cpu_clock_choice(0, 0, RESET_POWER, &revert), 72);
+    CHECK_EQ(cpu_clock_choice(0, 0, RESET_POWER, &revert), 0);
     CHECK(!revert);
   }
 }
@@ -174,58 +171,21 @@ static void test_cpu_trial(void) {
 static void test_lcd_spi(void) {
   static const struct {
     int mhz;
-    uint32_t init, reg, fast;  // kHz
+    uint32_t init, reg, pixel;  // kHz
   } WANT[] = {
       {72, 4500, 9000, 18000},  {80, 5000, 10000, 20000},  {88, 5500, 11000, 11000},
       {96, 6000, 12000, 12000}, {128, 8000, 16000, 16000},
   };
   CHECK_EQ(LEN(WANT), N_CPU_SPEEDS);
   for (int s = 0; s < N_CPU_SPEEDS; s++) {
-    uint32_t hz = CPU_MHZ[s] * 1000000u, div = lcd_spi_div(hz, LCD_INIT_HZ);
+    uint32_t hz = CPU_MHZ[s] * 1000000u;
     CHECK_EQ(CPU_MHZ[s], WANT[s].mhz);
-    CHECK_EQ(hz / div / 1000, WANT[s].init);
-    for (int fast = 0; fast < 2; fast++) {
-      div = lcd_spi_div(hz, fast ? LCD_FAST_HZ : LCD_REG_HZ);
-      CHECK(hz <= (uint64_t) LCD_SPI_MAX_HZ * div);
-      CHECK_EQ(hz / div / 1000, fast ? WANT[s].fast : WANT[s].reg);
-    }
+    CHECK_EQ(hz / lcd_spi_div(hz, LCD_INIT_HZ) / 1000, WANT[s].init);
+    CHECK_EQ(hz / lcd_spi_div(hz, LCD_REG_HZ) / 1000, WANT[s].reg);
+    CHECK_EQ(hz / lcd_spi_div(hz, LCD_PIXEL_HZ) / 1000, WANT[s].pixel);
   }
-  // whatever is asked for
-  CHECK_EQ(lcd_spi_div(80000000, 100000000), 4);
-  CHECK_EQ(lcd_spi_div(88000000, 100000000), 8);
-  CHECK_EQ(lcd_spi_div(80000001, LCD_FAST_HZ), 8);
+  CHECK_EQ(lcd_spi_div(80000001, LCD_PIXEL_HZ), 8);
   CHECK_EQ(lcd_spi_div(8000000, LCD_REG_HZ), 2);  // on HSI without the crystal
-}
-
-// Over 80 MHz Fast display is off: picking such a speed turns it off and saves that, and it can't go on from the
-// user, the ESP or flash
-static void test_fast_display(void) {
-  model_defaults();
-  memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
-  settings_load();
-  for (int s = 0; s < N_CPU_SPEEDS; s++) {
-    bool ok = CPU_MHZ[s] <= 80;
-    M.cpu_speed = 0;
-    M.fast_display = true;
-    val_set(V_CPU_SPEED, s);
-    CHECK_EQ(M.cpu_speed, s);
-    CHECK_EQ(M.fast_display, ok);
-    settings_flush();
-    M.cpu_speed = 0;  // so loading takes Fast display as it was saved
-    M.fast_display = true;
-    settings_load();
-    CHECK_EQ(M.fast_display, ok);
-    CHECK_EQ(M.cpu_speed, s);
-    CHECK_EQ(val_def(V_FAST_DISPLAY).max, ok);
-    val_set(V_FAST_DISPLAY, 1);
-    CHECK_EQ(M.fast_display, ok);
-    M.fast_display = false;
-    val_set_remote(V_FAST_DISPLAY, 1);
-    CHECK(!M.fast_display);  // never from the ESP, only in its copy of the settings
-    val_load(V_FAST_DISPLAY, 1);
-    CHECK_EQ(M.fast_display, ok);
-  }
-  model_defaults();
 }
 
 // ---------------------------------------------------------------- the week program
@@ -233,32 +193,51 @@ static period_t period(int start, int end, int idx) {
   return (period_t) {(uint16_t) start, (uint16_t) end, MODE_NORMAL, (uint8_t) idx, 200};
 }
 
+// A day's periods as the CX60 has them in its registers, and how many the panel then sees
+static void week_set(int day, const period_t *p, int n) {
+  for (int s = 0; s < PERIODS_PER_DAY; s++)
+    mb_load((uint16_t) (0x118 + day * PERIODS_PER_DAY + s), 0);
+  for (int i = 0; i < n; i++) {
+    uint16_t r = (uint16_t) (0x01C + (day * PERIODS_PER_DAY + p[i].idx) * 4);
+    mb_load(r, (int16_t) p[i].start);
+    mb_load(r + 1, (int16_t) p[i].end);
+    mb_load(r + 2, p[i].level);
+    mb_load(r + 3, p[i].setpoint);
+    mb_load((uint16_t) (0x118 + day * PERIODS_PER_DAY + p[i].idx), 1);
+  }
+  unit_poll();
+}
+static int periods(int day) {
+  period_t w[PERIODS_PER_DAY];
+  return sched_day(day, w);
+}
+
 static void test_schedule(void) {
   model_defaults();
   mb_init(3, FW_VERSION, FW_PATCH);
   // a new period is 08:00-16:00 if that's free, else the first free time
   CHECK(sched_edit(0, -1));
-  CHECK_EQ(M.n_periods[0], 1);
+  CHECK_EQ(periods(0), 1);
   CHECK_EQ(M.period.p.start, 8 * 60);
   CHECK_EQ(M.period.p.end, 16 * 60);
   const period_t day[3] = {period(390, 480, 0), period(480, 930, 1), period(930, 1350, 2)};
-  sched_store(1, day, 3);
+  week_set(1, day, 3);
   CHECK(sched_edit(1, -1));
   CHECK_EQ(M.period.p.idx, 3);
   CHECK_EQ(M.period.p.start, 0);
   CHECK_EQ(M.period.p.end, 390);
   CHECK(!sched_can_add(1));
   const period_t full[3] = {period(0, 480, 0), period(480, 960, 1), period(960, 1440, 2)};
-  sched_store(2, full, 3);
+  week_set(2, full, 3);
   CHECK(!sched_can_add(2));
   CHECK(!sched_edit(2, -1));
-  CHECK_EQ(M.n_periods[2], 3);
+  CHECK_EQ(periods(2), 3);
   // a gap no longer than the shortest period takes no new period, its start and end couldn't be edited
   const period_t gap[2] = {period(0, 480, 0), period(485, 1440, 1)};
-  sched_store(3, gap, 2);
+  week_set(3, gap, 2);
   CHECK(!sched_can_add(3));
   const period_t gap6[2] = {period(0, 480, 0), period(486, 1440, 1)};
-  sched_store(3, gap6, 2);
+  week_set(3, gap6, 2);
   int32_t lo, hi;
   CHECK(sched_edit(3, -1));
   CHECK_EQ(M.period.p.start, 480);
@@ -267,7 +246,7 @@ static void test_schedule(void) {
   CHECK_EQ(lo, 480);
   CHECK_EQ(hi, 481);
   // an edit stays between its neighbours, 08:00-15:30 between 06:30-08:00 and 15:30-22:30
-  sched_store(1, day, 3);
+  week_set(1, day, 3);
   CHECK(sched_edit(1, 1));
   val_set(V_PERIOD_START, 7 * 60);
   val_set(V_PERIOD_END, 1440);
@@ -279,10 +258,13 @@ static void test_schedule(void) {
   val_set(V_PERIOD_END, 0);
   CHECK_EQ(M.period.p.start, 480);
   CHECK_EQ(M.period.p.end, 485);
-  CHECK_EQ(M.week[1][1].end, 485);
-  // the screens are rebuilt when a day changes, also from the bus, and not when it doesn't
+  period_t w[PERIODS_PER_DAY];
+  CHECK_EQ(sched_day(1, w), 3);
+  CHECK_EQ(w[1].end, 485);
+  // the screens are rebuilt when a day changes, also from the bus, and not when the bus says what it had
   layout_changes = 0;
-  sched_store(1, M.week[1], M.n_periods[1]);
+  mb_load(0x01C + (1 * PERIODS_PER_DAY + 1) * 4 + 1, 485);
+  unit_poll();
   CHECK_EQ(layout_changes, 0);
   for (int i = 0; i < 2; i++) {
     mb_load((uint16_t) (0x01C + i * 4), (int16_t) (360 + i * 120));  // Monday, start and end
@@ -290,21 +272,16 @@ static void test_schedule(void) {
     mb_load((uint16_t) (0x118 + i), 1);
   }
   unit_poll();
-  CHECK_EQ(M.n_periods[0], 2);
+  CHECK_EQ(periods(0), 2);
   CHECK(layout_changes > 0);
   layout_changes = 0;
   mb_load(0x119, 0);  // another panel removed the second
   unit_poll();
-  CHECK_EQ(M.n_periods[0], 1);
+  CHECK_EQ(periods(0), 1);
   CHECK_EQ(layout_changes, 1);
 }
 
 const check_test_t CLOCK_TESTS[] = {
-    {"clock", test_clock},
-    {"cpu_clock", test_cpu_clock},
-    {"cpu_trial", test_cpu_trial},
-    {"lcd_spi", test_lcd_spi},
-    {"fast_display", test_fast_display},
-    {"schedule", test_schedule},
-    {0},
+    {"clock", test_clock},     {"cpu_clock", test_cpu_clock}, {"cpu_trial", test_cpu_trial},
+    {"lcd_spi", test_lcd_spi}, {"schedule", test_schedule},   {0},
 };

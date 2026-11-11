@@ -9,10 +9,19 @@
 #include "pdeflate.h"
 #include "pjpeg.h"
 #include "plink.h"
+#include "sent.h"
 #include "settings.h"
 #include "trend.h"
 #include "check.h"
 #include "sim.h"
+#include "enc.h"
+
+// Empty records after the n bytes at d, which only wait: as many as keep it within room bytes. The new length.
+static inline uint32_t pad_records(uint8_t *d, uint32_t n, uint32_t room) {
+  for (; n + OVERLAY_RECORD_HEAD <= room; n += OVERLAY_RECORD_HEAD)
+    plink_overlay_head(d + n, 10, 0, 0, 0, 0, 0);
+  return n;
+}
 #include "ui_int.h"
 #include "unit.h"
 #include <stdio.h>
@@ -20,7 +29,7 @@
 #include <string.h>
 
 extern const check_test_t PICTURE_TESTS[], OVERLAY_TESTS[], OVERLAY_MOTION_TESTS[], OVERLAY_SCRIPT_TESTS[],
-    VALUES_TESTS[], CLOCK_TESTS[], UNIT_TESTS[], SETTINGS_TESTS[], UI_TESTS[], LINK_TESTS[];
+    VALUES_TESTS[], CLOCK_TESTS[], UNIT_TESTS[], SETTINGS_TESTS[], UI_TESTS[], LINK_TESTS[], SENT_TESTS[];
 
 // board_stub.c
 extern uint32_t stub_ms, stub_rtc;

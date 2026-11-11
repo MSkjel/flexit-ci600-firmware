@@ -21,7 +21,7 @@ void panel_defaults(void) {
     M.view_on[v] = true;
   M.dash_temp = DT_INDOOR;
   memcpy(M.tiles, TILE_DEFAULTS, sizeof TILE_DEFAULTS);
-  M.clock_24h = M.key_hints = M.temp_dec = M.fast_display = true;
+  M.clock_24h = M.key_hints = M.temp_dec = true;
   M.cpu_speed = 0;
   M.language = 0;
   M.room_offset = -40;  // the same fixed 4.0 C the stock firmware uses
@@ -138,18 +138,16 @@ void panel_leds(bool out[N_LIGHTS], uint32_t ms) {
     out[LIGHT_OK] = screen;
 }
 
+bool quiet(quiet_t *q, uint32_t frames, uint8_t limit) {
+  if (frames != q->seen)
+    *q = (quiet_t) {.seen = frames};
+  else if (q->quiet_s < limit)
+    q->quiet_s++;
+  return q->quiet_s >= limit;
+}
+
 int cpu_clock_choice(uint8_t speed, uint8_t last, uint8_t reset_cause, bool *revert) {
   unsigned ran = CLOCK_RAN(last), trial = CLOCK_TRIAL(last), i = trial && trial < N_CPU_SPEEDS ? trial : speed;
   *revert = ran && ran < N_CPU_SPEEDS && (reset_cause == RESET_FAULT || reset_cause == RESET_WATCHDOG);
-  return CPU_MHZ[!*revert && i < N_CPU_SPEEDS ? i : 0];
+  return !*revert && i < N_CPU_SPEEDS ? (int) i : 0;
 }
-
-int cpu_speed_of(int mhz) {
-  for (int i = 0; i < N_CPU_SPEEDS; i++)
-    if (CPU_MHZ[i] == mhz)
-      return i;
-  return 0;
-}
-
-// Over 80 MHz its pixels at core / 4 would pass the SPI's 20 MHz cap, see lcd_spi_div()
-bool fast_display_ok(void) { return CPU_MHZ[M.cpu_speed] <= 80; }

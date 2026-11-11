@@ -8,9 +8,10 @@ MEMORY
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
-/* How deep the stack goes at the most, by the compiler's own count (-fcallgraph-info=su): a script that comes in and
-   decodes its place's frame, 2.3 KB, under the bus interrupt and the two it nests with, 0.5 KB */
-_min_stack = 0xC00;
+/* How deep the stack goes at the most, by the compiler's own count (-fcallgraph-info=su, make stack): an animation's
+   script that steps on and inflates its place's next frame, 1.8 KB with the timer above it, under the bus interrupt
+   and the two it nests with, 0.5 KB */
+_min_stack = 0xA00;
 
 SECTIONS
 {

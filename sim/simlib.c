@@ -1,6 +1,7 @@
 // Runs LVGL on the PC with the display in memory, saves screenshots and lays out the ESP's messages.
 #include "plat.h"
 #include "plink.h"
+#include "sent.h"
 #include "shot.h"
 #include "sim.h"
 #include "ui.h"
@@ -14,37 +15,44 @@
 #define H 240
 #define HEAP_MARGIN 4096  // free LVGL heap every screen must leave
 
-unsigned long sim_px;
-static lv_color_t fb[W * H], draw_buf[W * 40];
+unsigned long sim_px, sim_sent;
+bool sim_whole;
+static lv_color_t fb[W * H], draw_buf[2][SENT_STRIP];
 
+// As the panel's: the tiles that changed go to the LCD, or all of the strip with sim_whole, and it must then show all
+// that was drawn
 static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
   if (ui_held()) {  // the LCD keeps what it has
     lv_disp_flush_ready(d);
     return;
   }
-  int w = a->x2 - a->x1 + 1;
-  sim_px += (unsigned long) w * (unsigned long) (a->y2 - a->y1 + 1);
+  int w = lv_area_get_width(a);
+  sim_px += lv_area_get_size(a);
+  uint32_t changed = sim_whole ? sent_all(a) : sent_changed(a, px);
+  lv_area_t r;
+  for (const lv_color_t *p; (p = sent_run(a, px, &changed, &r)) != NULL;) {
+    sim_sent += lv_area_get_size(&r);
+    for (int y = r.y1; y <= r.y2; y++, p += w)
+      memcpy(&fb[y * W + r.x1], p, (size_t) lv_area_get_width(&r) * sizeof *p);
+  }
   for (int y = a->y1; y <= a->y2; y++)
-    memcpy(&fb[y * W + a->x1], px + (y - a->y1) * w, w * sizeof *px);
+    if (memcmp(&fb[y * W + a->x1], px + (y - a->y1) * w, (size_t) w * sizeof *px)) {
+      fprintf(stderr, "the LCD doesn't show what was drawn at line %d\n", y);
+      abort();
+    }
   shot_flushed(a, px);
   lv_disp_flush_ready(d);
 }
 
-// One 40-line draw buffer, or with SIM_LINES=8 in the environment two of 8 lines like the panel, whose strips the
-// rounders then see
 void sim_display_init(void) {
   lv_init();
   static lv_disp_draw_buf_t db;
-  if (getenv("SIM_LINES") && atoi(getenv("SIM_LINES")) == 8)
-    lv_disp_draw_buf_init(&db, draw_buf, draw_buf + W * 8, W * 8);
-  else
-    lv_disp_draw_buf_init(&db, draw_buf, NULL, W * 40);
+  lv_disp_draw_buf_init(&db, draw_buf[0], draw_buf[1], SENT_STRIP);
   static lv_disp_drv_t drv;
   lv_disp_drv_init(&drv);
   drv.hor_res = W;
   drv.ver_res = H;
   drv.flush_cb = flush;
-  drv.rounder_cb = shot_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
 }
@@ -186,6 +194,9 @@ bool plat_const(const void *p) { return (const char *) p >= etext && (const char
 void plat_stats(plat_stats_t *s) {
   *s = (plat_stats_t) {.uptime_s = 3 * 86400 + 4 * 3600 + 12 * 60 + 7,
                        .cpu_mhz = 72,
+                       .cpu_busy = 6,
+                       .bus_ok = 184233,
+                       .bus_err = 41,
                        .restarts = 1,
                        .full_us = 152300,
                        .full_send_us = 136900,

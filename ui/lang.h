@@ -233,14 +233,11 @@
   X(ONE_DECIMAL, "One decimal") \
   X(KEY_HINTS, "Key hints") \
   X(KEY_HINTS_HELP, "Show what the keys do in the line at the bottom.") \
-  X(FAST_DISPLAY, "Fast display") \
-  X(FAST_DISPLAY_HELP, "Sends pictures to the screen twice as fast, above its rated speed. Turn it off if anything " \
-                       "looks wrong. Only with Processor speed up to 80 MHz, under Advanced.") \
-  X(ONLY_UP_TO_80_MHZ, "Only up to 80 MHz, see Advanced") \
   X(PROCESSOR_SPEED, "Processor speed") \
   X(PROCESSOR_SPEED_HELP, \
     "Over 72 MHz the processor runs past its rating, so screens draw faster. The panel restarts to switch. If it " \
-    "crashes, or you don't confirm within 20 s, it goes back to 72 MHz by itself. Over 80, Fast display is off.") \
+    "crashes, or you don't confirm within 20 s, it goes back to 72 MHz by itself. Over 80 the screen gets its " \
+    "pictures slower.") \
   X(N_72_MHZ_STOCK, "72 MHz (stock)") \
   X(N_80_MHZ, "80 MHz") \
   X(N_88_MHZ, "88 MHz") \
@@ -709,12 +706,10 @@
   /* start-up */ \
   X(UNKNOWN_DISPLAY_CONTROLLER, "Unknown display controller") \
   X(CRASHED_AT_MHZ, "Crashed at %d MHz, back to 72") \
-  /* Processor speed or Fast display on trial */ \
+  /* Processor speed on trial */ \
   X(KEEP_MHZ, "Keep %d MHz?") \
-  X(KEEP_FAST_DISPLAY, "Keep Fast display?") \
   X(KEEP_QUESTION, "Does the screen look right? OK keeps it, BACK undoes it.") \
   X(BACK_TO_72_IN, "Back to 72 MHz in %d s") \
-  X(FAST_OFF_IN, "Fast display goes off in %d s") \
   /* key hints and tiles */ \
   X(MOVE, "Move") \
   X(OPEN, "Open") \
@@ -745,6 +740,22 @@
 enum { S_NONE, STRINGS(X) S_COUNT };
 #undef X
 typedef uint16_t str_t;  // S_*
+
+// A language's texts: all of them back to back in one block, a 0 before each, and where each id's starts in it.
+// 0 is a text it hasn't. An offset is half a pointer's size, and there are two languages of S_COUNT texts.
+typedef struct {
+  const char *block;
+  uint16_t at[S_COUNT];
+} lang_t;
+// Defines language `name` from its list of X(ID, "text") rows. One language to a file, the names in here are its own.
+#define LANG_AT(id, text) TEXT_AT_##id, TEXT_END_##id = TEXT_AT_##id + sizeof(text) - 1,
+#define LANG_TEXT(id, text) "\0" text
+#define LANG_ENTRY(id, text) .at[S_##id] = TEXT_AT_##id,
+#define LANGUAGE(name, TEXTS) \
+  enum { TEXT_AT_NONE, TEXTS(LANG_AT) TEXTS_END }; \
+  _Static_assert(TEXTS_END <= UINT16_MAX, "a text's offset fits 16 bits"); \
+  static const char block[] = TEXTS(LANG_TEXT); \
+  const lang_t name = {.block = block, TEXTS(LANG_ENTRY)}
 
 const char *tr(str_t s);                   // text in the panel's language
 const char *lang_name(int lang);           // a language's name, in that language

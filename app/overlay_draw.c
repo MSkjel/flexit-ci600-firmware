@@ -286,15 +286,18 @@ bool overlay_look(int place, overlay_look_t *l) {
 
 // ---------------------------------------------------------------- the pixels
 
+// a / b for a >= 0 and b > 0, a shift when b is a px in 1/65536, as it is for a place at its own size
+static int32_t over(int32_t a, int32_t b) { return b == 65536 ? a >> 16 : a / b; }
+
 // Narrows i0..i1 to the i where 0 <= u + i * du < n
 static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
   int lo = 0, hi = -1;
   if (du > 0) {
-    lo = u < 0 ? (int) ((du - 1 - u) / du) : 0;
-    hi = u < n ? (int) ((n - 1 - u) / du) : -1;
+    lo = u < 0 ? (int) over(du - 1 - u, du) : 0;
+    hi = u < n ? (int) over(n - 1 - u, du) : -1;
   } else if (du < 0) {
-    lo = u >= n ? (int) ((u - n - du) / -du) : 0;
-    hi = u >= 0 ? (int) (u / -du) : -1;
+    lo = u >= n ? (int) over(u - n - du, -du) : 0;
+    hi = u >= 0 ? (int) over(u, -du) : -1;
   } else if (u >= 0 && u < n) {
     hi = *i1;
   }
@@ -302,28 +305,72 @@ static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
   *i1 = LV_MIN(*i1, hi);
 }
 
+// Most of a drawn frame is clear. How many of the n pixels of a frame's row from px x on, each the next one (step 1)
+// or the one before (-1), go as whole bytes that are clear, two pixels each: both in clear, and four bytes at a time
+// where they're the frame's own clear colour, 15. None unless x is the first of its byte that way.
+__attribute__((always_inline)) static inline int clear_bytes(const uint8_t *line, int x, int step, int n,
+                                                             uint16_t clear) {
+  if ((x & 1) != (step < 0))
+    return 0;
+  const uint8_t *at = line + (x >> 1);
+  int k = 0;
+  if (clear >> 15)
+    for (uint32_t four; n - k >= 8; k += 8, at += 4 * step) {
+      memcpy(&four, step > 0 ? at : at - 3, sizeof four);
+      if (four != UINT32_MAX)
+        break;
+    }
+  for (; n - k >= 2 && (clear >> (*at >> 4) & clear >> (*at & 15) & 1); k += 2, at += step) {
+  }
+  return k;
+}
+
+// The step clear_bytes() takes along a frame's row when pixels du, dv apart are a frame px apart along one, else 0
+static int along(int32_t du, int32_t dv, int sh) { return dv ? 0 : du == 1 << sh ? 1 : du == -(1 << sh) ? -1 : 0; }
+
 // n pixels of frame f into d, pixel i from u + i * du, v + i * dv in 1/65536 px of the frame drawn at scale. sh
 // takes that to frame pixels, rb is f's bytes per row. The colours in clear aren't drawn, the others at opa, or as
 // they are if opa is NULL. fragment() calls it both ways, so the plain one is its own compile, without the mix.
 __attribute__((always_inline)) static inline void pixels(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u,
                                                          int32_t v, int32_t du, int32_t dv, int sh,
                                                          const lv_color_t *pal, const lv_opa_t *opa, uint16_t clear) {
+  int step = along(du, dv, sh);
   for (; n > 0; n--, d++, u += du, v += dv) {
     int x = u >> sh;
-    uint8_t q = f[(v >> sh) * rb + (x >> 1)];
+    const uint8_t *line = f + (v >> sh) * rb;
+    uint8_t q = line[x >> 1];
     q = x & 1 ? q & 15 : q >> 4;
-    if (!(clear >> q & 1))
+    if (!(clear >> q & 1)) {
       *d = !opa || opa[q] > LV_OPA_MAX ? pal[q] : lv_color_mix(pal[q], *d, opa[q]);
+    } else if (step) {  // and the clear bytes after it
+      int k = clear_bytes(line, x + step, step, n - 1, clear);
+      n -= k;
+      d += k;
+      u += k * du;
+    }
   }
 }
 
-// Which of the n pixels from x on screen row y a part of the picture nearer than p covers: bit i of cover for x + i.
-// NULL if none do.
-static const uint32_t *covered(const place_t *p, int y, int x, int n, uint32_t *cover) {
-  bool any = false;
+// The picture's parts nearer than p that reach into c on the screen, a bit each
+static unsigned nearer(const place_t *p, const lv_area_t *c) {
+  int lx = layer->coords.x1, ly = layer->coords.y1;
+  unsigned in = 0;
   for (int k = 0; k < PIC_PARTS; k++) {
     const part_t *q = &parts[k];
-    if (q->depth <= p->now.depth)
+    in |= (unsigned) (q->depth > p->now.depth && q->x0 + lx <= c->x2 && q->x1 + lx > c->x1 && q->y0 + ly <= c->y2 &&
+                      q->y1 + ly > c->y1)
+          << k;
+  }
+  return in;
+}
+
+// Which of the n pixels from x on screen row y one of the picture's parts in `in`, a bit each, covers: bit i of cover
+// for x + i. NULL if none do.
+static const uint32_t *covered(unsigned in, int y, int x, int n, uint32_t *cover) {
+  bool any = false;
+  for (int k = 0; in >> k; k++) {
+    const part_t *q = &parts[k];
+    if (!(in >> k & 1))
       continue;
     int lx = layer->coords.x1, ly = layer->coords.y1;
     int a = LV_MAX(q->x0 + lx, x), b = LV_MIN(q->x1 + lx, x + n);  // b just past it
@@ -347,27 +394,36 @@ bool overlay_covered(int place, int x, int y) {
   uint32_t cover[1];
   if (!layer || place < 0 || place >= OVERLAY_PLACES || places[place].slot == OVERLAY_SLOTS)
     return false;
-  const uint32_t *c = covered(&places[place], y + layer->coords.y1, x + layer->coords.x1, 1, cover);
+  x += layer->coords.x1;
+  y += layer->coords.y1;
+  lv_area_t at = {(lv_coord_t) x, (lv_coord_t) y, (lv_coord_t) x, (lv_coord_t) y};
+  const uint32_t *c = covered(nearer(&places[place], &at), y, x, 1, cover);
   return c && cover_at(c, 0);
+}
+
+// x / m for a channel's most m, by multiplying, as the processor's divide takes up to 12 cycles: exact up to m * m,
+// all channel() gives it. LV_UDIV255() is exact up to 63 * 255.
+_Static_assert(LV_COLOR_DEPTH == 16, "a channel's most is 31 or 63");
+static unsigned div_most(unsigned x, unsigned m) { return m == 63 ? x * 2081u >> 17 : x * 2115u >> 16; }
+
+// A channel of s over one of d, c and e, at opacity a, m the channel's most
+static inline unsigned channel(unsigned mode, unsigned c, unsigned e, unsigned a, unsigned m) {
+  unsigned t = LV_UDIV255(c * a);  // what it adds or screens
+  return mode == OVERLAY_BLEND_ADD      ? LV_MIN(m, e + t)
+         : mode == OVERLAY_BLEND_SCREEN ? e + t - div_most(e * t, m)
+                                        : div_most(e * (m - LV_UDIV255((m - c) * a)), m);
 }
 
 // s over d at opacity a, as OVERLAY_BLEND_* mode says
 static lv_color_t blend(unsigned mode, lv_color_t s, lv_color_t d, lv_opa_t a) {
   if (mode == OVERLAY_BLEND_MIX)
     return a > LV_OPA_MAX ? s : lv_color_mix(s, d, a);
-  lv_color_t w = lv_color_white();
-  int c[3] = {LV_COLOR_GET_R(s), LV_COLOR_GET_G(s), LV_COLOR_GET_B(s)};
-  int e[3] = {LV_COLOR_GET_R(d), LV_COLOR_GET_G(d), LV_COLOR_GET_B(d)};
-  int m[3] = {LV_COLOR_GET_R(w), LV_COLOR_GET_G(w), LV_COLOR_GET_B(w)};  // each channel's most
-  for (int k = 0; k < 3; k++) {
-    int t = c[k] * a / LV_OPA_COVER;  // what it adds or screens
-    e[k] = mode == OVERLAY_BLEND_ADD      ? LV_MIN(m[k], e[k] + t)
-           : mode == OVERLAY_BLEND_SCREEN ? e[k] + t - e[k] * t / m[k]
-                                          : e[k] * (m[k] - (m[k] - c[k]) * a / LV_OPA_COVER) / m[k];
-  }
-  LV_COLOR_SET_R(d, e[0]);
-  LV_COLOR_SET_G(d, e[1]);
-  LV_COLOR_SET_B(d, e[2]);
+  unsigned r = channel(mode, LV_COLOR_GET_R(s), LV_COLOR_GET_R(d), a, 31),
+           g = channel(mode, LV_COLOR_GET_G(s), LV_COLOR_GET_G(d), a, 63),
+           b = channel(mode, LV_COLOR_GET_B(s), LV_COLOR_GET_B(d), a, 31);
+  LV_COLOR_SET_R(d, r);
+  LV_COLOR_SET_G(d, g);
+  LV_COLOR_SET_B(d, b);
   return d;
 }
 
@@ -468,6 +524,15 @@ static int soft_at(const shade_t *s, int32_t bu, int32_t bv) {
   return a;
 }
 
+// soft, or NULL when none of a row is by an edge: it's level on the screen at bv down its box, in the run from top
+// to bottom, and only those two edges are soft
+static const uint8_t *soft_by(const uint8_t *soft, int32_t bv, int top, int bottom) {
+  if (!soft || plink_get16(soft) || plink_get16(soft + 2))
+    return soft;
+  int32_t under = fixed(plink_get16(soft + 4)), over = fixed(plink_get16(soft + 6));
+  return bv - fixed(top) < under || fixed(bottom) - bv < over ? soft : NULL;
+}
+
 // The frame rectangle at f where u, v falls between four of its pixels, in 1/2^sh of one: their colours by how near
 // each is and how opaque, and in *a how opaque that is. Past the rectangle it's clear, but where there's more of the
 // frame it's as the pixel at that side. Where the four are one colour, as most of a drawn frame is, it's that one.
@@ -520,6 +585,7 @@ static lv_color_t smooth_at(const shade_t *s, const uint8_t *f, int rb, int32_t 
 static void shaded(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u, int32_t v, int32_t du, int32_t dv, int sh,
                    const lv_color_t *pal, const lv_opa_t *opa, uint16_t clear, const shade_t *s, int i) {
   int32_t bu = s->bu + i * s->du, bv = s->bv + i * s->dv;
+  int step = s->field || s->smooth ? 0 : along(du, dv, sh);
   for (; n > 0; n--, d++, u += du, v += dv, bu += s->du, bv += s->dv) {
     lv_color_t c;
     int a;
@@ -529,10 +595,19 @@ static void shaded(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u, in
       c = smooth_at(s, f, rb, u, v, sh, pal, opa, &a);
     } else {
       int x = u >> sh;
-      uint8_t q = f[(v >> sh) * rb + (x >> 1)];
+      const uint8_t *line = f + (v >> sh) * rb;
+      uint8_t q = line[x >> 1];
       q = x & 1 ? q & 15 : q >> 4;
       c = pal[q];
       a = clear >> q & 1 ? 0 : opa[q];
+      if (!a && step) {  // and the clear bytes after it
+        int k = clear_bytes(line, x + step, step, n - 1, clear);
+        n -= k;
+        d += k;
+        u += k * du;
+        bu += k * s->du;
+        bv += k * s->dv;
+      }
     }
     if (a && s->soft)
       a = a * soft_at(s, bu, bv) >> 8;
@@ -576,6 +651,7 @@ typedef struct {
   int32_t sub[2];  // what it's past the whole px with OVERLAY_VIEW_SMOOTH, 1/65536 px
   bool fx, fy, turned;
   int32_t u, du, dv, qy, ry;  // upright u, and v from qy and ry: fh * 32768 = qy * zh + ry
+  int32_t sv;                 // and what sub[1] takes of every row's v then
   int32_t cs, sn;             // the turn's, 1/32767
   int64_t dx, kx, ky;         // dx: the clip's first pixel from the pivot, in 1/65536 px
 } brush_t;
@@ -600,6 +676,7 @@ __attribute__((noinline)) static void brush(brush_t *b, const place_t *p, const 
   if (!b->turned) {
     b->qy = (b->fh << 15) / b->zh;
     b->ry = (b->fh << 15) % b->zh;
+    b->sv = (int32_t) ((int64_t) b->sub[1] * b->fh / b->zh);
     b->du = (65536 * b->fw) / zw;
     b->u = (int32_t) (b->dx * b->fw / zw);
     if (b->fx) {
@@ -631,7 +708,7 @@ static void back(const brush_t *b, int y, int32_t *u, int32_t *v) {
     *u = (b->fx ? -*u : *u) + (b->pv[0] << 15);
   } else {
     *u = b->u;
-    *v = k * b->qy + k * b->ry / b->zh - (int32_t) ((int64_t) b->sub[1] * b->fh / b->zh);
+    *v = k * b->qy + k * b->ry / b->zh - b->sv;
   }
   *v = (b->fy ? -*v : *v) + (b->pv[1] << 15);
 }
@@ -664,9 +741,10 @@ typedef struct {
   const lv_color_t *pal;
   const lv_opa_t *opa;  // NULL when every colour is drawn as it is, or not at all
   uint16_t clear;
+  uint16_t over;         // the picture's parts that may be over it where it's drawn now, see nearer()
   int phase;             // where a field is on its colours, 1/256 of one
   int x0, x1;            // its frame's repeats across
-  unsigned mirror;       // the ways every other one is mirrored, as fragment() takes them
+  unsigned mirror;       // the ways every other one is mirrored: 1 across, 2 down
   unsigned blend;        // OVERLAY_BLEND_*
   const uint8_t *soft;   // its soft edges, NULL for none
   field_t *field;        // what it shows if that's a field
@@ -682,107 +760,115 @@ static int opacity(const place_t *p, int32_t share) {
   return LV_MIN(to255((int) ((int64_t) p->now.opa * share / FULL)), 255);
 }
 
-// Rectangle r of the frame at f, rb bytes a row, the frame's top left at ou, ov in the box in 1/65536 px, mirrored
-// there across with bit 0 of mirror and down with bit 1: what the box shows of it where d's brush puts it. A field's
-// box is its rectangle. A row that's bound has its frame shifted and sized across round the pivot.
+// Rectangle r of the frame at f, rb bytes a row: what the box shows of it where d's brush puts it. The frame's top
+// left is at ou, ov in the box in 1/65536 px for d's first repeat across, and `apart` further on for each one after
+// it, every other one mirrored across if d says so, and all of them down with `down`. A field's box is its
+// rectangle. A row that's bound has its frame shifted and sized across round the pivot.
 __attribute__((optimize("O3"))) static void fragment(const paint_t *d, const uint8_t *f, int rb, const lv_area_t *r,
-                                                     int32_t ou, int32_t ov, unsigned mirror) {
+                                                     int32_t ou, int32_t ov, bool down, int32_t apart) {
   const brush_t *b = d->b;
   const place_t *p = d->p;
   const slot_t *s = &slots[p->slot];
   lv_draw_ctx_t *ctx = d->ctx;
   const row_t *at = d->row;
   bool smooth = !d->field && p->now.view & OVERLAY_VIEW_SMOOTH;
-  int sh = b->sh, stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&b->c), u0 = 0, u1 = n - 1;
+  int sh = b->sh, stride = lv_area_get_width(ctx->buf_area), n = lv_area_get_width(&b->c);
   int32_t w = lv_area_get_width(r) << sh, h = lv_area_get_height(r) << sh, half = smooth ? 1 << (sh - 1) : 0;
-  int32_t dv = mirror & 2 ? -b->dv : b->dv, pivot = b->pv[0] << 15;
+  int32_t dv = down ? -b->dv : b->dv, pivot = b->pv[0] << 15;
   lv_color_t *row = (lv_color_t *) ctx->buf + (b->c.y1 - ctx->buf_area->y1) * stride + (b->c.x1 - ctx->buf_area->x1);
   uint32_t cover[(PIC_MAX_W + 31) / 32];
-  bool across = false;  // u0 and u1 are the pixels across it
+  // more of the frame above and below it: its repeats, and a still's pieces in the bands next to its own
+  bool tiled = p->now.view & OVERLAY_VIEW_REPEAT_Y, above = r->y1 && r->y1 % OVERLAY_PIECE_ROWS == 0,
+       below = r->y2 < s->h - 1 && (r->y2 + 1) % OVERLAY_PIECE_ROWS == 0;
+  shade_t sd = {.mode = d->blend,
+                .w = shown(p, 0),
+                .du = b->du,
+                .dv = b->dv,
+                .field = d->field,
+                .smooth = smooth,
+                .more = (uint8_t) ((p->now.view & OVERLAY_VIEW_REPEAT_X ? SIDE_X : 0) |
+                                   (tiled || above ? SIDE_TOP : 0) | (tiled || below ? SIDE_BOTTOM : 0)),
+                .tw = (int16_t) lv_area_get_width(r),
+                .th = (int16_t) lv_area_get_height(r)};
   for (int y = b->c.y1; y <= b->c.y2; y++, row += stride) {
     int32_t bu, bv, du = b->du;
     back(b, y, &bu, &bv);
-    int32_t u = bu, v = bv - ov;
-    if (mirror & 2)
+    int32_t along_it = bu, v = bv - ov;  // along_it: where the row's first pixel is along its frames
+    if (down)
       v = ((int32_t) s->h << sh) - 1 - v;
     v -= r->y1 << sh;
     if (!b->turned && (v + half < 0 || v + half >= h + 2 * half))
       continue;  // upright the whole row is past it
     if (at) {
-      u = pivot + (int32_t) (((int64_t) bu - pivot - (int64_t) at->shift * 65536 / MILLI) * FULL / at->size);
+      along_it = pivot + (int32_t) (((int64_t) bu - pivot - (int64_t) at->shift * 65536 / MILLI) * FULL / at->size);
       du = (int32_t) ((int64_t) du * FULL / at->size);
     }
-    u -= ou;
-    if (mirror & 1) {
-      u = ((int32_t) s->w << sh) - 1 - u;
-      du = -du;
-    }
-    u -= r->x1 << sh;
     int i0 = 0, i1 = n - 1;
-    if (b->turned || at) {
-      span(u + half, du, w + 2 * half, &i0, &i1);
-    } else {  // upright u is the same for each row
-      if (!across)
-        span(u + half, du, w + 2 * half, &u0, &u1);
-      across = true;
-      i0 = u0;
-      i1 = u1;
-    }
     span(v + half, dv, h + 2 * half, &i0, &i1);
+    // where in the box its first and last pixels are across, the lesser first
+    int32_t ua = bu + i0 * b->du, ub = bu + i1 * b->du, lo = LV_MIN(ua, ub), hi = LV_MAX(ua, ub);
     for (int j = 0, x = 0; j < d->runs && i0 <= i1; j++) {
       // the run's columns from x on, its top and the row past its bottom, in px of the box and no further
       const uint8_t *run = d->shape ? d->shape + 6 * j : NULL;
-      int left = x, top = run ? LV_CLAMP(0, plink_i16(run + 2), OVERLAY_BOX_MAX) : 0;
+      int left = x;
+      x = run ? LV_CLAMP(x, x + plink_i16(run), OVERLAY_BOX_MAX) : shown(p, 0);
+      if (hi < fixed(left) || lo >= fixed(x))
+        continue;  // none of them in its columns
+      int top = run ? LV_CLAMP(0, plink_i16(run + 2), OVERLAY_BOX_MAX) : 0;
       int bottom = run ? LV_CLAMP(top, plink_i16(run + 4), OVERLAY_BOX_MAX) : shown(p, 1);
       int e0 = i0, e1 = i1;
-      x = run ? LV_CLAMP(x, x + plink_i16(run), OVERLAY_BOX_MAX) : shown(p, 0);
       span(bu - fixed(left), b->du, fixed(x - left), &e0, &e1);
       span(bv - fixed(top), b->dv, fixed(bottom - top), &e0, &e1);
       if (e0 > e1)
         continue;
-      const uint32_t *cv = covered(p, y, b->c.x1 + e0, e1 - e0 + 1, cover);
-      const lv_color_t *pal = d->pal;
-      const lv_opa_t *opa = d->opa;
-      uint16_t clear = d->clear;
-      if (d->shades) {
-        // more of the frame above and below it: its repeats, and a still's pieces in the bands next to its own
-        bool tiled = p->now.view & OVERLAY_VIEW_REPEAT_Y, above = r->y1 && r->y1 % OVERLAY_PIECE_ROWS == 0,
-             below = r->y2 < s->h - 1 && (r->y2 + 1) % OVERLAY_PIECE_ROWS == 0;
-        shade_t sd = {.mode = d->blend,
-                      .soft = d->soft,
-                      .w = shown(p, 0),
-                      .top = top,
-                      .bottom = bottom,
-                      .bu = bu + e0 * b->du,
-                      .bv = bv + e0 * b->dv,
-                      .du = b->du,
-                      .dv = b->dv,
-                      .field = d->field,
-                      .smooth = smooth,
-                      .more = (uint8_t) ((p->now.view & OVERLAY_VIEW_REPEAT_X ? SIDE_X : 0) |
-                                         (tiled || above ? SIDE_TOP : 0) | (tiled || below ? SIDE_BOTTOM : 0)),
-                      .tw = (int16_t) lv_area_get_width(r),
-                      .th = (int16_t) lv_area_get_height(r)};
-        runs(row, e0, e1, cv, f, rb, u, v, du, dv, sh, pal, opa, clear, &sd);
-      } else if (dv && opa) {
-        runs(row, e0, e1, cv, f, rb, u, v, du, dv, sh, pal, opa, clear, NULL);
-      } else if (dv) {
-        runs(row, e0, e1, cv, f, rb, u, v, du, dv, sh, pal, NULL, clear, NULL);
-      } else if (opa) {  // one row of f, the one v is in
-        runs(row, e0, e1, cv, f + (v >> sh) * rb, 0, u, 0, du, 0, sh, pal, opa, clear, NULL);
-      } else {
-        runs(row, e0, e1, cv, f + (v >> sh) * rb, 0, u, 0, du, 0, sh, pal, NULL, clear, NULL);
+      sd.soft = b->dv ? d->soft : soft_by(d->soft, bv, top, bottom);
+      sd.top = top;
+      sd.bottom = bottom;
+      // the repeats those pixels are in, and with smooth the ones next to them too, which they get some of
+      int32_t fa = along_it + e0 * du - ou, fb = along_it + e1 * du - ou;
+      int t0 = d->x0, t1 = d->x1;
+      if (apart) {
+        t0 = LV_MAX(t0, d->x0 + floor_div(LV_MIN(fa, fb), apart) - smooth);
+        t1 = LV_MIN(t1, d->x0 + floor_div(LV_MAX(fa, fb), apart) + smooth);
+      }
+      for (int t = t0; t <= t1; t++) {
+        int32_t u = along_it - ou - (t - d->x0) * apart, dt = du;
+        if (d->mirror & 1 && t & 1) {
+          u = ((int32_t) s->w << sh) - 1 - u;
+          dt = -dt;
+        }
+        u -= r->x1 << sh;
+        int s0 = e0, s1 = e1;
+        span(u + half, dt, w + 2 * half, &s0, &s1);
+        if (s0 > s1)
+          continue;
+        const uint32_t *cv = d->over ? covered(d->over, y, b->c.x1 + s0, s1 - s0 + 1, cover) : NULL;
+        const lv_color_t *pal = d->pal;
+        const lv_opa_t *opa = d->opa;
+        uint16_t clear = d->clear;
+        if (d->shades) {
+          sd.bu = bu + s0 * b->du;
+          sd.bv = bv + s0 * b->dv;
+          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, opa, clear, &sd);
+        } else if (dv && opa) {
+          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, opa, clear, NULL);
+        } else if (dv) {
+          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, NULL, clear, NULL);
+        } else if (opa) {  // one row of f, the one v is in
+          runs(row, s0, s1, cv, f + (v >> sh) * rb, 0, u, 0, dt, 0, sh, pal, opa, clear, NULL);
+        } else {
+          runs(row, s0, s1, cv, f + (v >> sh) * rb, 0, u, 0, dt, 0, sh, pal, NULL, clear, NULL);
+        }
       }
     }
   }
 }
 
-// Rectangle r of the frame at f, in its repeats across, the one down at oy in the box
-static void paint_row(const paint_t *d, const uint8_t *f, int rb, const lv_area_t *r, int oy, unsigned mirror) {
+// Rectangle r of the frame at f in all its repeats across, the one down at oy in the box
+static void paint_row(const paint_t *d, const uint8_t *f, int rb, const lv_area_t *r, int oy, bool down) {
   const place_t *p = d->p;
   int fw = slots[p->slot].w * slots[p->slot].scale;
-  for (int t = d->x0; t <= d->x1; t++)
-    fragment(d, f, rb, r, fixed(p->now.pan[0] + t * fw), fixed(oy), mirror | (d->mirror & 1 && t & 1));
+  fragment(d, f, rb, r, fixed(p->now.pan[0] + d->x0 * fw), fixed(oy), down, fixed(fw));
 }
 
 // All of a field's box as d paints it. On its own, so a frame has no room for it on the stack.
@@ -802,7 +888,8 @@ __attribute__((noinline)) static void paint_field(paint_t *d) {
   for (int k = 0; k < OVERLAY_NOISE_LAYERS; k++)
     field.in[k].x = INT32_MIN;
   d->field = &field;
-  fragment(d, NULL, 0, &(lv_area_t) {0, 0, (lv_coord_t) (field.w - 1), (lv_coord_t) (field.h - 1)}, 0, 0, 0);
+  d->x0 = d->x1 = 0;
+  fragment(d, NULL, 0, &(lv_area_t) {0, 0, (lv_coord_t) (field.w - 1), (lv_coord_t) (field.h - 1)}, 0, 0, false, 0);
   d->field = NULL;
 }
 
@@ -832,32 +919,30 @@ static void tiles(paint_t *d, uint8_t **piece) {
   lv_area_t whole = {0, 0, s->w - 1, s->h - 1};
   for (int t = y0; t <= y1 && d->x0 <= d->x1; t++) {
     int oy = p->now.pan[1] + t * fh;
-    unsigned m = d->mirror & 2 && t & 1 ? 2 : 0;
+    bool down = d->mirror & 2 && t & 1;
     if (!s->still) {
-      paint_row(d, place_frame(p), (int) row_bytes(s), &whole, oy, m);
+      paint_row(d, place_frame(p), (int) row_bytes(s), &whole, oy, down);
       continue;
     }
     // the frame's rows this one shows of v0..v1
     int lo = LV_MAX(v0, oy) - oy, hi = LV_MIN(v1, oy + fh - 1) - oy;
-    if (m) {
+    if (down) {
       int l = fh - 1 - hi;
       hi = fh - 1 - lo;
       lo = l;
     }
     uint32_t from = s->sheet ? place_at(p) : 0;  // a sheet's frame, the pieces after where it starts
-    from += s->sheet ? record(s, from, NULL, NULL) : 0;
-    for (uint32_t at = from, n; at < s->len && !(s->sheet && heads(s, at)); at += n) {
-      lv_area_t r;
-      if (!(n = record(s, at, NULL, &r)))
-        return;
+    from += s->sheet ? record_len(s, from) : 0;
+    for (uint32_t at = from; at < s->len && !(s->sheet && heads(s, at)); at += record_len(s, at)) {
+      lv_area_t r = record_area(s, at);
       if (r.y2 < lo / k || r.y1 > hi / k || lv_area_get_width(&r) <= 0)
         continue;
       if (!*piece && !(*piece = lv_mem_alloc(OVERLAY_PIECE_MAX)))
         return;
       if (d->in != at)
-        record(s, at, *piece, &r);
+        piece_rows(s, at, *piece);
       d->in = at;
-      paint_row(d, *piece, lv_area_get_width(&r) / 2, &r, oy, m);
+      paint_row(d, *piece, lv_area_get_width(&r) / 2, &r, oy, down);
     }
   }
 }
@@ -911,6 +996,7 @@ static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint
                .pal = pal,
                .opa = opa,
                .clear = palette(p, to255(p->now.light), p->now.phase, opacity(p, FULL), pal, opa),
+               .over = (uint16_t) nearer(p, &c),
                .phase = p->now.phase,
                .blend = v & OVERLAY_VIEW_BLEND,
                .soft = script_soft(p),
@@ -957,7 +1043,7 @@ lv_obj_t *overlay_show(lv_obj_t *parent) {
   layer = lv_obj_create(parent);
   lv_obj_remove_style_all(layer);
   lv_obj_set_size(layer, PIC_MAX_W, PIC_MAX_H);
-  lv_obj_clear_flag(layer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(layer, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(layer, layer_event, LV_EVENT_ALL, NULL);
   lv_obj_update_layout(layer);
   bool moves = false;

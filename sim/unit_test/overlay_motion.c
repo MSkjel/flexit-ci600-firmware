@@ -461,10 +461,7 @@ static void test_anim_look(void) {
   show_overlays();
   overlay_clear_msg(0 | 5000 << 8);
   unsigned frame = AW / 2 * AH;
-  uint32_t n2 = overlay_records(d2, 5), m = (OVERLAY_POOL - frame - n2) / 5;
-  for (uint32_t i = 0; i < m; i++)
-    memcpy(d2 + n2 + 5 * i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
-  n2 += 5 * m;
+  uint32_t n2 = pad_records(d2, overlay_records(d2, 5), OVERLAY_POOL - frame);
   CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
   CHECK(!overlay_pos(0, &x, &y));
   CHECK_EQ(overlay_used(), frame + n2);
@@ -662,8 +659,7 @@ static void test_anim_paths(void) {
   // full
   static uint8_t d2[OVERLAY_POOL];
   uint32_t n2 = overlay_records(d2, 10);
-  for (; used + AW / 2 * AH + n2 + 5 <= OVERLAY_POOL; n2 += 5)
-    memcpy(d2 + n2, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
+  n2 = pad_records(d2, n2, OVERLAY_POOL - used - AW / 2 * AH);
   CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
   unsigned full = overlay_used();
   CHECK(OVERLAY_POOL - full < OVERLAY_ROAM);
@@ -834,11 +830,10 @@ static void test_anim_bind(void) {
   static uint8_t d2[OVERLAY_POOL];
   uint32_t frame = AW / 2 * AH, n2 = overlay_records(d2, 10);
   place(0, 0, 100, 100, 1, 0);
-  for (; used + 2 * frame + n2 + 5 <= OVERLAY_POOL; n2 += 5)
-    memcpy(d2 + n2, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
+  n2 = pad_records(d2, n2, OVERLAY_POOL - used - 2 * frame);
   CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
   overlay_clear_msg(OVERLAY_PLACE_BIT | 0 | 500 << 8);
-  CHECK(overlay_pos(0, &x, &y) && OVERLAY_POOL - overlay_used() < 5);
+  CHECK(overlay_pos(0, &x, &y) && OVERLAY_POOL - overlay_used() < OVERLAY_RECORD_HEAD);
   BIND(0, OVERLAY_BIND_ADD | OVERLAY_X, V32(5000));
   CHECK(!overlay_pos(0, &x, &y));
   CHECK_EQ(overlay_used(), used + frame + n2);

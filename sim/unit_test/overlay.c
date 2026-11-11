@@ -194,11 +194,17 @@ static void test_anim(void) {
   bad[4] = AH + 1;
   CHECK_EQ(status(overlay_send(0, AW, n, bad, plink_crc32(0, bad, n))), PIC_BAD);
   CHECK_EQ(status(overlay_send(0, AW, n, d, 12345)), PIC_BAD_CRC);
-  uint8_t five[5] = {0x11, 0x11, 0x11, 0x11, 0x11}, over[sizeof d + 5 + PDEFLATE_BOUND(5)];
+  uint8_t five[5] = {0x11, 0x11, 0x11, 0x11, 0x11}, over[sizeof d + OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(5)];
   uint32_t on = plink_overlay_record(NULL, &an[0][0][0], AW, AH, 5, over);
-  memcpy(over + on, (uint8_t[]) {5, 0, 0, 4, 1}, 5);
-  on += 5 + pdeflate(five, 5, 5, 5, over + on + 5, PDEFLATE_BOUND(5));  // then 5 bytes for a rectangle of 4
+  uint32_t fn = pdeflate(five, 5, 5, 5, over + on + OVERLAY_RECORD_HEAD, PDEFLATE_BOUND(5));
+  on += plink_overlay_head(over + on, 5, 0, 0, 4, 1, fn) + fn;  // then 5 bytes for a rectangle of 4
   CHECK_EQ(status(overlay_send(0, AW, on, over, plink_crc32(0, over, on))), PIC_BAD);
+  // a record that says it's longer or shorter than its rectangle's bytes are
+  for (int by = -1; by <= 1; by += 2) {
+    uint32_t wn = plink_overlay_record(NULL, &an[0][0][0], AW, AH, 5, over);
+    plink_put16(over + OVERLAY_RECORD_LEN, (uint16_t) (wn - OVERLAY_RECORD_HEAD + (unsigned) by));
+    CHECK_EQ(status(overlay_send(0, AW, wn + (by > 0), over, plink_crc32(0, over, wn + (by > 0)))), PIC_BAD);
+  }
   uint32_t part = plink_overlay_record(NULL, &an[0][0][0], AW - 2, AH, 5, over);  // the first not the whole frame
   CHECK_EQ(status(overlay_send(0, AW, part, over, plink_crc32(0, over, part))), PIC_BAD);
   CHECK_EQ(status(overlay_send(0, AW, n - 1, d, plink_crc32(0, d, n - 1))), PIC_BAD);  // the last record cut short
@@ -308,10 +314,7 @@ static void test_anim_slots(void) {
   CHECK_EQ(overlay_used(), 0);
   // slot 1 padded with empty records until only one frame of its own fits behind slot 0 and it
   CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
-  uint32_t m = (OVERLAY_POOL - overlay_used() - 2 * frame - n2) / 5;
-  for (uint32_t i = 0; i < m; i++)
-    memcpy(d2 + n2 + 5 * i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
-  uint32_t n3 = n2 + 5 * m;
+  uint32_t n3 = pad_records(d2, n2, OVERLAY_POOL - overlay_used() - 2 * frame);
   CHECK_EQ(status(overlay_send(1, AW, n3, d2, plink_crc32(0, d2, n3))), PIC_DONE);
   CHECK(OVERLAY_POOL - overlay_used() >= frame && OVERLAY_POOL - overlay_used() < 2 * frame);
   place(0, 0, 0, 0, 1, 0);
@@ -1353,8 +1356,7 @@ static void test_cycle(void) {
 static uint32_t sheet_records(uint8_t *d, int delay) {
   uint32_t n = 0;
   for (int f = 0; f < 4; f++) {
-    memcpy(d + n, (uint8_t[]) {(uint8_t) (delay + f), OVERLAY_RECORD_FRAME, 0, 0, 0}, OVERLAY_RECORD_HEAD);
-    n += OVERLAY_RECORD_HEAD;
+    n += plink_overlay_head(d + n, (uint8_t) (delay + f), OVERLAY_RECORD_FRAME, 0, 0, 0, 0);
     n += plink_overlay_pieces(&an[f][0][0], AW, AH, 1u << 15, 0, d + n, 256);
   }
   return n;
@@ -1422,7 +1424,7 @@ static void test_still_bad(void) {
   uint8_t d[64];
   // 9 rows of 320 pixels, each in two runs, more than OVERLAY_PIECE_MAX. 8 fit.
   for (int rows = 9; rows >= 8; rows--) {
-    memcpy(d, (uint8_t[]) {10, 0, 0, PIC_MAX_W / 2, (uint8_t) rows}, OVERLAY_RECORD_HEAD);
+    plink_overlay_head(d, 10, 0, 0, PIC_MAX_W / 2, (unsigned) rows, 4u * (unsigned) rows);
     for (int r = 0; r < rows; r++)
       memcpy(d + OVERLAY_RECORD_HEAD + 4 * r, (uint8_t[]) {255, 0x11, 157, 0x11}, 4);
     uint32_t n = OVERLAY_RECORD_HEAD + 4u * (unsigned) rows;
@@ -1433,24 +1435,27 @@ static void test_still_bad(void) {
   }
   CHECK_EQ(overlay_used(), 0);
   static const struct {
-    uint8_t d[9];
+    uint8_t d[13];
     uint32_t n;
   } BAD[] = {
-      {{10, 0, 0, 1, 1, 0x81, 0x11}, 7},   // a run of 3 in a row of 1
-      {{10, 0, 0, 1, 1, 0x01, 0x11}, 7},   // 2 literal bytes in a row of 1
-      {{10, 0, 0, 2, 1, 0x01, 0x11}, 7},   // and past the end
-      {{10, 0, 3, 1, 2, 0, 1, 0, 2}, 9},   // rows past the frame's
-      {{10, 4, 0, 1, 1, 0, 1}, 7},         // past its right edge
-      {{10, 0, 0, 1, 0}, 5},               // no rows but a width
-      {{10, 0, 0, 0, 0, 10, 0, 0, 0}, 9},  // and a piece cut short after an empty one
+      {{10, 0, 0, 1, 1, 2, 0, 0x81, 0x11}, 9},          // a run of 3 in a row of 1
+      {{10, 0, 0, 1, 1, 2, 0, 0x01, 0x11}, 9},          // 2 literal bytes in a row of 1
+      {{10, 0, 0, 2, 1, 2, 0, 0x01, 0x11}, 9},          // and past the end
+      {{10, 0, 3, 1, 2, 4, 0, 0, 1, 0, 2}, 11},         // rows past the frame's
+      {{10, 4, 0, 1, 1, 2, 0, 0, 1}, 9},                // past its right edge
+      {{10, 0, 0, 1, 0, 0, 0}, 7},                      // no rows but a width
+      {{10, 0, 0, 1, 1, 3, 0, 0, 0x12, 0}, 10},         // a length past its rows
+      {{10, 0, 0, 1, 1, 1, 0, 0, 0x12}, 9},             // and one short of them
+      {{10, 0, 0, 0, 0, 2, 0, 0, 0x12}, 9},             // bytes after an empty one's head
+      {{10, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0}, 13},  // and a piece cut short after an empty one
   };
   for (int i = 0; i < (int) LEN(BAD); i++)
     if (!CHECK_EQ(status(send_kind(OVERLAY_STILL, 0, 8, 4, 1, clear15(), BAD[i].n, BAD[i].d, 3)), PIC_BAD))
       printf("    piece %d\n", i);
   CHECK_EQ(status(send_kind(OVERLAY_STILL, 0, 8, 4, 1, clear15(), 0, d, 3)), PIC_BAD);  // nothing at all
-  CHECK_EQ(status(send_kind(OVERLAY_STILL, 0, 8, 4, 1, clear15(), 7, (uint8_t[]) {10, 0, 0, 1, 1, 0, 0x12}, 3)),
+  CHECK_EQ(status(send_kind(OVERLAY_STILL, 0, 8, 4, 1, clear15(), 9, (uint8_t[]) {10, 0, 0, 1, 1, 2, 0, 0, 0x12}, 3)),
            PIC_DONE);
-  CHECK_EQ(overlay_used(), 7);
+  CHECK_EQ(overlay_used(), 9);
   no_overlays();
 }
 

@@ -4,8 +4,8 @@
 #include "clock.h"
 #include "mbserver.h"
 #include "model.h"
+#include "panel.h"
 #include "plat.h"
-#include "schedule.h"
 #include "ui.h"
 #include <string.h>
 
@@ -87,6 +87,9 @@ static uint16_t week_reg(int day, int slot) {
   return (uint16_t) (R_WEEK_FIRST + (day * PERIODS_PER_DAY + slot) * WEEK_SLOT_REGS);
 }
 static uint16_t week_en_reg(int day, int slot) { return (uint16_t) (R_WEEK_EN + day * PERIODS_PER_DAY + slot); }
+static bool week_program(uint16_t r) {  // one of its registers
+  return (r >= R_WEEK_FIRST && r <= R_WEEK_LAST) || (r >= R_WEEK_EN && r <= R_WEEK_EN_END);
+}
 
 static void bus_write(uint16_t reg, int16_t v) {
   uint32_t s = board_irq_save();
@@ -162,8 +165,8 @@ static void read_log(void) {
   ui_alarms_changed();
 }
 
-static void read_week(int day) {
-  period_t p[PERIODS_PER_DAY];
+// The day's periods as the registers have them, a write of ours at once, in slot order
+int plat_week(int day, period_t *p) {
   int n = 0;
   for (int i = 0; i < PERIODS_PER_DAY; i++) {
     uint16_t r = week_reg(day, i);
@@ -176,10 +179,9 @@ static void read_week(int day) {
                          .idx = (uint8_t) i,
                          .setpoint = (int16_t) reg16(r + 3)};
   }
-  sched_store(day, p, n);
+  return n;
 }
 
-// The CX60 relays each register back and read_week picks them up.
 void plat_period_set(void) {
   const period_t *p = &M.period.p;
   uint16_t r = week_reg(M.period.day, p->idx);
@@ -320,13 +322,13 @@ static void reg_changed(uint16_t r) {
   int16_t v = unit_reg(r);
   if (r == R_REGULATION)
     v = v != 0;  // the CX60 takes anything but 0 as supply air
-  if (r >= R_ST_SETPOINT && r <= R_DS4_FAN_AC)
+  // The status, the week program and the counters are no value of values.h, so they aren't looked up as one below
+  bool status = r >= R_ST_SETPOINT && r <= R_DS4_FAN_AC, counter = rt_counter(r);
+  if (status)
     status_changed(r, v);
-  else if (r >= R_WEEK_FIRST && r <= R_WEEK_LAST)
-    read_week((r - R_WEEK_FIRST) / (PERIODS_PER_DAY * WEEK_SLOT_REGS));
-  else if (r >= R_WEEK_EN && r <= R_WEEK_EN_END)
-    read_week((r - R_WEEK_EN) / PERIODS_PER_DAY);
-  else if (rt_counter(r))
+  else if (week_program(r))
+    ui_layout_changed();  // the day and week screens show it, see plat_week()
+  else if (counter)
     read_runtime();
   else if (r >= R_PANEL1_VERSION && r <= R_PANEL3_VERSION && !((r - R_PANEL1_VERSION) & 1))
     M.panel_version[(r - R_PANEL1_VERSION) / 2] = (uint16_t) v;
@@ -351,7 +353,7 @@ static void reg_changed(uint16_t r) {
       break;
   }
   // settings kept in the CX60 like the fan % and setpoint, see values.h
-  val_t id = val_by_cx60(r);
+  val_t id = status || week_program(r) || counter ? V_NONE : val_by_cx60(r);
   // Our heater flag is one vote of three, R_ST_HEATER has the result. A stock panel writes 0x117 as each of its
   // periods starts and ends, so with one on the bus a relay of it isn't a change of our setting.
   if (id == V_HEATER || (id == V_WEEK_PROGRAM && mb_relayed(r) && stock_panel()))
@@ -411,8 +413,7 @@ bool unit_cached(uint16_t r) {
 static bool save_soon(uint16_t r) {
   if (rt_counter(r))
     return !((r - R_RT_STOP) & 1);
-  bool week = (r >= R_WEEK_FIRST && r <= R_WEEK_LAST) || (r >= R_WEEK_EN && r <= R_WEEK_EN_END);
-  return mb_relayed(r) && (week || !HAS(FEAT_ESP));
+  return mb_relayed(r) && (week_program(r) || !HAS(FEAT_ESP));
 }
 
 // The CX60 only notices a new one after its next restart
@@ -443,8 +444,6 @@ void unit_poll(void) {
     clock_news = false;
     clock_changed();
   }
-  M.bus_ok = MB.frames;
-  M.bus_err = MB.errors;
 }
 
 // The manual tests in Advanced > Test. The CX60 only uses a test value while its enable register is set, and clears
@@ -492,19 +491,12 @@ static bool heater_asked;      // switched on there, and the unit hasn't said ye
 #define BUS_QUIET_S 5
 
 void unit_second(void) {
-  static uint32_t frames_seen;
-  static uint8_t quiet_s;
-  if (MB.frames != frames_seen) {
-    frames_seen = MB.frames;
-    quiet_s = 0;
-  } else if (quiet_s < 255)
-    quiet_s++;
-  bool offline = quiet_s >= BUS_QUIET_S;
+  static quiet_t bus;
+  bool offline = quiet(&bus, MB.frames, BUS_QUIET_S);
   if (offline != M.bus_offline) {
     M.bus_offline = offline;
     ui_value_changed(V_NONE);
   }
-  M.bus_ours = MB.ours;
   if (!offline && M.boost_left && reg16(R_ST_BOOST_S) == boost_seen) {
     if (boost_stuck_s < BOOST_STUCK_S && ++boost_stuck_s == BOOST_STUCK_S) {  // once, not every 256 s
       bus_write(R_CMD_BOOST_OFF, 1);

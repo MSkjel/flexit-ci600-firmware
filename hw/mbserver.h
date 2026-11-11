@@ -5,7 +5,7 @@
 // comes as FC16/FC6 broadcasts to address 0. At start-up the CX60 reads the input registers with FC4 at every
 // address to find the panels. Input register 0 is FW_TYPE, 2 the patch level and 3 the version. Stock has 0, 0 and 7.x.
 //
-// mb_frame() runs in the receive interrupt. No hardware access in here, so it runs on the PC too.
+// mb_chunk() runs in the receive interrupt. No hardware access in here, so it runs on the PC too.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,25 +15,25 @@
 #define MB_INPUTS 5
 #define MB_MAX_FRAME 256
 
-// The main loop sets addr, the rest changes in the interrupt too
+// The main loop sets addr, the rest changes in the interrupt too. The single bytes are last, so nothing is padded.
 typedef struct {
-  uint8_t addr;
   int16_t hold[MB_REGS];                   // holding registers, our copy of the CX60's
+  uint16_t input[MB_INPUTS];               // input registers, read at discovery
   uint32_t pending[MB_WORDS];              // coils, changes of ours the CX60 hasn't picked up yet
   uint32_t again[MB_WORDS];                // written again while the coil was set, keep it through the next relay
-  uint16_t input[MB_INPUTS];               // input registers, read at discovery
   uint32_t written[MB_WORDS];              // registers with a value, from the CX60 or from the panel's flash
   uint32_t changed[MB_WORDS];              // registers changed since the main loop last looked
   uint32_t relayed[MB_WORDS];              // last value came by FC 0x65, a panel's write, not a block of the CX60's own
-  bool any_changed;                        // some bit in changed[] is set, saves the main loop a scan
   volatile uint32_t frames, errors, ours;  // frames with a good CRC, bad frames, frames addressed to us
-  volatile bool enter_bootloader;          // set by FC 0x64, see mb_bootloader_requested()
+  uint8_t addr;
+  bool any_changed;                // some bit in changed[] is set, saves the main loop a scan
+  volatile bool enter_bootloader;  // set by FC 0x64, see mb_bootloader_requested()
 } mb_t;
 
 extern mb_t MB;
 
 void mb_init(uint8_t addr, uint16_t version, uint8_t patch);
-int mb_frame(const uint8_t *req, int n, uint8_t *resp);  // returns the reply length, 0 = no reply
+int mb_frame(const uint8_t *req, int n, uint8_t *resp);  // one frame: the reply's length, 0 = no reply. For tests
 // One receive, which may hold several frames. crc_ok = pbus_crc_ok(buf, n), computed once by the caller
 int mb_chunk(const uint8_t *buf, int n, bool crc_ok, uint8_t *resp);
 

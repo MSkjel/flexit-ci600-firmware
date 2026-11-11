@@ -812,10 +812,8 @@ static void test_script_bad(void) {
   dot_frames(true);
   uint8_t d[OVERLAY_POOL];
   uint32_t n = overlay_records(d, 5);
-  uint32_t pad = (OVERLAY_POOL - AW / 2 * AH - n - SCRIPT_POOL - 2) / 5 * 5;  // room for 2 bytes to 6
-  for (uint32_t i = 0; i < pad; i += 5)
-    memcpy(d + n + i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
-  CHECK_EQ(status(overlay_send(0, AW, n + pad, d, plink_crc32(0, d, n + pad))), PIC_DONE);
+  n = pad_records(d, n, OVERLAY_POOL - AW / 2 * AH - SCRIPT_POOL - 2);  // room for 2 bytes to 8
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   CHECK(!TAKES(1, OVERLAY_DO_MARK, 1, OVERLAY_DO_MARK, 2, OVERLAY_DO_MARK, 3, OVERLAY_DO_MARK, 4, OVERLAY_DO_MARK, 5));
   CHECK_EQ(pos(1, false), 0);
   CHECK(TAKES(1, OVERLAY_DO_MARK, 1));
@@ -829,8 +827,7 @@ static uint32_t more_records(uint8_t *d, bool first, bool last) {
   for (int f = 0; f <= 4; f++) {
     n += plink_overlay_record(f ? &an[f - 1][0][0] : NULL, &an[f % 4][0][0], AW, AH, (uint8_t) (5 + f), d + n);
     if ((f == 0 && first) || (f == 1 && !first) || (f == 4 && last)) {
-      memcpy(d + n, (uint8_t[]) {10, OVERLAY_RECORD_MORE, 0, 0, 0}, 5);
-      n += 5;
+      n += plink_overlay_head(d + n, 10, OVERLAY_RECORD_MORE, 0, 0, 0, 0);
     }
   }
   return n;
@@ -901,10 +898,9 @@ static void test_script_edges(void) {
   place(0, 0, 0, 0, 1, 0);
   script_to(0, BYTES(OVERLAY_DO_ROUNDS, V16(1), OVERLAY_DO_SEND, OVERLAY_SELF, K_OVERLAY_BIND - K_OVERLAY_FRAMES,
                      OVERLAY_BIND_VALUE + 5, 0, OVERLAY_BIND_ADD | OVERLAY_X, V32(5000), 0));
-  for (; overlay_used() + frame + n2 + 5 <= OVERLAY_POOL; n2 += 5)
-    memcpy(d2 + n2, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
+  n2 = pad_records(d2, n2, OVERLAY_POOL - overlay_used() - frame);
   CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
-  CHECK(OVERLAY_POOL - overlay_used() < 5);
+  CHECK(OVERLAY_POOL - overlay_used() < OVERLAY_RECORD_HEAD);
   overlay_clear_msg(OVERLAY_PLACE_BIT | 0 | 5000 << 8);
   sim_run(600);  // a round of its frames is 260 ms
   CHECK(pos(0, false) == INT16_MIN);

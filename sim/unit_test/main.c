@@ -55,16 +55,8 @@ void forget_ui_calls(void) {
 int main(int argc, char **argv) {
   sim_display_init();
   overlay_init();
-  static const check_test_t *const TESTS[] = {PICTURE_TESTS,
-                                              OVERLAY_TESTS,
-                                              OVERLAY_MOTION_TESTS,
-                                              OVERLAY_SCRIPT_TESTS,
-                                              VALUES_TESTS,
-                                              CLOCK_TESTS,
-                                              UNIT_TESTS,
-                                              SETTINGS_TESTS,
-                                              UI_TESTS,
-                                              LINK_TESTS,
-                                              NULL};
+  static const check_test_t *const TESTS[] = {PICTURE_TESTS, OVERLAY_TESTS, OVERLAY_MOTION_TESTS, OVERLAY_SCRIPT_TESTS,
+                                              VALUES_TESTS,  CLOCK_TESTS,   UNIT_TESTS,           SETTINGS_TESTS,
+                                              UI_TESTS,      LINK_TESTS,    SENT_TESTS,           NULL};
   return check_main("unit tests", TESTS, argc, argv);
 }

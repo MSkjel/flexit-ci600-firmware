@@ -113,7 +113,7 @@ HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 # CX60, the ESP's bytes late in big chunks and a second panel on the bus; a CX60 in between with another seed; and
 # a screenshot's stream from the panel while pictures go to it
 check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
-	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/strips $(OUT)/esp $(OUT)/replay
+	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/esp $(OUT)/replay
 	$(BUILD)/unit_test
 	$(BUILD)/link_test
 	$(BUILD)/fuzz_test
@@ -126,10 +126,6 @@ check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	$(BUILD)/replay captures/cap1.txt $(OUT)/replay glued
 	$(BUILD)/sim $(OUT)/shots
 	SIM_LANG=1 $(BUILD)/sim $(OUT)/shots_no
-	SIM_LINES=8 $(BUILD)/sim $(OUT)/strips
-	@cd $(OUT)/shots && sha256sum *.ppm checks/*.ppm > ../strips_40.txt
-	@cd $(OUT)/strips && sha256sum *.ppm checks/*.ppm | cmp -s - ../strips_40.txt \
-	  || { echo "the 8-line strips draw differently from the 40-line ones"; exit 1; }
 	$(BUILD)/lang_test
 	@cd $(OUT) && $(HASH_SCREENS) > screens.txt
 	@diff $(CURDIR)/golden.txt $(OUT)/screens.txt | sed -n 's/^> [0-9a-f]*  /changed: /p'

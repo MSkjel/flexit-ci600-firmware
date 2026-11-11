@@ -28,10 +28,11 @@ extern uint32_t fault_record[2];  // FAULT_MAGIC and the faulting PC from startu
 #define PIN_RS485_RX_OFF GPIOA, 11  // receiver disable
 #define PIN_RS485_TX_ON GPIOA, 12   // driver enable
 
-void board_init(void);               // at 72 MHz, or 8 without the crystal
-uint32_t board_hz(void);             // core clock
-bool board_set_clock(uint32_t mhz);  // from 72 to one of CPU_MHZ. False without the crystal. Before the bus and display
-uint8_t board_clock_mark(void);      // what the last run set below, 0 after a power cut. Read it before setting it
+void board_init(void);    // at 72 MHz, or 8 without the crystal
+uint32_t board_hz(void);  // core clock
+// From 72 to CPU_MHZ[speed]. False without the crystal. Before the bus and the display are set up.
+bool board_set_clock(unsigned speed);
+uint8_t board_clock_mark(void);        // what the last run set below, 0 after a power cut. After board_reset_cause()
 void board_set_clock_mark(uint8_t m);  // kept through a reset, for the next start
 uint32_t board_ms(void);
 uint32_t board_us(void);  // free-running, wraps every 71 minutes, keeps counting during sleep
@@ -49,10 +50,11 @@ void board_backlight(int pct);  // target brightness in %, fades to it. Negative
 uint16_t board_room_adc(void);  // averaged 12-bit reading of the thermistor
 uint32_t board_rtc_get(void);   // local time, Unix-style seconds
 void board_rtc_set(uint32_t t);
-void board_rtc_poll(void);                      // 1 Hz, sets up the RTC once its crystal is running
-uint8_t board_reset_cause(uint32_t *fault_pc);  // RESET_*, call once at start-up
-uint32_t board_restarts(void);                  // since the power came on
-uint32_t board_entropy(void);                   // differs on every start
+void board_rtc_poll(void);        // 1 Hz, sets up the RTC once its crystal is running
+uint8_t board_reset_cause(void);  // RESET_*, call once at start-up
+uint32_t board_fault_pc(void);    // where it crashed, after a RESET_FAULT
+uint32_t board_restarts(void);    // since the power came on
+uint32_t board_entropy(void);     // differs on every start
 void board_reset(void);
 void board_bootloader(void);             // restart into the stock bootloader for a firmware update
 const void *board_flash(uint32_t addr);  // pointer for reading flash at addr

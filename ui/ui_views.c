@@ -166,8 +166,10 @@ static void trend_build(lv_obj_t *b, int first) {
   trend->chart = mk_chart(b, TREND_W, 4);
   for (int i = 0; i < 3; i++)
     trend->ser[i] = lv_chart_add_series(trend->chart, cols[i], LV_CHART_AXIS_PRIMARY_Y);
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < 4; i++) {
     trend->ylbl[i] = mk_text(b, &font_f12, T.faint, "", 30, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_set_pos(trend->ylbl[i], 2, CHART_Y + CHART_H * i / 3 - 8);
+  }
   time_axis(b, TREND_W);
 }
 
@@ -213,10 +215,8 @@ static void trend_update(void) {
   bool ranged = set_range(trend->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
   if (changed && !ranged)
     lv_chart_refresh(trend->chart);
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 4; i++)
     set_text(trend->ylbl[i], "%d" DEG, (hi - (hi - lo) * i / 3) / 10);
-    lv_obj_set_pos(trend->ylbl[i], 2, CHART_Y + CHART_H * i / 3 - 8);
-  }
   char a[16];
   bool panel = M.indoor_source == INDOOR_PANEL;
   const int16_t now[3] = {M.t_outdoor, M.t_supply, panel ? M.t_room : M.t_extract};
@@ -255,12 +255,12 @@ static void sens_build(lv_obj_t *b, int first) {
   for (int i = 0; i < sens->n; i++) {
     sens->legend[i] = legend(b, 40 + 140 * i, cols[i], "");
     sens->ser[i] = lv_chart_add_series(sens->chart, cols[i], i ? LV_CHART_AXIS_SECONDARY_Y : LV_CHART_AXIS_PRIMARY_Y);
-    for (int k = 0; k < 5; k++) {  // as wide as their text, out from the chart's sides
-      lv_obj_t *l = sens->ylbl[i][k] = mk_label(b, &font_f12, T.faint, "");
+    for (int k = 0; k < 5; k++) {  // out from the chart's sides
+      int y = CHART_Y + CHART_H * k / 4 - 8;
       if (i)
-        lv_obj_set_pos(l, CHART_X + SENS_W + 2, CHART_Y + CHART_H * k / 4 - 8);
+        lv_obj_set_pos(sens->ylbl[i][k] = mk_label(b, &font_f12, T.faint, ""), CHART_X + SENS_W + 2, y);
       else
-        lv_obj_align(l, LV_ALIGN_TOP_RIGHT, CHART_X - 2 - SCR_W, CHART_Y + CHART_H * k / 4 - 8);
+        lv_obj_set_pos(sens->ylbl[i][k] = mk_text(b, &font_f12, T.faint, "", CHART_X - 2, LV_TEXT_ALIGN_RIGHT), 0, y);
     }
   }
   time_axis(b, SENS_W);

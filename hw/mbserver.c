@@ -1,5 +1,6 @@
 // Modbus server, see mbserver.h
 #include "mbserver.h"
+#include "bits.h"
 #include "pbus.h"
 #include "plink_values.h"
 #include <string.h>
@@ -30,22 +31,13 @@ void mb_init(uint8_t addr, uint16_t version, uint8_t patch) {
   MB.input[3] = version;
 }
 
-static bool bit(const uint32_t *map, uint16_t reg) { return map[reg / 32] >> (reg % 32) & 1; }
-
-static void put_bit(uint32_t *map, uint16_t reg, bool on) {
-  if (on)
-    map[reg / 32] |= 1u << (reg % 32);
-  else
-    map[reg / 32] &= ~(1u << (reg % 32));
-}
-
 // Returns false if the coil stays set: the relay was of an older value of ours and the CX60 has to read the new one.
 static bool set_pending(uint16_t reg, bool on) {
   if (!on && bit(MB.again, reg)) {
-    put_bit(MB.again, reg, false);
+    bit_put(MB.again, reg, false);
     return false;
   }
-  put_bit(MB.pending, reg, on);
+  bit_put(MB.pending, reg, on);
   return true;
 }
 
@@ -56,12 +48,12 @@ bool mb_bootloader_requested(void) { return MB.enter_bootloader; }
 
 // Only flags the main loop if it's the first value or a different one.
 static void stored(uint16_t reg, uint16_t value, bool relayed) {
-  put_bit(MB.relayed, reg, relayed);
+  bit_put(MB.relayed, reg, relayed);
   if (bit(MB.written, reg) && MB.hold[reg] == (int16_t) value)
     return;
   MB.hold[reg] = (int16_t) value;
-  put_bit(MB.written, reg, true);
-  put_bit(MB.changed, reg, true);
+  bit_put(MB.written, reg, true);
+  bit_put(MB.changed, reg, true);
   MB.any_changed = true;
 }
 
@@ -236,22 +228,17 @@ void mb_write(uint16_t reg, int16_t value) {
     return;
   // The CX60 may have read the old value already. Its relay of that would undo this one, so it's skipped.
   if (bit(MB.pending, reg))
-    put_bit(MB.again, reg, true);
+    bit_put(MB.again, reg, true);
   MB.hold[reg] = value;
   set_pending(reg, true);
 }
 
 bool mb_take_changed(uint16_t *reg) {
-  if (!MB.any_changed)
+  int r = MB.any_changed ? bit_first(MB.changed, MB_WORDS) : -1;
+  MB.any_changed = r >= 0;
+  if (r < 0)
     return false;
-  for (unsigned w = 0; w < MB_WORDS; w++) {
-    if (!MB.changed[w])
-      continue;
-    unsigned b = (unsigned) __builtin_ctz(MB.changed[w]);
-    MB.changed[w] &= ~(1u << b);
-    *reg = (uint16_t) (w * 32 + b);
-    return true;
-  }
-  MB.any_changed = false;
-  return false;
+  bit_put(MB.changed, (unsigned) r, false);
+  *reg = (uint16_t) r;
+  return true;
 }

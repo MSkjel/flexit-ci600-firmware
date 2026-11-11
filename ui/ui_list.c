@@ -12,11 +12,13 @@
 // Main menu state
 typedef struct {
   lv_obj_t *box[GRID_SLOTS], *icon[GRID_SLOTS], *title[GRID_SLOTS], *status[GRID_SLOTS];
-  int8_t shown[GRID_SLOTS];       // entry shown in each slot, -1 = none
-  const mitem_t *item[GRID_MAX];  // entries available with the installed features, in order
-  int n;                          // number of entries
+  int8_t shown[GRID_SLOTS];  // entry shown in each slot, -1 = none
+  uint8_t item[GRID_MAX];    // m_main's entries available with the installed features, in order
+  int n;                     // number of entries
 } grid_t;
 SCREEN_STATE(grid_t, grid);
+
+static const mitem_t *entry(int i) { return &m_main.items[grid->item[i]]; }
 
 static void menu_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
@@ -24,7 +26,7 @@ static void menu_build(lv_obj_t *b, intptr_t arg) {
   for (unsigned i = 0; i < m_main.n; i++) {
     const mitem_t *it = &m_main.items[i];
     if (HAS_ALL(it->need) && (!it->shown || it->shown()))
-      grid->item[grid->n++] = it;
+      grid->item[grid->n++] = (uint8_t) i;
   }
   int rows = (grid->n + 1) / 2;
   clamp_sel(grid->n, rows > GRID_ROWS ? rows - GRID_ROWS : 0);
@@ -55,7 +57,7 @@ static void menu_update(void) {
       continue;
     }
     lv_obj_clear_flag(grid->box[k], LV_OBJ_FLAG_HIDDEN);
-    const mitem_t *it = grid->item[i];
+    const mitem_t *it = entry(i);
     if (grid->shown[k] != i) {
       grid->shown[k] = (int8_t) i;
       label_text(grid->icon[k], it->icon);
@@ -70,17 +72,17 @@ static void menu_update(void) {
     lv_label_set_text(grid->status[k], buf);
     st_text(grid->status[k], (it->flags & MF_ALARMS) && M.n_alarms ? T.err : T.dim);
   }
-  ui_help(grid->item[f->sel]->help);
+  ui_help(entry(f->sel)->help);
 }
 
 static bool menu_key(int k) {
   if (k != KEY_OK)
     return sel_key(k, grid->n);
-  ui_push(&SCR_LIST, (intptr_t) grid->item[ui_frame()->sel]->target);
+  ui_push(&SCR_LIST, (intptr_t) entry(ui_frame()->sel)->target);
   return true;
 }
 
-static const char *menu_selected(void) { return tr(grid->item[ui_frame()->sel]->title); }
+static const char *menu_selected(void) { return tr(entry(ui_frame()->sel)->title); }
 
 const screen_t SCR_MENU = {
     .title = S_MENU, .build = menu_build, .update = menu_update, .key = menu_key, .selected = menu_selected};
@@ -97,8 +99,9 @@ const char *item_unit(const mitem_t *it) {
 }
 
 const char *opt_text(const mitem_t *it, int o) {
-  if (it->fn && it->fn->text)
-    return it->fn->text(o);
+  const opt_fn_t *fn = opt_fn(it);
+  if (fn && fn->text)
+    return fn->text(o);
   return o >= 0 && o < it->n_opts ? tr(it->opts[o]) : NO_VALUE;  // a value from the bus can be out of range
 }
 
@@ -125,7 +128,10 @@ static void number_text(const mitem_t *it, int32_t v, char *buf, size_t n) {
     add_unit(buf, n, item_unit(it));
 }
 
-int opt_used(const mitem_t *it, int o) { return it->fn && it->fn->used ? it->fn->used((val_t) it->val, o) : o; }
+int opt_used(const mitem_t *it, int o) {
+  const opt_fn_t *fn = opt_fn(it);
+  return fn && fn->used ? fn->used((val_t) it->val, o) : o;
+}
 
 static void value_text(const mitem_t *it, char *buf, size_t n) {
   int32_t v = val_get(it->val);

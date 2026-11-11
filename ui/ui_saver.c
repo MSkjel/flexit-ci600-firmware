@@ -175,12 +175,7 @@ static int lines_fitting(int room, int *h) {
   return n;
 }
 
-static void show_if(lv_obj_t *o, bool on) {
-  if (on && lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
-    lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
-  else if (!on && !lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
-    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
-}
+static void show_if(lv_obj_t *o, bool on) { (on ? lv_obj_clear_flag : lv_obj_add_flag)(o, LV_OBJ_FLAG_HIDDEN); }
 
 // The first n of the ESP's lines from x, y down, the rest hidden
 static void place_lines(lv_obj_t *l[SAVER_LINES], int n, int x, int y) {

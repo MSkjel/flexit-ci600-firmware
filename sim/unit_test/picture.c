@@ -378,39 +378,15 @@ static void test_jpeg(void) {
                 (x >= s->x1 && x <= s->x2 && y >= s->y1 && y <= s->y2 ? whole[y * JW + x].full : 0);
     CHECK(same);
   }
-  // Shown with its top on a multiple of 8 lines. LVGL's areas over it are rounded out to its MCU rows, the rest
-  // stay as they are, and so do strips when LVGL asks how high they may be.
+  // Shown with its top on a multiple of 8 lines, which LVGL's strips end on, so they have its MCU rows whole
   lv_obj_t *o = pic_show(lv_scr_act());
   lv_obj_update_layout(o);
-  CHECK_EQ(o->coords.y1 % 8, 0);
+  CHECK_EQ(o->coords.y1 % SENT_TILE_H, 0);
   CHECK(o->coords.y1 > 0);
   CHECK_EQ(o->coords.x1, (320 - JW) / 2);
-  lv_area_t over = {(lv_coord_t) (o->coords.x1 + 3), (lv_coord_t) (o->coords.y1 + 3), (lv_coord_t) (o->coords.x1 + 9),
-                    (lv_coord_t) (o->coords.y1 + 12)};
-  lv_area_t beside = {0, (lv_coord_t) (o->coords.y1 + 3), 9, (lv_coord_t) (o->coords.y1 + 12)}, b0 = beside;
-  lv_area_t probe = {0, 0, 0, 36}, low = {0, 0, 0, 4};
-  pic_round(NULL, &over);
-  pic_round(NULL, &beside);
-  lv_disp_get_default()->rendering_in_progress = 1;  // the probes come while LVGL draws
-  pic_round(NULL, &probe);
-  pic_round(NULL, &low);
-  lv_disp_get_default()->rendering_in_progress = 0;
-  CHECK_EQ(over.y1, o->coords.y1);
-  CHECK_EQ(over.y2, o->coords.y1 + 15);
-  CHECK_EQ(over.x1, o->coords.x1 + 3);
-  CHECK(!memcmp(&beside, &b0, sizeof b0));
-  CHECK_EQ(probe.y1, 0);
-  CHECK_EQ(probe.y2, 39);
-  CHECK_EQ(low.y2, 4);
-  lv_refr_now(NULL);
-  _lv_inv_area(NULL, &(lv_area_t) {0, 236, 3, 239});  // a strip of a few lines beside it still gets drawn
   lv_refr_now(NULL);
   CHECK_EQ(lv_disp_get_default()->inv_p, 0);
   lv_obj_del(o);
-  lv_area_t still = {1, 3, 2, 5};  // nothing to round to without it
-  pic_round(NULL, &still);
-  CHECK_EQ(still.y1, 3);
-  CHECK_EQ(still.y2, 5);
   lv_area_t outside = {0, 0, JW, 0};
   CHECK(!pic_read(&outside, part, JW));
   CHECK_EQ(status(patch(0, 1, 4, false)), PIC_NO_PICTURE);  // only a 16-colour picture takes patches

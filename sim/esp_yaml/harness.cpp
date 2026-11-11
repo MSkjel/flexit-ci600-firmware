@@ -580,15 +580,10 @@ static void draw_squares(Animation &a, int size, int frames) {
 static std::vector<int> overlay_delays(const char *name) {
   std::vector<int> d;
   const overlay::Overlay *a = overlay::find(name);
-  for (size_t at = 0; a && at + 5 <= a->data.size();) {
+  for (size_t at = 0; a && at + OVERLAY_RECORD_HEAD <= a->data.size();) {
     const uint8_t *r = a->data.data() + at;
-    uint32_t n =
-        r[3] ? pinflate(r + 5, (uint32_t) (a->data.size() - at - 5), nullptr, r[3], a->w / 2, (uint32_t) r[3] * r[4], 0)
-             : 0;
-    if (r[3] && !n)
-      break;
-    d.push_back(r[0]);
-    at += 5 + n;
+    d.push_back(r[OVERLAY_RECORD_DELAY]);
+    at += OVERLAY_RECORD_HEAD + plink_get16(r + OVERLAY_RECORD_LEN);
   }
   return d;
 }

@@ -1,6 +1,7 @@
 // The overlays' insides, shared by overlay.c, overlay_motion.c, overlay_script.c and overlay_draw.c. See overlay.h.
 #pragma once
 #include "overlay.h"
+#include "plink.h"
 #include "plink_keys.h"
 
 #define MOVE_MS 50     // a motion step, 20 a second
@@ -184,7 +185,19 @@ uint8_t *records(const slot_t *s);
 // The record at offset at: an animated slot's into frame where it goes, a still's piece unpacked into frame at w / 2
 // bytes a row. Only checked if frame is NULL. Returns its length, 0 if it's bad. area gets its rectangle, in frame
 // pixels.
+// The record at at checked, and an animated slot's applied to frame if there is one. Its length with the head, 0 if
+// it's wrong. overlay_close() checks every one, after that the three below go by the head alone.
 uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area);
+static inline uint32_t record_len(const slot_t *s, uint32_t at) {  // with the head, so the next one is that far on
+  return OVERLAY_RECORD_HEAD + plink_get16(records(s) + at + OVERLAY_RECORD_LEN);
+}
+static inline lv_area_t record_area(const slot_t *s, uint32_t at) {  // its rectangle, no width for an empty one
+  const uint8_t *r = records(s) + at;
+  int w = r[OVERLAY_RECORD_W], x = w ? r[OVERLAY_RECORD_X] : 0, y = w ? r[OVERLAY_RECORD_Y] : 0;
+  return (lv_area_t) {(lv_coord_t) (x * 2), (lv_coord_t) y, (lv_coord_t) ((x + w) * 2 - 1),
+                      (lv_coord_t) (y + r[OVERLAY_RECORD_H] - 1)};
+}
+void piece_rows(const slot_t *s, uint32_t at, uint8_t *out);  // a still's piece unpacked, row after row
 // The delay a round of a slot without frames goes by: its first record's, a field's the longest
 static inline uint8_t round_delay(const slot_t *s) {
   return s->field ? OVERLAY_DELAY_MAX : records(s)[OVERLAY_RECORD_DELAY];

@@ -88,15 +88,16 @@ int pn_item(int i, int *flags, int *icon, int *dec, int *step, int *id, int *min
   *dec = it->dec;
   *step = it->step;
   *id = it->id;
-  *min = it->min;
-  *max = it->max;
+  val_def_t d = val_def((val_t) (V_ITEM_FIRST + i));
+  *min = d.min;
+  *max = d.max;
   *value = it->value;
   *label = it->label;
   *unit = it->unit;
   return it->type;
 }
-int pn_item_level(int i, int k) { return M.items[i].level[k]; }  // item i's level k as the panel has it
-const char *pn_item_text(int i) {                                // item i's value as the panel shows it
+int pn_item_level(int i, int k) { return M.items[i].u.level[k]; }  // item i's level k as the panel has it
+const char *pn_item_text(int i) {                                  // item i's value as the panel shows it
   static char b[24];
   return item_text(b, sizeof b, &M.items[i], true);
 }

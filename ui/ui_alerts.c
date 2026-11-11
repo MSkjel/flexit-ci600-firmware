@@ -115,9 +115,9 @@ static void alarm_row(int i, const alarm_t *a, bool hist) {
   set_text(when, _(S_ALARM_WHEN), hist ? (a->active ? _(S_ACTIVE_SINCE) : _(S_LOGGED)) : _(S_SINCE), a->dd, a->mo,
            fmt_hm(hm, sizeof hm, a->hh * 60 + a->mi));
   lv_obj_set_pos(when, 36, y + 20);
-  lv_obj_t *code = mk_label(alarms->list, &font_f12, T.faint, "");
+  lv_obj_t *code = mk_text(alarms->list, &font_f12, T.faint, "", SCR_W - 18, LV_TEXT_ALIGN_RIGHT);
   set_text(code, "#%d", a->code);
-  lv_obj_align(code, LV_ALIGN_TOP_RIGHT, -18, y + 12);
+  lv_obj_set_pos(code, 0, y + 12);
 }
 
 static void alarms_build(lv_obj_t *b, intptr_t arg) {

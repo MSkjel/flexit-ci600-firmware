@@ -10,6 +10,7 @@
 #include "plink.h"
 #include "check.h"
 #include "sim.h"
+#include "enc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,11 +195,10 @@ static void esp_queue(pbulk_esp_t *e) {
 
 // What the panel's main loop does with what came in, and now and then a message of its own
 static void panel_loop(pbulk_panel_t *p) {
-  uint8_t out[PBULK_MAX];
-  int n;
-  while ((n = pbulk_panel_take(p, out)) > 0) {
-    CHECK(n <= PBULK_MAX);
-    pbulk_parse(out, n, got_msg, &n);
+  const uint8_t *in;
+  for (int n; (in = pbulk_panel_take(p, &n)) != NULL; pbulk_panel_taken(p)) {
+    CHECK(n > 0 && n <= PBULK_MAX && in > p->buf && in + n <= p->buf + PBULK_RX_BUF);
+    pbulk_parse(in, n, got_msg, &n);
   }
   if (pbulk_panel_free(p) && !below(4)) {  // a message or two, DATA in 4s like a screenshot's
     uint8_t m[PBULK_ANSWER_MAX];
@@ -451,9 +451,8 @@ static void send_overlay(int slot) {
     n = plink_overlay_pieces(frames[0], (unsigned) w, (unsigned) h, (uint16_t) rnd(), (uint8_t) rnd(), d, sizeof d);
   else if (kind == OVERLAY_SHEET)  // its frames, now and then one made longer
     for (int f = 0; f < 4; f++) {
-      memcpy(d + n, (uint8_t[]) {(uint8_t) rnd(), below(6) ? OVERLAY_RECORD_FRAME : OVERLAY_RECORD_MORE, 0, 0, 0},
-             OVERLAY_RECORD_HEAD);
-      n += OVERLAY_RECORD_HEAD;
+      n +=
+          plink_overlay_head(d + n, (uint8_t) rnd(), below(6) ? OVERLAY_RECORD_FRAME : OVERLAY_RECORD_MORE, 0, 0, 0, 0);
       n += plink_overlay_pieces(frames[f], (unsigned) w, (unsigned) h, (uint16_t) rnd(), 0, d + n, sizeof d - n);
     }
   else if (kind == OVERLAY_FIELD) {  // one of them, mostly as it can be

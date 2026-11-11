@@ -59,6 +59,22 @@ static const val_def_t DEFS[V_FEAT_FIRST] = {
 #undef X
 };
 
+// Where each value is in M and what it's held as, from the same rows. A field of another type doesn't compile.
+// FIELD_I32 is one that isn't in M's own fields: an equipment bit or an item.
+enum { FIELD_I32, FIELD_BOOL, FIELD_U8, FIELD_I16, FIELD_U16, FIELD_U32, FIELD_TYPES };
+#define FIELD_TYPE(field) \
+  _Generic((field), bool: FIELD_BOOL, uint8_t: FIELD_U8, int16_t: FIELD_I16, uint16_t: FIELD_U16, uint32_t: FIELD_U32)
+static const struct {
+  uint16_t at : 12, type : 4;
+} WHERE[V_FEAT_FIRST] = {
+#define F(id, field) [V_##id] = {(const char *) &(field) - (const char *) &M, FIELD_TYPE(field)},
+#define X(id, key, field, ...) F(id, field)
+    PLINK_FIELDS(F) PANEL_VALUES(X)
+#undef X
+#undef F
+};
+_Static_assert(sizeof(model_t) <= 1 << 12, "an offset into M fits WHERE's 12 bits");
+
 // FBIT()s of the equipment the unit's DIP switches decide, see equipment.h
 #define DIP_BIT(id, icon, title, help, dip) | ((dip) ? FBIT(FEAT_##id) : 0u)
 static const uint32_t FROM_DIP = 0u FEATURES(DIP_BIT);
@@ -75,11 +91,6 @@ val_def_t val_def(val_t v) {
     sched_range(v, &d.min, &d.max);
     return d;
   }
-  if (v == V_FAST_DISPLAY) {  // off over 80 MHz, so apply() refuses it from anywhere
-    val_def_t d = DEFS[v];
-    d.max = fast_display_ok();
-    return d;
-  }
   if (v > V_NONE && v < V_FEAT_FIRST)
     return DEFS[v];
   if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST) {
@@ -90,8 +101,9 @@ val_def_t val_def(val_t v) {
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST) {
     const item_t *it = &M.items[v - V_ITEM_FIRST];
     bool ro = it->type == ITEM_SENSOR || it->type == ITEM_TEXT || (it->flags & ITEMF_RO);
-    return (val_def_t) {.min = it->min,
-                        .max = it->max,
+    bool words = it->type == ITEM_TOGGLE || it->type == ITEM_TEXT;  // their words are where the range would be
+    return (val_def_t) {.min = words ? 0 : it->u.min,
+                        .max = words ? it->type == ITEM_TOGGLE : it->u.max,
                         .key = K_ITEM_VALUE + (v - V_ITEM_FIRST),
                         .flags = VF_ESP | VF_LINK_RW | (ro ? VF_RO : 0)};
   }
@@ -120,16 +132,22 @@ val_t val_next(val_t v, uint16_t want, uint16_t skip) {
   return V_COUNT;
 }
 
+// The items and the equipment first, their keys are ranges and an item's value is the number that comes most
+#define RANGED(id, k, ...) || IN_RANGES(k)
+#define IN_RANGES(k) \
+  ((k) >= K_FEATURE && (k) < K_FEATURE + FEAT_COUNT) || ((k) >= K_ITEM_VALUE && (k) < K_ITEM_VALUE + N_ITEMS)
+_Static_assert(!(0 PLINK_VALUES(RANGED) PANEL_VALUES(RANGED)), "no value's key is an item's or a feature's");
+#undef IN_RANGES
+#undef RANGED
+
 val_t val_by_key(uint16_t key) {
-  if (!key)
-    return V_NONE;  // key 0 is for values that aren't on the link
-  for (int v = V_NONE + 1; v < V_FEAT_FIRST; v++)
-    if (DEFS[v].key == key)
-      return (val_t) v;
-  if (key >= K_FEATURE && key < K_FEATURE + FEAT_COUNT)
-    return (val_t) (V_FEAT_FIRST + key - K_FEATURE);
   if (key >= K_ITEM_VALUE && key < K_ITEM_VALUE + N_ITEMS)
     return (val_t) (V_ITEM_FIRST + key - K_ITEM_VALUE);
+  if (key >= K_FEATURE && key < K_FEATURE + FEAT_COUNT)
+    return (val_t) (V_FEAT_FIRST + key - K_FEATURE);
+  for (int v = V_NONE + 1; key && v < V_FEAT_FIRST; v++)  // key 0 is for values that aren't on the link
+    if (DEFS[v].key == key)
+      return (val_t) v;
   return V_NONE;
 }
 
@@ -157,25 +175,31 @@ int32_t val_get(val_t v) {
     return HAS(v - V_FEAT_FIRST);
   if (v >= V_ITEM_FIRST && v <= V_ITEM_LAST)
     return M.items[v - V_ITEM_FIRST].value;
-  switch (v) {
-#define F(id, field) \
-  case V_##id: \
-    return (int32_t) (field);
-#define X(id, key, field, ...) F(id, field)
-    PLINK_FIELDS(F)
-    PANEL_VALUES(X)
-#undef X
-#undef F
+  if (v <= V_NONE || v >= V_FEAT_FIRST)
+    return 0;
+  const void *p = (const char *) &M + WHERE[v].at;
+  switch (WHERE[v].type) {
+    case FIELD_BOOL:
+      return *(const bool *) p;
+    case FIELD_U8:
+      return *(const uint8_t *) p;
+    case FIELD_I16:
+      return *(const int16_t *) p;
+    case FIELD_U16:
+      return *(const uint16_t *) p;
+    case FIELD_U32:
+      return (int32_t) *(const uint32_t *) p;
     default:
       return 0;
   }
 }
 
-static val_t on_trial = V_NONE;
+static bool on_trial;  // Processor speed is
 
-void val_trial(val_t v) { on_trial = v; }
+void val_trial(bool on) { on_trial = on; }
+bool val_on_trial(void) { return on_trial; }
 
-int32_t val_saved(val_t v) { return v == on_trial ? 0 : val_get(v); }  // what ui_trial() goes back to
+int32_t val_saved(val_t v) { return v == V_CPU_SPEED && on_trial ? 0 : val_get(v); }  // what ui_trial() goes back to
 
 static void store(val_t v, int32_t x) {
   if (v >= V_FEAT_FIRST && v <= V_FEAT_LAST) {
@@ -187,34 +211,27 @@ static void store(val_t v, int32_t x) {
     M.items[v - V_ITEM_FIRST].value = x;
     return;
   }
-  switch (v) {
-#define F(id, field) \
-  case V_##id: \
-    field = x; \
-    break;
-#define X(id, key, field, ...) F(id, field)
-    PLINK_FIELDS(F)
-    PANEL_VALUES(X)
-#undef X
-#undef F
-    default:
+  if (v <= V_NONE || v >= V_FEAT_FIRST)
+    return;
+  void *p = (char *) &M + WHERE[v].at;
+  switch (WHERE[v].type) {
+    case FIELD_BOOL:
+      *(bool *) p = x;
+      break;
+    case FIELD_U8:
+      *(uint8_t *) p = (uint8_t) x;
+      break;
+    case FIELD_I16:
+    case FIELD_U16:
+      *(uint16_t *) p = (uint16_t) x;
+      break;
+    case FIELD_U32:
+      *(uint32_t *) p = (uint32_t) x;
       break;
   }
 }
 
 static int32_t clamp(int32_t x, int32_t lo, int32_t hi) { return x < lo ? lo : x > hi ? hi : x; }
-
-// Each value's field type, for fit(). A field of another type doesn't compile.
-enum { FIELD_I32, FIELD_BOOL, FIELD_U8, FIELD_I16, FIELD_U16, FIELD_U32, FIELD_TYPES };
-#define FIELD_TYPE(field) \
-  _Generic((field), bool: FIELD_BOOL, uint8_t: FIELD_U8, int16_t: FIELD_I16, uint16_t: FIELD_U16, uint32_t: FIELD_U32)
-static const uint8_t TYPES[V_FEAT_FIRST] = {
-#define F(id, field) [V_##id] = FIELD_TYPE(field),
-#define X(id, key, field, ...) F(id, field)
-    PLINK_FIELDS(F) PANEL_VALUES(X)
-#undef X
-#undef F
-};
 
 // x from the CX60 as v's field holds it, so storing it doesn't wrap. Anything but 0 is on for a bool, as the CX60
 // takes it. The rest clamp to the type's range.
@@ -225,7 +242,7 @@ static int32_t fit(val_t v, int32_t x) {
                                           [FIELD_I16] = INT16_MAX,
                                           [FIELD_U16] = UINT16_MAX,
                                           [FIELD_U32] = INT32_MAX};
-  int t = v < V_FEAT_FIRST ? TYPES[v] : FIELD_I32;  // an equipment bit is 0 or 1 already
+  int t = v < V_FEAT_FIRST ? WHERE[v].type : FIELD_I32;  // an equipment bit is 0 or 1 already
   return t == FIELD_BOOL ? x != 0 : clamp(x, LO[t], HI[t]);
 }
 
@@ -253,9 +270,7 @@ static void apply(val_t v, int32_t x, source_t from) {
   if ((v == V_MONTH || v == V_YEAR) && M.dd > val_def(V_DAY).max)
     M.dd = (uint8_t) val_def(V_DAY).max;  // 31.03 to April is 30.04, not 01.05
   if (from == FROM_FLASH)
-    return;  // loading at startup, nothing else runs yet. hw/main.c turns Fast display off if the clock needs it
-  if (v == V_CPU_SPEED && M.fast_display && !fast_display_ok())
-    apply(V_FAST_DISPLAY, 0, from);  // before plat_value_changed() restarts at the new speed, so it's saved too
+    return;  // loading at startup, nothing else runs yet
   // With auto lock the keys relock on idle anyway, so don't wear the flash on every lock and unlock
   if ((d.flags & VF_SAVED) && !(v == V_KEY_LOCK && M.auto_lock))
     plat_save(from == FROM_USER);
@@ -280,9 +295,9 @@ void val_update(val_t v, int32_t x) { apply(v, x, FROM_BUS); }
 void val_load(val_t v, int32_t x) { apply(v, x, FROM_FLASH); }
 
 static void act(int a, source_t source) {
-  if (a == A_REMOVE_PERIOD)
-    sched_period_remove();
   plat_action(a);
+  if (a == A_REMOVE_PERIOD)
+    ui_layout_changed();  // the day and week screens show the one that went
   // Not for a removed period, the ESP sees the registers change. Nor a restart or panel reset, it gets our HELLO
   // when we're back.
   if (source == FROM_USER && a != A_REMOVE_PERIOD && a != A_RESET_PANEL && a != A_RESTART)

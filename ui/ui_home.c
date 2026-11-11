@@ -8,11 +8,13 @@
 #define DASH_TILE_Y 124
 #define DASH_TILE_W 73
 #define DASH_TILE_H 64
-#define RING_SIZE 112  // fan speed ring
+#define RING_SIZE 112  // fan speed ring, with its top left corner at
+#define RING_X 196
+#define RING_Y 4
 
 typedef struct {
   lv_obj_t *big, *target, *state, *ring, *ring_icon, *ring_mode, *ring_sub, *ring_next;
-  lv_obj_t *tile_cap[4], *tile_val[4], *tile_bar[4], *tile_stripe[4];
+  lv_obj_t *tile_val[4], *tile_bar[4], *tile_stripe[4];
 } dash_t;
 SCREEN_STATE(dash_t, dash);
 
@@ -32,8 +34,9 @@ static bool next_change(char *b, size_t n) {
     return false;
   int d = M.wday % 7, now = M.hh * 60 + M.mi, best = 24 * 60;
   char t[12];
-  for (int i = 0; i < M.n_periods[d]; i++) {
-    const period_t *s = &M.week[d][i];
+  period_t w[PERIODS_PER_DAY];
+  for (int i = 0, k = sched_day(d, w); i < k; i++) {
+    const period_t *s = &w[i];
     int a = s->start, e = s->end;
     if (now >= a && now < e) {
       sprint(b, n, _(S_UNTIL), fmt_hm(t, sizeof t, e));
@@ -102,10 +105,10 @@ static void tile_build(lv_obj_t *p, int i) {
   lv_obj_t *t = mk_box(p, DASH_TILE_X + i * DASH_TILE_STEP, DASH_TILE_Y, DASH_TILE_W, DASH_TILE_H, T.surface, 10);
   dash->tile_stripe[i] = mk_box(t, 0, 14, 3, 36, tile_color(src), 2);
   const char *name = tile_name(src);
-  dash->tile_cap[i] = mk_label(t, &font_f12, T.dim, name ? name : NO_VALUE);
-  lv_obj_set_pos(dash->tile_cap[i], 12, 7);
-  lv_obj_set_width(dash->tile_cap[i], DASH_TILE_W - 16);
-  lv_label_set_long_mode(dash->tile_cap[i], LV_LABEL_LONG_CLIP);
+  lv_obj_t *cap = mk_label(t, &font_f12, T.dim, name ? name : NO_VALUE);  // a new name builds the screen again
+  lv_obj_set_pos(cap, 12, 7);
+  lv_obj_set_width(cap, DASH_TILE_W - 16);
+  lv_label_set_long_mode(cap, LV_LABEL_LONG_CLIP);
   dash->tile_val[i] = mk_label(t, &font_f20, T.text, "");
   lv_obj_set_pos(dash->tile_val[i], 12, 23);
   lv_obj_set_width(dash->tile_val[i], DASH_TILE_W - 16);  // clip long values to the tile
@@ -172,8 +175,6 @@ static void tile_update(int i) {
     label_fit(dash->tile_val[i], v, DASH_TILE_W - 16);
   else
     set_text(dash->tile_val[i], "%s", v);
-  if (src >= TILE_ITEM)  // the ESP can rename items, a weather item's label is the current condition
-    set_text(dash->tile_cap[i], "%s", tile_name(src) ? tile_name(src) : NO_VALUE);
   st_bg(dash->tile_stripe[i], c, 0);
   if (dash->tile_bar[i]) {
     st_bg(dash->tile_bar[i], c, LV_PART_INDICATOR);
@@ -195,6 +196,14 @@ static int16_t big_temp(void) {
   }
 }
 
+// A line of text in the fan ring, dy below its middle. The label is a pixel wider than the ring with its text
+// centred, which puts the text where a label centred on the ring would be.
+static lv_obj_t *ring_text(lv_obj_t *b, const lv_font_t *f, lv_color_t c, const char *txt, int dy) {
+  lv_obj_t *l = mk_text(b, f, c, txt, RING_SIZE + 1, LV_TEXT_ALIGN_CENTER);
+  lv_obj_set_pos(l, RING_X, RING_Y + RING_SIZE / 2 - f->line_height / 2 + dy);
+  return l;
+}
+
 static void dash_build(lv_obj_t *b, int first) {
   (void) first;
   lv_obj_set_pos(mk_label(b, &font_f12, T.dim, tr(BIG_CAPS[M.dash_temp % DT_COUNT])), 14, 2);
@@ -208,12 +217,11 @@ static void dash_build(lv_obj_t *b, int first) {
   lv_label_set_recolor(dash->state, true);
 
   dash->ring = mk_arc(b, RING_SIZE, 9, 0, MODE_MAX, T.accent);  // a boost fills it
-  lv_obj_set_pos(dash->ring, 196, 4);
-  dash->ring_icon = mk_icon(b, &icons_32, T.accent, IC_FAN);
-  lv_obj_align_to(dash->ring_icon, dash->ring, LV_ALIGN_CENTER, 0, -20);
-  dash->ring_mode = mk_label(b, &font_f16, T.text, "");
-  dash->ring_sub = mk_label(b, &font_f12, T.dim, "");
-  dash->ring_next = mk_label(b, &font_f12, T.faint, "");
+  lv_obj_set_pos(dash->ring, RING_X, RING_Y);
+  dash->ring_icon = ring_text(b, &icons_32, T.accent, IC_FAN, -20);
+  dash->ring_mode = ring_text(b, &font_f16, T.text, "", 7);  // less room inside the ring further down
+  dash->ring_sub = ring_text(b, &font_f12, T.dim, "", 25);
+  dash->ring_next = ring_text(b, &font_f12, T.faint, "", 43);
 
   for (int i = 0; i < 4; i++)
     tile_build(b, i);
@@ -256,9 +264,6 @@ static void dash_update(void) {
       set_text(dash->ring_sub, "%s", fmt_pct(a, sizeof a, M.fan_sup));
     set_text(dash->ring_next, "%s", next_change(s, sizeof s) ? s : "");
   }
-  lv_obj_align_to(dash->ring_mode, dash->ring, LV_ALIGN_CENTER, 0, 7);  // less room inside the ring further down
-  lv_obj_align_to(dash->ring_sub, dash->ring, LV_ALIGN_CENTER, 0, 25);
-  lv_obj_align_to(dash->ring_next, dash->ring, LV_ALIGN_CENTER, 0, 43);
   for (int i = 0; i < 4; i++)
     tile_update(i);
 }
@@ -335,14 +340,24 @@ const screen_t SCR_HOME = {.build = home_build, .update = home_update, .key = ho
 
 // ---------------------------------------------------------------- fan speed overlay
 #define HUD_CLOSE_MS 2500
+#define HUD_FOLLOW_MS 2000    // the unit has run what was asked for well within this, if it's going to
 #define HUD_BOOST MODE_COUNT  // one level above MAX
 
 static struct {
   lv_obj_t *bars[HUD_BOOST + 1], *names[HUD_BOOST + 1], *sub;
-  uint8_t start;  // speed when the overlay opened
+  uint8_t start;   // speed when the overlay opened
+  uint8_t asked;   // the level the last press asked for
+  bool following;  // and the unit may not run it yet, since asked_at
+  uint32_t asked_at;
 } hud;
 
-static int hud_level(void) { return M.boost_on ? HUD_BOOST : M.mode_now; }
+// The level it shows and steps from. The unit takes a moment to run what a press asked for, so until then it's
+// that one, or a second quick press would ask for the same again.
+static int hud_level(void) {
+  if (hud.following && lv_tick_elaps(hud.asked_at) < HUD_FOLLOW_MS)
+    return hud.asked;
+  return M.boost_on ? HUD_BOOST : M.mode_now;
+}
 
 // UP past MAX starts a boost. The CX60 goes back to the old speed after a boost, so set the one the overlay
 // opened on and not the MAX we stepped through.
@@ -350,6 +365,9 @@ static void hud_step(int k) {
   int lvl = hud_level() + (k == KEY_UP ? 1 : -1);
   if (lvl < 0 || lvl > HUD_BOOST)
     return;
+  hud.asked = (uint8_t) lvl;
+  hud.following = true;
+  hud.asked_at = lv_tick_get();
   if (lvl == HUD_BOOST) {
     val_set(V_MODE, hud.start);
     val_set(V_BOOST, 1);
@@ -362,6 +380,7 @@ static void hud_step(int k) {
 
 static void hud_build(lv_obj_t *b, intptr_t arg) {
   hud.start = (uint8_t) arg;
+  hud.following = false;
   lv_obj_t *card = mk_card(b, 30, 28, 260, 140, T.line, 1);
   lv_obj_set_pos(mk_label(card, &font_f16, T.text, _(S_FAN_SPEED)), 16, 8);
   hud.sub = mk_label(card, &font_f12, T.dim, "");

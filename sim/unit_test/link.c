@@ -324,13 +324,13 @@ static int32_t dumped(val_t v) {
   return -1;
 }
 
-// A setting on trial goes to flash and to the ESP's copy as 0, 72 MHz or off, until it's kept. The rest are saved.
+// A speed on trial goes to flash and to the ESP's copy as 72 MHz until it's kept. The rest are saved.
 static void test_link_trial(void) {
   link_up();
   memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
   settings_load();
   M.cpu_speed = 2;  // a trial at 88 MHz, see hw/main.c
-  val_trial(V_CPU_SPEED);
+  val_trial(true);
   M.brightness = 42;
   plat_save_now();  // as a restart does
   CHECK_EQ(dumped(V_CPU_SPEED), 0);
@@ -341,23 +341,12 @@ static void test_link_trial(void) {
   CHECK_EQ(M.brightness, 42);
   // kept
   M.cpu_speed = 2;
-  val_trial(V_NONE);
+  val_trial(false);
   plat_save_now();
   CHECK_EQ(dumped(V_CPU_SPEED), 2);
   link_up();
   settings_load();
   CHECK_EQ(M.cpu_speed, 2);
-  // Fast display at 80 MHz
-  M.cpu_speed = 1;
-  M.fast_display = true;
-  val_trial(V_FAST_DISPLAY);
-  plat_save_now();
-  CHECK_EQ(dumped(V_FAST_DISPLAY), 0);
-  link_up();
-  settings_load();
-  CHECK(!M.fast_display);
-  CHECK_EQ(M.cpu_speed, 1);
-  val_trial(V_NONE);
 }
 
 // A picture's parts go with it, also when another one's BEGIN comes while it was still coming in

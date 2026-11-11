@@ -57,10 +57,15 @@ typedef struct {
     const str_t *opts;   // MI_ENUM: option names, see OPTS
     const void *target;  // MI_SUB: menu_t, MI_SCREEN: screen_t
   };
-  const opt_fn_t *fn;                // MI_ENUM: functions for the options, NULL for none
-  void (*fmt)(char *buf, size_t n);  // MI_INFO text, or a main menu entry's status line, n bytes with the 0
-  bool (*shown)(void);               // hidden while this is false, for rows that depend on another row
+  union {
+    const opt_fn_t *fn;                // MI_ENUM: functions for the options, NULL for none
+    void (*fmt)(char *buf, size_t n);  // MI_INFO text, or a main menu entry's status line, n bytes with the 0
+  };
+  bool (*shown)(void);  // hidden while this is false, for rows that depend on another row
 } mitem_t;
+
+// A row's functions for its options, NULL for none. Only an MI_ENUM row has any, the others' fmt is in their place.
+static inline const opt_fn_t *opt_fn(const mitem_t *it) { return it->type == MI_ENUM ? it->fn : NULL; }
 _Static_assert(FEAT_COUNT <= 8, "the features fit need and without");
 
 // A menu has either fixed items or a row() function that makes them.

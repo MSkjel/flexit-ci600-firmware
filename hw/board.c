@@ -5,31 +5,28 @@
 #include "model.h"  // RESET_*
 #include "stm32f1.h"
 
-static uint32_t hz = 8000000;
+static uint32_t mhz = 8;  // the core clock: HSI's 8 until clocks() has the crystal
 static volatile uint32_t ms;
 static volatile uint8_t keys, key_down, key_up;  // debounced state, presses and releases not read yet
 static uint8_t key_hist[IN_COUNT];
 static volatile uint16_t bl_now, bl_want;  // backlight compare, now and where it's fading to
-static uint32_t bl_mhz = 72;               // the clock TIM1 counts at, see bl_counts()
 
-// Backlight compare values and period are timer counts at 72 MHz. A faster clock gets as many more, rounded, so the
-// frequency and the brightness stay the same.
-static uint32_t bl_counts(uint32_t c) { return (c * bl_mhz + 36) / 72; }
+// Backlight compare values and period are timer counts at 72 MHz. Another clock gets as many more or fewer, rounded,
+// so the frequency and the brightness stay the same.
+static uint32_t bl_counts(uint32_t c) { return (c * mhz + 36) / 72; }
 
 // ---------------------------------------------------------------- clocks and pins
-// The core clocks, 72 is stock and the one clocks() starts at. The PLL takes the 8 MHz crystal x mhz / 8. APB1 /2 at
-// 72 and /4 above keep it at 36 MHz or under, its limit. The ADC's limit is 14 MHz: /6 makes it 12 and 13.3, /8 11
-// and 12. At 128 even /8, its biggest divider, makes it 16, but the room sensor samples for the longest time there
-// is. Flash stays at 2 wait states, there are no more. APB2 with the SPI, the USART and TIM1 runs at the full clock.
-static const struct {
-  uint8_t mhz;
-  uint32_t cfgr;  // PLL multiplier, APB1 and ADC dividers
-} CLOCKS[] = {
-    {72, RCC_CFGR_PLLMUL9 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6},
-    {80, RCC_CFGR_PLLMUL10 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV6},
-    {88, RCC_CFGR_PLLMUL11 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
-    {96, RCC_CFGR_PLLMUL12 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
-    {128, RCC_CFGR_PLLMUL16 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8},
+// The core clocks of CPU_MHZ, 72 is stock and the one clocks() starts at: each one's PLL multiplier and APB1 and ADC
+// dividers. The PLL takes the 8 MHz crystal x mhz / 8. APB1 /2 at 72 and /4 above keep it at 36 MHz or under, its
+// limit. The ADC's limit is 14 MHz: /6 makes it 12 and 13.3, /8 11 and 12. At 128 even /8, its biggest divider,
+// makes it 16, but the room sensor samples for the longest time there is. Flash stays at 2 wait states, there are
+// no more. APB2 with the SPI, the USART and TIM1 runs at the full clock.
+static const uint32_t CLOCKS[N_CPU_SPEEDS] = {
+    RCC_CFGR_PLLMUL9 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_ADCPRE_DIV6,   // 72
+    RCC_CFGR_PLLMUL10 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV6,  // 80
+    RCC_CFGR_PLLMUL11 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8,  // 88
+    RCC_CFGR_PLLMUL12 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8,  // 96
+    RCC_CFGR_PLLMUL16 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_ADCPRE_DIV8,  // 128
 };
 
 static void clocks(void) {
@@ -47,17 +44,17 @@ static void clocks(void) {
     if (i > 2000000)
       return;  // no crystal, stay on HSI at 8 MHz
   FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY_2;
-  RCC->CFGR = CLOCKS[0].cfgr | RCC_CFGR_PLLSRC_HSE;
+  RCC->CFGR = CLOCKS[0] | RCC_CFGR_PLLSRC_HSE;
   RCC->CR |= RCC_CR_PLLON;
   while (!(RCC->CR & RCC_CR_PLLRDY)) {
   }
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
-  hz = CLOCKS[0].mhz * 1000000u;
+  mhz = CPU_MHZ[0];
 }
 
-uint32_t board_hz(void) { return hz; }
+uint32_t board_hz(void) { return mhz * 1000000; }
 
 // Same as stock's gpio_init and gpio_init_early. Level goes in before mode so outputs don't glitch.
 static const struct {
@@ -139,7 +136,7 @@ uint32_t board_us(void) {
 // Prescaler to 1 MHz from APB1's timer clock, which is twice APB1's when APB1 is divided
 static uint32_t us_prescaler(void) {
   uint32_t ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> 8;  // under 4 is /1, then /2, /4, /8 and /16
-  return (ppre1 < 4 ? hz : hz >> (ppre1 - 3) << 1) / 1000000 - 1;
+  return (ppre1 < 4 ? mhz : mhz >> (ppre1 - 3) << 1) - 1;
 }
 
 static void us_init(void) {
@@ -262,7 +259,7 @@ void board_leds(bool alarm, bool filter, bool ok) {
 static void backlight_init(void) {
   RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
   TIM1->PSC = 0;
-  TIM1->ARR = BL_TOP;
+  TIM1->ARR = bl_counts(BL_TOP);
   TIM1->CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
   TIM1->CCER = TIM_CCER_CC1E;
   TIM1->CCR1 = 0;
@@ -397,14 +394,17 @@ void board_rtc_set(uint32_t t) {
 }
 
 // ---------------------------------------------------------------- reset cause
-// Kept through a reset. Starts over at power on, and on the first start after flashing, when it holds whatever
-// was in that RAM.
-#define RESTARTS_MAGIC 0x52535443u
+// Kept through a reset: the restarts since power came on, and the clock mark the last run left for this one. They
+// start over at power on, which RAM can outlast when the cut is short, and on the first start after flashing, when
+// it holds whatever was in that RAM. So a firmware that keeps other things here takes another magic.
+#define KEPT_MAGIC 0x4B455054u
 __attribute__((section(".noinit"))) static struct {
-  uint32_t magic, n;
-} restarts;
+  uint32_t magic, restarts, clock_mark;
+} kept;
 
-uint8_t board_reset_cause(uint32_t *fault_pc) {
+uint32_t board_fault_pc(void) { return fault_record[1]; }
+
+uint8_t board_reset_cause(void) {
   uint32_t csr = RCC->CSR;
   RCC->CSR |= RCC_CSR_RMVF;
   uint8_t cause = fault_record[0] == FAULT_MAGIC ? RESET_FAULT
@@ -412,27 +412,23 @@ uint8_t board_reset_cause(uint32_t *fault_pc) {
                   : csr & RCC_CSR_SFTRSTF        ? RESET_SOFTWARE
                   : csr & RCC_CSR_PORRSTF        ? RESET_POWER
                                                  : RESET_PIN;
-  *fault_pc = cause == RESET_FAULT ? fault_record[1] : 0;
   fault_record[0] = 0;
-  if (cause == RESET_POWER || restarts.magic != RESTARTS_MAGIC) {
-    restarts.magic = RESTARTS_MAGIC;
-    restarts.n = 0;
+  if (cause == RESET_POWER || kept.magic != KEPT_MAGIC) {
+    kept.magic = KEPT_MAGIC;
+    kept.restarts = kept.clock_mark = 0;
   } else {
-    restarts.n++;
+    kept.restarts++;
   }
   return cause;
 }
 
-uint32_t board_restarts(void) { return restarts.n; }
+uint32_t board_restarts(void) { return kept.restarts; }
 
 // ---------------------------------------------------------------- over 72 MHz
 // For Processor speed, over the rated 72. SysTick, the microseconds and the backlight follow the clock, see CLOCKS.
-bool board_set_clock(uint32_t mhz) {
-  unsigned i = 1;
-  while (i < LEN(CLOCKS) && CLOCKS[i].mhz != mhz)
-    i++;
-  if (hz != CLOCKS[0].mhz * 1000000u || i == LEN(CLOCKS))
-    return false;  // no crystal, still on HSI. Or not a clock it has
+bool board_set_clock(unsigned speed) {
+  if (mhz != CPU_MHZ[0] || !speed || speed >= N_CPU_SPEEDS)
+    return false;  // no crystal, still on HSI. Or not a clock over 72 it has
   uint32_t s = irq_save();
   RCC->CFGR &= ~RCC_CFGR_SW;  // to HSI, on since clocks(), while the PLL changes
   while (RCC->CFGR & RCC_CFGR_SWS) {
@@ -440,15 +436,15 @@ bool board_set_clock(uint32_t mhz) {
   RCC->CR &= ~RCC_CR_PLLON;
   while (RCC->CR & RCC_CR_PLLRDY) {
   }
-  RCC->CFGR = CLOCKS[i].cfgr | RCC_CFGR_PLLSRC_HSE;
+  RCC->CFGR = CLOCKS[speed] | RCC_CFGR_PLLSRC_HSE;
   RCC->CR |= RCC_CR_PLLON;
   while (!(RCC->CR & RCC_CR_PLLRDY)) {
   }
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
-  hz = mhz * 1000000;
-  SYSTICK->LOAD = hz / 1000 - 1;
+  mhz = CPU_MHZ[speed];
+  SYSTICK->LOAD = mhz * 1000 - 1;
   SYSTICK->VAL = 0;
   uint32_t us = board_us();  // the microseconds count on from here
   TIM2->PSC = us_prescaler();
@@ -456,25 +452,14 @@ bool board_set_clock(uint32_t mhz) {
   TIM2->SR = 0;
   TIM2->CNT = us & 0xFFFF;
   us_hi = us >> 16;
-  bl_mhz = mhz;
   TIM1->ARR = bl_counts(BL_TOP);  // both preloaded, they change at the end of a period
   TIM1->CCR1 = bl_counts(bl_now);
   irq_restore(s);
   return true;
 }
 
-// Kept through a reset like restarts above, 0 after a power cut
-#define CLOCK_MARK_MAGIC 0x434C4B4Du
-__attribute__((section(".noinit"))) static struct {
-  uint32_t magic, mark;
-} clock_mark;
-
-uint8_t board_clock_mark(void) { return clock_mark.magic == CLOCK_MARK_MAGIC ? (uint8_t) clock_mark.mark : 0; }
-
-void board_set_clock_mark(uint8_t m) {
-  clock_mark.mark = m;
-  clock_mark.magic = CLOCK_MARK_MAGIC;
-}
+uint8_t board_clock_mark(void) { return (uint8_t) kept.clock_mark; }
+void board_set_clock_mark(uint8_t m) { kept.clock_mark = m; }
 
 // ---------------------------------------------------------------- entropy
 __attribute__((section(".noinit"))) static uint32_t starts;  // not zeroed, counts on from whatever power-up left
@@ -574,7 +559,7 @@ void board_init(void) {
   NVIC_IPR8(IRQ_USART1) = 0x10;
   SCB_SHPR3 = (SCB_SHPR3 & 0x00FFFFFF) | 0x20u << 24;
   NVIC_IPR8(IRQ_DMA1_CH3) = 0x20;
-  SYSTICK->LOAD = hz / 1000 - 1;
+  SYSTICK->LOAD = mhz * 1000 - 1;
   SYSTICK->VAL = 0;
   SYSTICK->CTRL = SYSTICK_CTRL_ON;
   us_init();

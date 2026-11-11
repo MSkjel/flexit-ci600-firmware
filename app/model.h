@@ -55,10 +55,13 @@ typedef struct {
 typedef struct item {
   uint8_t type, flags, icon, dec;  // ITEM_*, ITEMF_*, ICN_*, decimals
   uint16_t step, id;               // id = hash of the item's name, tiles and trends refer to it by that
-  int32_t value, min, max;
-  int16_t level[4];  // ITEMF_LEVELS: bad below [0], good from [1] to [2], bad above [3], fair in between
+  int32_t value;
   char label[ITEM_LABEL_LEN], unit[ITEM_UNIT_LEN];
-  union {  // by type
+  union {     // by type: a toggle is 0 or 1 and a text has no number, so their words are where the range would be
+    struct {  // of the others
+      int32_t min, max;
+      int16_t level[4];  // ITEMF_LEVELS: bad below [0], good from [1] to [2], bad above [3], fair in between
+    };
     struct {
       char on[ITEM_STATE_LEN], off[ITEM_STATE_LEN];  // an ITEM_TOGGLE's words for on and off, "" for On and Off
     };
@@ -125,9 +128,7 @@ typedef struct {
   uint8_t n_history;
 
   // schedule
-  bool week_program;
-  period_t week[7][PERIODS_PER_DAY];  // each day's periods, sorted by start time
-  uint8_t n_periods[7];
+  bool week_program;  // the periods are the unit's, see sched_day()
   period_edit_t period;
 
   // ESP, bus address 1
@@ -146,15 +147,12 @@ typedef struct {
   // system
   uint16_t cx60_version;
   uint16_t panel_version[3];  // what the CX60 found at each address when it started, maj<<8 | min, 0 = none
-  uint8_t dip;                // the unit's DIP switches, bit 0 = DS1
   uint32_t fw_version;        // maj<<16 | min<<8 | patch
-  uint8_t bus_addr;
-  uint32_t bus_ok, bus_err, bus_ours;  // frames received, bad frames, polls to this panel
-  bool bus_offline;                    // no frames from the CX60 for a while, so the values shown are stale
   uint32_t h_total, h_stop, h_min, h_normal, h_max, h_rotor, h_heater;  // run hours
-  uint8_t cpu_busy;                                                     // % of the last second the CPU was awake
-  uint8_t reset_cause;                                                  // RESET_*
-  uint32_t fault_pc;                                                    // PC of the fault, for RESET_FAULT
+  uint8_t dip;                                                          // the unit's DIP switches, bit 0 = DS1
+  uint8_t bus_addr;
+  bool bus_offline;     // no frames from the CX60 for a while, so the values shown are stale
+  uint8_t reset_cause;  // RESET_*
 
   // clock
   uint8_t hh, mi, ss, dd, mo, wday;  // wday 0 = Monday
@@ -179,7 +177,6 @@ typedef struct {
   bool go_home;                   // back to the home view when idle
   bool view_on[VIEW_COUNT];       // views BACK cycles through, dashboard always
   bool temp_dec;                  // temperatures with one decimal
-  bool fast_display;              // pixels to the screen at 18 MHz, 20 at 80, over the controller's rated 10
   uint8_t cpu_speed;              // CPU_MHZ[] index, over the processor's rated 72 MHz above 0
   uint8_t led_ok;                 // LED_OK_*
   bool led_alarm, led_filter;     // use the alarm and filter lights

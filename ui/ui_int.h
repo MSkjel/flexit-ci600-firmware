@@ -48,8 +48,7 @@ void st_font(lv_obj_t *o, const lv_font_t *f);
 void st_radius(lv_obj_t *o, int r, lv_style_selector_t sel);
 void st_align(lv_obj_t *o, lv_text_align_t align);  // left is the default and sets nothing
 void st_border(lv_obj_t *o, int width);
-extern lv_style_t ST_OPAQUE, ST_CENTER, ST_RIGHT, ST_BORDER1, ST_BORDER2, ST_PAD_RIGHT8, ST_PAD_HOR4, ST_ARC_ROUND,
-    ST_TEXT_OPA70;
+extern lv_style_t ST_OPAQUE, ST_CENTER, ST_RIGHT, ST_BORDER1, ST_BORDER2, ST_ARC_ROUND, ST_TEXT_OPA70;
 extern const str_t THEME_NAMES[N_THEMES], MODE_NAMES[MODE_COUNT], DAY_NAMES[7];  // Monday first
 
 // screen_t flags
@@ -76,9 +75,9 @@ typedef struct {
   int16_t sel, top;      // selected row and scroll position, kept while another screen is on top
   const char *title;     // set by ui_set_title(), NULL to use the screen's
   str_t hints[4], help;  // key hints (UP/DOWN, OK, BACK, ?) and the text ? shows
+  bool built;            // built before, so building it again is a rebuild
   lv_obj_t *root;        // overlay container, SF_OVERLAY only
   uint32_t close_at;     // lv_tick_get() time to close at, 0 = never
-  bool built;            // built before, so building it again is a rebuild
 } frame_t;
 
 void ui_push(const screen_t *s, intptr_t arg);
@@ -161,7 +160,7 @@ char *item_text(char *buf, size_t n, const item_t *it, bool unit);  // the value
 
 // Only one full screen is built at a time, so they share one state buffer. Overlays keep their own statics.
 // SCREEN_STATE(type, name) points name into the buffer and checks that type fits.
-#define UI_SCREEN_MEM 256
+#define UI_SCREEN_MEM 160
 extern uint8_t ui_screen_mem[UI_SCREEN_MEM];
 #define SCREEN_STATE(type, name) \
   static type *const name = (type *) (void *) ui_screen_mem; \

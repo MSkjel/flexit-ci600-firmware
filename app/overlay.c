@@ -226,17 +226,17 @@ bool overlay_pixels(int place, uint8_t *px) {
     spread(px, s->w, place_frame(&places[place]), (int) row_bytes(s), &(lv_area_t) {0, 0, s->w - 1, s->h - 1});
     return true;
   }
-  uint8_t *piece = lv_mem_alloc(OVERLAY_PIECE_MAX);
-  if (!piece)
+  uint8_t *rows = lv_mem_alloc(OVERLAY_PIECE_MAX);
+  if (!rows)
     return false;
   memset(px, 16, (size_t) s->w * s->h);
-  uint32_t at = s->sheet ? place_at(p) : 0, k = s->sheet ? record(s, at, NULL, NULL) : 0;
-  for (at += k; at < s->len && !(s->sheet && heads(s, at)); at += k) {
-    lv_area_t a;
-    k = record(s, at, piece, &a);
-    spread(px, s->w, piece, lv_area_get_width(&a) / 2, &a);
+  uint32_t at = s->sheet ? place_at(p) : 0;
+  for (at += s->sheet ? record_len(s, at) : 0; at < s->len && !(s->sheet && heads(s, at)); at += record_len(s, at)) {
+    lv_area_t a = record_area(s, at);
+    piece_rows(s, at, rows);
+    spread(px, s->w, rows, lv_area_get_width(&a) / 2, &a);
   }
-  lv_mem_free(piece);
+  lv_mem_free(rows);
   return true;
 }
 
@@ -301,7 +301,7 @@ static uint32_t unpack(const uint8_t *p, const uint8_t *end, unsigned w, unsigne
       if (p == end)
         return 0;
       uint8_t c = *p++;
-      unsigned n = c < 128 ? c + 1u : c - 126u, k = c < 128 ? n : 1;  // the bytes it makes, and those after it
+      unsigned n = plink_run(c), k = plink_run_bytes(c);
       if (n > left || (unsigned) (end - p) < k)
         return 0;
       if (out) {
@@ -317,28 +317,32 @@ static uint32_t unpack(const uint8_t *p, const uint8_t *end, unsigned w, unsigne
   return (uint32_t) (p - start);
 }
 
-// A record is OVERLAY_RECORD_*: delay, x / 2, y, w / 2, h, then the rectangle, deflated or a still's packed rows
+// A record is OVERLAY_RECORD_*: delay, x / 2, y, w / 2, h, its length, then the rectangle, deflated or a still's
+// packed rows, which have to end where the length says
 uint32_t record(const slot_t *s, uint32_t at, uint8_t *frame, lv_area_t *area) {
   const uint8_t *r = records(s) + at, *end = records(s) + s->len, *d = r + OVERLAY_RECORD_HEAD;
   unsigned rb = row_bytes(s);
   if (end - r < OVERLAY_RECORD_HEAD)
     return 0;
   unsigned x = r[OVERLAY_RECORD_X], y = r[OVERLAY_RECORD_Y], w = r[OVERLAY_RECORD_W], h = r[OVERLAY_RECORD_H];
+  uint32_t len = plink_get16(r + OVERLAY_RECORD_LEN);
   if (!w && !h &&
       ((x == OVERLAY_RECORD_MORE && at && (!s->still || s->sheet)) || (x == OVERLAY_RECORD_FRAME && s->sheet)))
     x = y = 0;  // nothing changes, or a sheet's frame starts
-  if (x + w > rb || y + h > s->h || !w != !h || (s->still && w * h > OVERLAY_PIECE_MAX))
+  if (x + w > rb || y + h > s->h || !w != !h || !w != !len || len > (uint32_t) (end - d) ||
+      (s->still && w * h > OVERLAY_PIECE_MAX))
     return 0;
-  uint32_t n = 0;
-  if (w) {
-    n = s->still ? unpack(d, end, w, h, frame)
-                 : pinflate(d, (uint32_t) (end - d), frame ? frame + y * rb + x : NULL, w, rb, w * h, 0);
-    if (!n)
-      return 0;
-  }
+  if (w && len != (s->still ? unpack(d, d + len, w, h, NULL)
+                            : pinflate(d, len, frame ? frame + y * rb + x : NULL, w, rb, w * h, 0)))
+    return 0;
   if (area)
     *area = (lv_area_t) {x * 2, y, (x + w) * 2 - 1, y + h - 1};
-  return OVERLAY_RECORD_HEAD + n;
+  return OVERLAY_RECORD_HEAD + len;
+}
+
+void piece_rows(const slot_t *s, uint32_t at, uint8_t *out) {
+  const uint8_t *r = records(s) + at;
+  unpack(r + OVERLAY_RECORD_HEAD, r + record_len(s, at), r[OVERLAY_RECORD_W], r[OVERLAY_RECORD_H], out);
 }
 
 // delay is in OVERLAY_TICK_MS at 100 %, scaled by the slot's rate
@@ -356,8 +360,8 @@ void wake(void) {
 // Where the record after a sheet's frame from at is, the one that starts the next or makes it longer, loop_at past the
 // last
 static uint16_t past(const slot_t *s, uint32_t at) {
-  for (at += record(s, at, NULL, NULL); at < s->len && !heads(s, at);)
-    at += record(s, at, NULL, NULL);
+  for (at += record_len(s, at); at < s->len && !heads(s, at);)
+    at += record_len(s, at);
   return (uint16_t) (at < s->len ? at : s->loop_at);
 }
 

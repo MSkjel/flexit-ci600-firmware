@@ -23,7 +23,8 @@ static void info_picture(char *b, size_t n) {
   else
     copy_text(b, n, _(S_NONE_YET));
 }
-static void hours(char *b, size_t n, uint32_t h) {
+// These three are each several rows' text. Not inlined, or every row would get a copy.
+static __attribute__((noinline)) void hours(char *b, size_t n, uint32_t h) {
   if (h >= 1000)
     sprint(b, n, _(S_HOURS_THOUSANDS), (unsigned long) h / 1000, (unsigned long) h % 1000);
   else
@@ -37,10 +38,12 @@ static void info_h_max(char *b, size_t n) { hours(b, n, M.h_max); }
 static void info_h_rotor(char *b, size_t n) { hours(b, n, M.h_rotor); }
 static void info_h_heater(char *b, size_t n) { hours(b, n, M.h_heater); }
 static void info_filter_resets(char *b, size_t n) { sprint(b, n, "%u", M.filter_resets); }
-static void dip(char *b, size_t n, int ds) { copy_text(b, n, (M.dip >> ds) & 1 ? _(S_ON) : _(S_OFF)); }
+static __attribute__((noinline)) void dip(char *b, size_t n, int ds) {
+  copy_text(b, n, (M.dip >> ds) & 1 ? _(S_ON) : _(S_OFF));
+}
 static void info_ds2(char *b, size_t n) { dip(b, n, 1); }
 static void info_ds3(char *b, size_t n) { dip(b, n, 2); }
-static void panel_version(char *b, size_t n, int i) {
+static __attribute__((noinline)) void panel_version(char *b, size_t n, int i) {
   uint16_t v = M.panel_version[i];
   if (v)
     sprint(b, n, "%d.%d", v >> 8, v & 0xFF);
@@ -303,8 +306,7 @@ MENU(m_display, S_DISPLAY,
      ENUM(IC_LIST, S_LANGUAGE, V_LANGUAGE, S_LANGUAGE_HELP, .fn = &LANG_OPTS),
      TOG(IC_CLOCK, S_N_24_HOUR_CLOCK, V_CLOCK_24H, S_N_24_HOUR_CLOCK_HELP),
      ENUM(IC_THERMO, S_TEMPERATURES, V_TEMP_DEC, S_TEMPERATURES_HELP, OPTS(O_DECIMALS)),
-     TOG(IC_HELP, S_KEY_HINTS, V_KEY_HINTS, S_KEY_HINTS_HELP),
-     TOG(IC_MONITOR, S_FAST_DISPLAY, V_FAST_DISPLAY, S_FAST_DISPLAY_HELP, .done = S_ONLY_UP_TO_80_MHZ));
+     TOG(IC_HELP, S_KEY_HINTS, V_KEY_HINTS, S_KEY_HINTS_HELP));
 
 MENU(m_saver, S_SCREENSAVER,
      ENUM(IC_SLEEP, S_IDLE_AFTER, V_IDLE_AFTER, S_IDLE_AFTER_HELP, OPTS(O_IDLE_AFTER)),
@@ -502,10 +504,11 @@ static char period_title[24];
 
 // Title like "Monday, period 2", numbered by where the period is in the day now
 static void period_name(void) {
+  period_t w[PERIODS_PER_DAY];
   int n = 0;
-  for (int i = 0; i < M.n_periods[M.period.day]; i++) {
+  for (int i = 0, k = sched_day(M.period.day, w); i < k; i++) {
     n++;
-    if (M.week[M.period.day][i].idx == M.period.p.idx)
+    if (w[i].idx == M.period.p.idx)
       break;
   }
   lv_snprintf(period_title, sizeof period_title, _(S_DAY_PERIOD), tr(DAY_NAMES[M.period.day % 7]), n);

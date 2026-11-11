@@ -9,7 +9,7 @@ picture.
 | What | Part |
 |---|---|
 | MCU | STM32F103RET6 (LQFP64), 72 MHz, 512 KiB flash, 64 KiB RAM |
-| Screen | 320x240 TFT with an ILI932x controller, on SPI |
+| Screen | 320x240 TFT with an ILI932x controller, on SPI. Only the 16x8 tiles that changed are sent (`app/sent.c`) |
 | Keys | Five: up, down, OK, back and ? |
 | Lights | Alarm, filter and OK |
 | Backlight | PWM, so it can dim |
