@@ -1,25 +1,27 @@
-// The days shows, see met_live_days.h
+// The days' acts, see met_live_days.h
 static void live_days() {
   step("the weather animations: the days (packages/code/met/met_live_days.h)");
   // show, symbol, clouds high mid low, rain, wind, temperature, fog, UTC, ground, heater, seconds, shots, lat lon
+  // the spruce has its lights from Advent, glinting every night
+  show({"The lights on the spruce", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 12, 6, 18), met::G_HILLS, 2, 30,
+        2});
   // Christmas Eve, a frosty evening: the lights, the star, the candles, and the sleigh
-  show({"Christmas Eve", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2025, 12, 24, 17), met::G_HILLS, 2, 60, 4},
+  show({"Christmas Eve + The lights on the spruce", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2025, 12, 24, 17),
+        met::G_HILLS, 2, 60, 4},
        "hills", true);
-  show({"Christmas Eve", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2025, 12, 24, 17), met::G_COAST, 2, 30, 1},
+  show({"Christmas Eve + The lights on the spruce", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2025, 12, 24, 17),
+        met::G_COAST, 2, 30, 1},
        "coast", true);
-  show(
-      {"Christmas Eve", "partlycloudy_night", 0, 30, 0, 0, 3, -2, 0, utc(2025, 12, 24, 21), met::G_MOUNTAINS, 0, 30, 1},
-      "mountains", true);
-  // Christmas Day is a flag day. On Svalbard it's dark while the flag is up. Christmas Eve has no room for it, so
-  // the picture keeps its own, in town there's room
-  show({"Christmas Eve", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_MOUNTAINS, 0, 50, 1, 78.22,
-        15.65},
+  show({"Christmas Eve + The lights on the spruce", "partlycloudy_night", 0, 30, 0, 0, 3, -2, 0, utc(2025, 12, 24, 21),
+        met::G_MOUNTAINS, 0, 30, 1},
+       "mountains", true);
+  // Christmas Day is a flag day. On Svalbard it's dark while the flag is up, and it waves beside the lights
+  show({"Christmas Eve + The lights on the spruce + The flag", "cloudy", 0, 0, 80, 0, 4, -10, 0,
+        utc(2025, 12, 25, 10, 30), met::G_MOUNTAINS, 0, 50, 1, 78.22, 15.65},
        "svalbard", true);
-  CHECK_MSG(!live::R.flag, "Christmas Eve on Svalbard: the flag animated");
-  show({"Christmas Eve in town", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_CITY, 0, 50, 1,
-        78.22, 15.65},
+  show({"Christmas Eve in town + The flag", "cloudy", 0, 0, 80, 0, 4, -10, 0, utc(2025, 12, 25, 10, 30), met::G_CITY, 0,
+        50, 1, 78.22, 15.65},
        "svalbard", true);
-  CHECK_MSG(live::R.flag, "Christmas Eve in town on Svalbard: no flag, though there's room");
   show({"Christmas Eve in town", "clearsky_night", 0, 0, 0, 0, 2, -4, 0, utc(2025, 12, 24, 17), met::G_CITY, 0, 60, 4},
        "city", true);
   // New Year's Eve: now and then in the evening, a rocket every few seconds at midnight
@@ -68,15 +70,15 @@ static void live_days() {
   show({"Easter", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 3, 11), met::G_MOUNTAINS, 0, 40, 2}, "mountains",
        true);
   show({"Easter", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 3, 11), met::G_CITY, 0, 40, 2}, "city", true);
-  show({"Easter", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 5, 12), met::G_HILLS, 0, 60, 6}, "hills", true);
-  CHECK_MSG(live::R.flag, "Easter Sunday without the flag");
+  show({"Easter + The flag", "fair_day", 20, 0, 0, 0, 3, 9, 0, utc(2026, 4, 5, 12), met::G_HILLS, 0, 60, 6}, "hills",
+       true);
   // 17 May, with the flag: the parade and a balloon
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_COAST, 0, 40, 2}, "coast", true);
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_CITY, 0, 40, 2}, "city", true);
   show({"17 May", "fair_day", 20, 0, 0, 0, 3, 14, 0, utc(2026, 5, 17, 12), met::G_MOUNTAINS, 0, 40, 2}, "mountains",
        true);
-  show({"17 May", "clearsky_day", 0, 0, 0, 0, 3, 16, 0, utc(2026, 5, 17, 12), met::G_HILLS, 0, 70, 6}, "hills", true);
-  CHECK_MSG(live::R.flag, "17 May without the flag");
+  show({"17 May + The flag", "clearsky_day", 0, 0, 0, 0, 3, 16, 0, utc(2026, 5, 17, 12), met::G_HILLS, 0, 70, 6},
+       "hills", true);
   // Sankthans, the evening of 23 June
   show({"Sankthans", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 6, 23, 20, 30), met::G_COAST, 0, 30, 1}, "coast");
   show({"Sankthans", "clearsky_day", 0, 0, 0, 0, 2, 16, 0, utc(2026, 6, 23, 20, 30), met::G_CITY, 0, 30, 1}, "city");
@@ -94,7 +96,7 @@ static void live_days() {
        "mountains", true);
   show({"Halloween", "clearsky_night", 0, 0, 0, 0, 2, 4, 0, utc(2026, 10, 31, 20), met::G_HILLS, 0, 100, 8}, "hills",
        true);
-  // the moon up by the time its witch flies, after the show started, and she goes through it and is gone
+  // the moon up by the time its witch flies, after the act started, and she goes through it and is gone
   show({"Halloween", "clearsky_night", 0, 0, 0, 0, 2, 4, 0, utc(2026, 10, 31, 19), met::G_HILLS, 0, 2, 0}, "moonrise");
   was = log_all.size();
   flexit_panel_time.t.timestamp = utc(2026, 10, 31, 22);
@@ -102,7 +104,7 @@ static void live_days() {
   const met::Scene &night = panel_scene();
   CHECK_MSG(picture("Halloween at 22", 6000) >= 0 && night.moon && live::SEEN.moon_x == night.moon_x &&
                 !logged("Weather animation:", was),
-            "Halloween at 22: the moon at %d, the show started again %d", live::SEEN.moon_x,
+            "Halloween at 22: the moon at %d, the act started again %d", live::SEEN.moon_x,
             logged("Weather animation:", was));
   chances_now();
   Path witch;
@@ -115,6 +117,6 @@ static void live_days() {
        "mountains");
   show({"Valentine's Day", "fair_day", 20, 0, 0, 0, 3, -2, 0, utc(2026, 2, 14, 12), met::G_COAST, 40, 30, 1}, "coast");
   show({"Valentine's Day", "fair_day", 20, 0, 0, 0, 3, -2, 0, utc(2026, 2, 14, 12), met::G_HILLS, 0, 60, 4}, "hills");
-  met::animate(false);  // the last of the shows
+  met::animate(false);  // the last of them
   run(20);
 }

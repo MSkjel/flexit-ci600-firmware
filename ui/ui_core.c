@@ -144,6 +144,7 @@ static void build(int i) {
     lv_obj_set_size(body, SCR_W, full ? SCR_H : BODY_H);
     st_bg(lv_scr_act(), T.bg, 0);  // the screensaver may have made it black
     lv_obj_add_flag(dots, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clean(dots);  // the home screen's, which makes them again
     f->s->build(body, f->arg);
   }
   f->built = true;
@@ -242,10 +243,6 @@ void ui_rebuild(void) {
   apply_theme();  // the bars keep their objects and follow through the shared styles, but for the hint bar's line
   lv_obj_set_style_border_color(hintbar, T.line, 0);
   memset(shown_hints, 0xFF, sizeof shown_hints);  // force a redraw
-  if (toast) {                                    // it isn't an overlay, so it would keep the old colours
-    lv_obj_del(toast);
-    toast = NULL;
-  }
   rebuild_visible();
 }
 
@@ -318,23 +315,56 @@ void ui_hints(str_t ud, str_t ok, str_t back, str_t help) {
 
 // Each hint is the key's arrows or its name on a small plate, then what it does
 static void draw_hints(const str_t *h) {
-  static const char *const ARROWS[4] = {IC_UP IC_DOWN, NULL, IC_LEFT, NULL}, *const CAPS[4] = {NULL, "OK", NULL, "?"};
   memcpy(shown_hints, h, sizeof shown_hints);
-  lv_obj_clean(hintbar);
+  lv_obj_invalidate(hintbar);
+}
+
+// A line of text at x, y in the hint bar, and how wide it is
+static int hint_text(lv_draw_ctx_t *ctx, int x, int y, const lv_font_t *f, lv_color_t c, const char *txt) {
+  lv_point_t size;
+  lv_txt_get_size(&size, txt, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  lv_draw_label_dsc_t d;
+  lv_draw_label_dsc_init(&d);
+  d.font = f;
+  d.color = c;
+  d.flag = LV_TEXT_FLAG_FIT;
+  lv_area_t a = {(lv_coord_t) x, (lv_coord_t) y, (lv_coord_t) (x + size.x - 1), (lv_coord_t) (y + f->line_height - 1)};
+  lv_draw_label(ctx, &d, &a, txt, NULL);
+  return size.x;
+}
+
+// The bar draws its hints itself, each one its key and what the key does: the arrows as icons, OK and ? on a plate.
+// From the left with 4 px between the parts and 8 after a text, the row's height the tallest part's and each part
+// centred in it: where a flex row of labels would put them, without the eight objects.
+static void hints_draw(lv_event_t *e) {
+  static const char *const ARROWS[4] = {IC_UP IC_DOWN, NULL, IC_LEFT, NULL}, *const CAPS[4] = {NULL, "OK", NULL, "?"};
+  lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+  const str_t *h = shown_hints;
+  int line = font_f12.line_height, row = line;
+  for (int k = 0; k < 4; k++)
+    if (h[k] && ARROWS[k])
+      row = icons_16.line_height;
+  // inside the 1 px of border, which LVGL takes off every side though only the top one is drawn
+  int x = hintbar->coords.x1 + 1 + 8, top = hintbar->coords.y1 + 1 + (HINT_H - 2 - row) / 2, even = (row + 1) & ~1;
+  int text_y = top + (even - line) / 2;
   for (int k = 0; k < 4; k++) {
     if (!h[k])
       continue;
     if (ARROWS[k]) {
-      mk_icon(hintbar, &icons_16, T.text, ARROWS[k]);
+      x += hint_text(ctx, x, top + (even - icons_16.line_height) / 2, &icons_16, T.text, ARROWS[k]) + 4;
     } else {
-      lv_obj_t *cap = mk_label(hintbar, &font_f12, T.bg, CAPS[k]);
-      st_bg(cap, T.dim, 0);
-      lv_obj_add_style(cap, &ST_OPAQUE, 0);
-      st_radius(cap, 3, 0);
-      lv_obj_add_style(cap, &ST_PAD_HOR4, 0);
+      lv_point_t size;
+      lv_txt_get_size(&size, CAPS[k], &font_f12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+      lv_draw_rect_dsc_t plate;
+      lv_draw_rect_dsc_init(&plate);
+      plate.bg_color = T.dim;
+      plate.radius = 3;
+      lv_area_t a = {(lv_coord_t) x, (lv_coord_t) text_y, (lv_coord_t) (x + size.x + 7),
+                     (lv_coord_t) (text_y + line - 1)};
+      lv_draw_rect(ctx, &plate, &a);
+      x += hint_text(ctx, x + 4, text_y, &font_f12, T.bg, CAPS[k]) + 8 + 4;
     }
-    lv_obj_t *t = mk_label(hintbar, &font_f12, T.dim, tr(h[k]));
-    lv_obj_add_style(t, &ST_PAD_RIGHT8, 0);
+    x += hint_text(ctx, x, text_y, &font_f12, T.dim, tr(h[k])) + 8 + 4;
   }
 }
 
@@ -410,11 +440,16 @@ void ui_wake(void) {
     ui_pop();
 }
 
-void ui_idle(void) {
-  bool unread = false;  // an open message, alarm pop-up or trial, going home would drop it
+// An open message, alarm pop-up or trial: going home would drop it
+static bool unread(void) {
   for (int i = 0; i < depth; i++)
-    unread |= stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP || stack[i].s == &SCR_TRIAL;
-  if (M.go_home && !unread)  // Display > Home screen > Back to start view
+    if (stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP || stack[i].s == &SCR_TRIAL)
+      return true;
+  return false;
+}
+
+void ui_idle(void) {
+  if (M.go_home && !unread())  // Display > Home screen > Back to start view
     ui_show_view(M.home_view);
   if (M.screensaver)
     ui_push(&SCR_SAVER, 0);
@@ -473,7 +508,7 @@ void ui_second(void) {
     M.note_new = false;
     ui_remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
     input_activity();
-    ui_push(&SCR_NOTE, 0);
+    ui_push(&SCR_NOTE, M.hh * 60 + M.mi);
   }
   ui_refresh();
 }
@@ -490,6 +525,12 @@ void ui_value_changed(val_t v) {
 
 void ui_layout_changed(void) {
   if (ready)
+    rebuild_due = true;
+}
+
+// The screensaver shows none of them, and what's under it is built again when it closes
+void ui_items_changed(void) {
+  if (ready && stack[base_of(depth - 1)].s != &SCR_SAVER)
     rebuild_due = true;
 }
 
@@ -510,9 +551,13 @@ void ui_alarms_changed(void) {
       rebuild_due = true;
 }
 
+// With something unread open the view only changes under it
 void ui_show_view(int view) {
   stack[0] = (frame_t) {.s = &SCR_HOME, .arg = view};
-  ui_go_home();
+  if (unread())
+    rebuild_due = true;
+  else
+    ui_go_home();
 }
 
 // IC_* glyph for each ESP link icon id
@@ -531,18 +576,19 @@ void ui_init(void) {
   lv_obj_t *scr = lv_scr_act();
   st_bg(scr, T.bg, 0);
   lv_obj_add_style(scr, &ST_OPAQUE, 0);
-  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   body = mk_group(scr, SCR_W, BODY_H);
   bar = mk_box(scr, 0, 0, SCR_W, BAR_H, T.bg, 0);
+  // The clock at the left, the title in the middle and the status icons at the right, each at mid height. Placed
+  // by their text's alignment in a label of a set width: lv_obj_align() keeps a style of its own for each.
   clock_lbl = mk_label(bar, &font_f16, T.text, "");
-  lv_obj_align(clock_lbl, LV_ALIGN_LEFT_MID, 10, 0);
-  title_lbl = mk_label(bar, &font_f14, T.dim, "");
-  lv_obj_align(title_lbl, LV_ALIGN_CENTER, 0, 0);
-  status_lbl = mk_icon(bar, &icons_16, T.dim, "");
+  lv_obj_set_pos(clock_lbl, 10, BAR_H / 2 - font_f16.line_height / 2);
+  title_lbl = mk_text(bar, &font_f14, T.dim, "", SCR_W - 1, LV_TEXT_ALIGN_CENTER);  // odd, so it centres as an object
+  lv_obj_set_pos(title_lbl, 1, BAR_H / 2 - font_f14.line_height / 2);
+  status_lbl = mk_text(bar, &icons_16, T.dim, "", SCR_W - 6, LV_TEXT_ALIGN_RIGHT);
   lv_label_set_recolor(status_lbl, true);
   lv_obj_set_style_text_letter_space(status_lbl, 6, 0);
-  lv_obj_align(status_lbl, LV_ALIGN_RIGHT_MID, -6, 0);
+  lv_obj_set_pos(status_lbl, 0, BAR_H / 2 - icons_16.line_height / 2);
   dots = mk_group(bar, LV_SIZE_CONTENT, 8);
   lv_obj_set_flex_flow(dots, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -553,10 +599,7 @@ void ui_init(void) {
   lv_obj_set_style_border_side(hintbar, LV_BORDER_SIDE_TOP, 0);
   lv_obj_add_style(hintbar, &ST_BORDER1, 0);
   lv_obj_set_style_border_color(hintbar, T.line, 0);
-  lv_obj_set_style_pad_left(hintbar, 8, 0);
-  lv_obj_set_style_pad_column(hintbar, 4, 0);
-  lv_obj_set_flex_flow(hintbar, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(hintbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_add_event_cb(hintbar, hints_draw, LV_EVENT_DRAW_MAIN_END, NULL);
 
   lv_timer_create(close_check, 100, NULL);
   lv_timer_create(rebuild_check, 0, NULL);

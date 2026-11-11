@@ -115,9 +115,9 @@ static void alarm_row(int i, const alarm_t *a, bool hist) {
   set_text(when, _(S_ALARM_WHEN), hist ? (a->active ? _(S_ACTIVE_SINCE) : _(S_LOGGED)) : _(S_SINCE), a->dd, a->mo,
            fmt_hm(hm, sizeof hm, a->hh * 60 + a->mi));
   lv_obj_set_pos(when, 36, y + 20);
-  lv_obj_t *code = mk_label(alarms->list, &font_f12, T.faint, "");
+  lv_obj_t *code = mk_text(alarms->list, &font_f12, T.faint, "", SCR_W - 18, LV_TEXT_ALIGN_RIGHT);
   set_text(code, "#%d", a->code);
-  lv_obj_align(code, LV_ALIGN_TOP_RIGHT, -18, y + 12);
+  lv_obj_set_pos(code, 0, y + 12);
 }
 
 static void alarms_build(lv_obj_t *b, intptr_t arg) {
@@ -152,15 +152,15 @@ static bool alarms_key(int k) { return alarms->list && sel_key(k, alarms->n); }
 const screen_t SCR_ALARMS = {.build = alarms_build, .update = alarms_update, .key = alarms_key};
 
 // ---------------------------------------------------------------- message from the ESP
+// arg: the minute of the day it came at, so it still says that when it's built again
 static void note_build(lv_obj_t *b, intptr_t arg) {
-  (void) arg;
   bool alarm = M.note_level == NOTE_ALARM, warning = M.note_level == NOTE_WARNING;
   lv_color_t c = alarm ? T.err : warning ? T.warn : T.accent;
   str_t kind = alarm ? S_ALARM_CAPS : warning ? S_WARNING_CAPS : S_MESSAGE_CAPS;
   lv_obj_t *card = alert_card(b, 22, NOTE_W, 152, c, 44, &icons_22, icon_glyph(M.note_icon), tr(kind));
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
-  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, M.hh * 60 + M.mi));
+  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, (int) arg));
   lv_obj_set_pos(w, BESIDE(44), 30);
   mk_wrap(card, &font_f16, T.text, M.note, CARD_PAD, 70, NOTE_W - 2 * CARD_PAD);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);

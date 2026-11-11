@@ -171,6 +171,16 @@ def icon_map(nerd):
     return [(c, g, by_name["md-" + g]) for c, g in ICONS]
 
 
+# What a font file has that the firmware doesn't use: LV_USE_USER_DATA is off, and LVGL's last-glyph cache, 8 bytes
+# of RAM a font, sits behind the one lvgl-ci600.patch adds for all of them
+UNUSED = [
+    "    .user_data = NULL,\n",
+    "#if LVGL_VERSION_MAJOR == 8\n/*Store all the custom data of the font*/\n"
+    "static  lv_font_fmt_txt_glyph_cache_t cache;\n#endif\n",
+    "#if LVGL_VERSION_MAJOR == 8\n    .cache = &cache\n#endif\n",
+]
+
+
 def conv(out, args):
     """Run lv_font_conv to write the font file `out`."""
     for f in [a for i, a in enumerate(args) if i and args[i - 1] == "--font"]:
@@ -179,8 +189,10 @@ def conv(out, args):
     cmd = ["npx", "-y", CONV, "--bpp", "4", "--format", "lvgl", "--no-compress", "--lv-include", "lvgl.h"]
     subprocess.run(cmd + args + ["-o", out], check=True, cwd=ROOT, stdout=subprocess.DEVNULL)
     path = os.path.join(ROOT, out)
-    with open(path) as f:  # drop .user_data, LV_USE_USER_DATA is off
-        text = f.read().replace("    .user_data = NULL,\n", "")
+    with open(path) as f:
+        text = f.read()
+    for unused in UNUSED:
+        text = text.replace(unused, "")
     with open(path, "w") as f:
         f.write(text)
 

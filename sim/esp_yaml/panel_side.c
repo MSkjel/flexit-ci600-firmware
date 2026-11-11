@@ -88,15 +88,16 @@ int pn_item(int i, int *flags, int *icon, int *dec, int *step, int *id, int *min
   *dec = it->dec;
   *step = it->step;
   *id = it->id;
-  *min = it->min;
-  *max = it->max;
+  val_def_t d = val_def((val_t) (V_ITEM_FIRST + i));
+  *min = d.min;
+  *max = d.max;
   *value = it->value;
   *label = it->label;
   *unit = it->unit;
   return it->type;
 }
-int pn_item_level(int i, int k) { return M.items[i].level[k]; }  // item i's level k as the panel has it
-const char *pn_item_text(int i) {                                // item i's value as the panel shows it
+int pn_item_level(int i, int k) { return M.items[i].u.level[k]; }  // item i's level k as the panel has it
+const char *pn_item_text(int i) {                                  // item i's value as the panel shows it
   static char b[24];
   return item_text(b, sizeof b, &M.items[i], true);
 }
@@ -142,7 +143,12 @@ int pn_anim(int place, pn_look_t *out) {
   overlay_look_t l;
   if (!overlay_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x, l.y, l.deg, l.flip, l.size, l.opa, l.depth, l.still, l.light};
+  *out = (pn_look_t) {l.x,        l.y,        l.deg,        l.view & (OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y),
+                      l.size,     l.opa,      l.depth,      l.still,
+                      l.light,    l.pan[0],   l.pan[1],     l.w,
+                      l.h,        l.view,     l.size_xy[0], l.size_xy[1],
+                      l.pivot[0], l.pivot[1], l.box.x1,     l.box.y1,
+                      l.box.x2,   l.box.y2};
   return 1;
 }
 int pn_overlay_covered(int place, int x, int y) { return overlay_covered(place, x, y); }
@@ -203,6 +209,8 @@ void pn_draw(int ms) {
   lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
 }
+
+uint32_t pn_pixel(int x, int y) { return sim_pixel(x, y); }
 
 void pn_shot(const char *dir, const char *name) {
   pn_saver(1);

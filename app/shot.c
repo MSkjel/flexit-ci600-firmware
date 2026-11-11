@@ -1,9 +1,11 @@
 // Screenshots for the ESP, see shot.h
 #include "shot.h"
+#include "bits.h"
 #include "pbulk.h"
 #include "picture.h"
 #include "pjpeg.h"
 #include "plink.h"
+#include "sent.h"
 #include "ui.h"
 #include <string.h>
 
@@ -15,12 +17,13 @@
 // the zeros stuffed after FF bytes, so the last always fits behind what's waiting.
 static const uint16_t DROP[] = {0, 1, 2, 3, 5, 8, 13, 21, 34, PJPEG_DC_ONLY};
 _Static_assert(SHOT_TILE_W / 16 * 4 * 8 <= BUF_SIZE - LOW - SHOT_TILE_HEAD, "a tile of only DC fits");
+_Static_assert(SHOT_TILE_H == SENT_TILE_H && SHOT_TILE_W % SENT_TILE_W == 0, "the LCD's tiles, a strip has all of one");
 
 typedef uint32_t tiles_t[(SHOT_TILES + 31) / 32];
-#define WORDS (int) (sizeof(tiles_t) / sizeof(uint32_t))
+#define WORDS (sizeof(tiles_t) / sizeof(uint32_t))
 
 static struct {
-  tiles_t dirty;     // drawn over since they were last sent
+  tiles_t dirty;     // changed on the LCD since they were last sent
   tiles_t todo;      // still to send for the ESP's SHOT
   uint8_t quality;   // the SHOT's, 0 = none
   uint8_t want;      // the tile we wait to see drawn + 1, 0 = none
@@ -32,25 +35,7 @@ static struct {
   uint8_t buf[BUF_SIZE];
 } S;
 
-static bool has(const tiles_t t, int i) { return t[i / 32] >> (i % 32) & 1; }
-static void add(tiles_t t, int i) { t[i / 32] |= 1u << (i % 32); }
-static void drop(tiles_t t, int i) { t[i / 32] &= ~(1u << (i % 32)); }
-
-static int first(const tiles_t t) {  // -1 for none
-  for (int i = 0; i < SHOT_TILES; i++)
-    if (has(t, i))
-      return i;
-  return -1;
-}
-
-static bool any(const tiles_t t) {
-  for (int i = 0; i < WORDS; i++)
-    if (t[i])
-      return true;
-  return false;
-}
-
-static bool running(void) { return S.quality && (S.want || any(S.todo)); }
+static bool running(void) { return S.quality && (S.want || bit_first(S.todo, WORDS) >= 0); }
 
 static lv_area_t area_of(int t) {
   lv_coord_t x = (lv_coord_t) (t % SHOT_COLS * SHOT_TILE_W), y = (lv_coord_t) (t / SHOT_COLS * SHOT_TILE_H);
@@ -63,7 +48,7 @@ void shot_reset(void) {
   if (S.at < S.len)
     for (int i = 0; i < 2; i++)
       if (S.last[i])
-        add(S.dirty, S.last[i] - 1);
+        bit_put(S.dirty, (unsigned) (S.last[i] - 1), true);
   memset(S.todo, 0, sizeof S.todo);
   memset(S.last, 0, sizeof S.last);
   S.quality = S.want = 0;
@@ -78,7 +63,7 @@ void shot_ask(uint32_t v) {
     return;
   }
   S.quality = (uint8_t) LV_MIN(q, 100u);
-  for (int i = 0; i < WORDS; i++)
+  for (unsigned i = 0; i < WORDS; i++)
     S.todo[i] |= v & SHOT_ALL ? ~0u : S.dirty[i];
   if (SHOT_TILES % 32)
     S.todo[WORDS - 1] &= (1u << SHOT_TILES % 32) - 1;
@@ -86,19 +71,7 @@ void shot_ask(uint32_t v) {
   S.done = true;
 }
 
-void shot_round(lv_disp_drv_t *d, lv_area_t *a) {
-  pic_round(d, a);
-  // LVGL asking how high a strip may be, only while it draws. Below a tile row it would find no height that fits.
-  bool probe = lv_disp_get_default()->rendering_in_progress;
-  if (!probe)
-    for (int r = a->y1 / SHOT_TILE_H; r <= LV_MIN(a->y2 / SHOT_TILE_H, SHOT_ROWS - 1); r++)
-      for (int c = a->x1 / SHOT_TILE_W; c <= LV_MIN(a->x2 / SHOT_TILE_W, SHOT_COLS - 1); c++)
-        add(S.dirty, r * SHOT_COLS + c);
-  if (running() && (!probe || a->y2 >= SHOT_TILE_H - 1)) {
-    a->y1 = (lv_coord_t) (a->y1 & ~(SHOT_TILE_H - 1));
-    a->y2 = (lv_coord_t) (a->y2 | (SHOT_TILE_H - 1));
-  }
-}
+void shot_changed(int x, int y) { bit_put(S.dirty, (unsigned) (y / SHOT_TILE_H * SHOT_COLS + x / SHOT_TILE_W), true); }
 
 typedef struct {  // a flushed area's pixels, and where they are
   const lv_color_t *px;
@@ -130,18 +103,18 @@ void shot_flushed(const lv_area_t *a, const lv_color_t *px) {
   S.len = (uint16_t) (left + SHOT_TILE_HEAD + n);
   S.last[1] = S.last[0];
   S.last[0] = (uint8_t) (t + 1);
-  drop(S.dirty, t);
-  drop(S.todo, t);
+  bit_put(S.dirty, (unsigned) t, false);
+  bit_put(S.todo, (unsigned) t, false);
   S.want = 0;
   S.sent++;
 }
 
 void shot_poll(void) {
-  if (!S.quality || S.len - S.at >= LOW || ui_held())
-    return;  // the next goes behind what's waiting
+  if (!running() || S.len - S.at >= LOW || ui_held())
+    return;  // none to send, or the next goes behind what's waiting
   if (S.want && lv_tick_elaps(S.asked) < AGAIN_MS)
     return;  // not drawn yet
-  int t = S.want ? S.want - 1 : first(S.todo);
+  int t = S.want ? S.want - 1 : bit_first(S.todo, WORDS);
   if (t < 0)
     return;
   S.want = (uint8_t) (t + 1);

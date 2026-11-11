@@ -14,9 +14,8 @@ static lv_style_t font_st[LEN(FONTS)];
 static struct {
   uint8_t r;
   lv_style_t st;
-} radius_st[] = {{.r = CARD_RADIUS}, {.r = 10}, {.r = 4}, {.r = 3}};  // the radii many boxes have
-lv_style_t ST_OPAQUE, ST_CENTER, ST_RIGHT, ST_BORDER1, ST_BORDER2, ST_PAD_RIGHT8, ST_PAD_HOR4, ST_ARC_ROUND,
-    ST_TEXT_OPA70;
+} radius_st[] = {{.r = CARD_RADIUS}, {.r = 10}, {.r = 6}, {.r = 4}, {.r = 3}, {.r = 2}};  // the radii boxes have
+lv_style_t ST_OPAQUE, ST_CENTER, ST_RIGHT, ST_BORDER1, ST_BORDER2, ST_ARC_ROUND, ST_TEXT_OPA70;
 _Static_assert(sizeof(theme_t) == N_COLOURS * sizeof(lv_color_t), "the theme's colours as an array");
 _Static_assert(CARD_RADIUS == PILL_RADIUS, "one radius style for both");
 
@@ -125,8 +124,6 @@ void st_init(void) {
   lv_style_init(&ST_RIGHT);
   lv_style_init(&ST_BORDER1);
   lv_style_init(&ST_BORDER2);
-  lv_style_init(&ST_PAD_HOR4);
-  lv_style_init(&ST_PAD_RIGHT8);
   lv_style_init(&ST_ARC_ROUND);
   lv_style_init(&ST_TEXT_OPA70);
   lv_style_set_bg_opa(&ST_OPAQUE, LV_OPA_COVER);
@@ -134,8 +131,6 @@ void st_init(void) {
   lv_style_set_text_align(&ST_RIGHT, LV_TEXT_ALIGN_RIGHT);
   lv_style_set_border_width(&ST_BORDER1, 1);
   lv_style_set_border_width(&ST_BORDER2, 2);
-  lv_style_set_pad_hor(&ST_PAD_HOR4, 4);
-  lv_style_set_pad_right(&ST_PAD_RIGHT8, 8);
   lv_style_set_arc_rounded(&ST_ARC_ROUND, true);
   lv_style_set_text_opa(&ST_TEXT_OPA70, LV_OPA_70);
 }

@@ -32,7 +32,10 @@ int pn_pic_format(void);
 int pn_pic_line(int y, uint16_t *out);
 // A place of the animations as the panel has it, see overlay_look_t
 typedef struct {
-  int x, y, deg, flip, size, opa, depth, still, light;
+  int x, y, deg, flip, size, opa, depth, still, light;  // flip: OVERLAY_VIEW_FLIP_*
+  int pan_x, pan_y, w, h, view;                         // its box and where its frame is in it, OVERLAY_VIEW_*
+  int size_x, size_y, pivot_x, pivot_y;                 // in 1/1000, the pivot of its box
+  int x1, y1, x2, y2;                                   // what it's drawn in on the screen
 } pn_look_t;
 int pn_anim(int place, pn_look_t *l);
 int pn_overlay_covered(int place, int x, int y);  // a part of the picture covers place at x, y on the screen
@@ -45,7 +48,8 @@ void pn_saver(int on);
 void pn_saver_texts(int mode, int top);  // what the screensaver shows over the picture, SAVER_*, and at which edge
 int pn_texts(int *out, int max);         // the screensaver's texts, x1 y1 x2 y2 each, tight to the text
 void pn_shot(const char *dir, const char *name);
-void pn_draw(int ms);  // ms on, the panel draws as its main loop does
+void pn_draw(int ms);             // ms on, the panel draws as its main loop does
+uint32_t pn_pixel(int x, int y);  // on the screen as it's drawn now, 0xRRGGBB
 
 #ifdef __cplusplus
 }

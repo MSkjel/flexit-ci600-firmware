@@ -10,7 +10,6 @@
 lv_obj_t *mk_group(lv_obj_t *p, int w, int h) {
   lv_obj_t *o = lv_obj_create(p);
   lv_obj_set_size(o, w, h);
-  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
   return o;
 }
 
@@ -105,8 +104,7 @@ void set_text(lv_obj_t *l, const char *fmt, ...) {
   va_start(ap, fmt);
   lv_vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
-  if (strcmp(lv_label_get_text(l), buf))  // LVGL draws the same text again
-    lv_label_set_text(l, buf);
+  lv_label_set_text(l, buf);  // the text it has already doesn't draw again, see lvgl-ci600.patch
 }
 
 int sprint(char *buf, size_t n, const char *fmt, ...) {
@@ -251,8 +249,9 @@ uint32_t ui_hex(lv_color_t c) { return lv_color_to32(c) & 0xFFFFFF; }
 
 lv_obj_t *mk_day_bar(lv_obj_t *p, int x, int y, int w, int h, int day) {
   lv_obj_t *track = mk_box(p, x, y, w, h, T.surface, 4);
-  for (int i = 0; i < M.n_periods[day]; i++) {
-    const period_t *s = &M.week[day][i];
+  period_t per[PERIODS_PER_DAY];
+  for (int i = 0, n = sched_day(day, per); i < n; i++) {
+    const period_t *s = &per[i];
     int a = s->start * w / 1440, e = s->end * w / 1440;
     mk_box(track, a, 0, e - a, h, level_color(s->level), 4);
   }
@@ -297,11 +296,12 @@ lv_color_t item_color(const item_t *it) {
   if (!(it->flags & ITEMF_LEVELS) || it->value == ITEM_UNKNOWN)
     return T.accent;
   int32_t v = it->value;
-  return v < it->level[0] || v > it->level[3] ? T.err : v < it->level[1] || v > it->level[2] ? T.warn : T.ok;
+  const int16_t *l = it->u.level;
+  return v < l[0] || v > l[3] ? T.err : v < l[1] || v > l[2] ? T.warn : T.ok;
 }
 
 int item_pct(const item_t *it) {
-  int64_t span = (int64_t) it->max - it->min, v = (int64_t) it->value - it->min;
+  int64_t span = (int64_t) it->u.max - it->u.min, v = (int64_t) it->value - it->u.min;
   return span <= 0 ? 0 : v <= 0 ? 0 : v >= span ? 100 : (int) (v * 100 / span);
 }
 

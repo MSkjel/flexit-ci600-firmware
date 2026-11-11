@@ -8,7 +8,10 @@ MEMORY
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
-_min_stack = 0x800;
+/* How deep the stack goes at the most, by the compiler's own count (-fcallgraph-info=su, make stack): an animation's
+   script that steps on and inflates its place's next frame, 1.8 KB with the timer above it, under the bus interrupt
+   and the two it nests with, 0.5 KB */
+_min_stack = 0xA00;
 
 SECTIONS
 {

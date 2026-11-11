@@ -4,6 +4,7 @@
 #include "overlay.h"
 #include "clock.h"
 #include "input.h"
+#include "panel.h"
 #include "picture.h"
 #include "plat.h"
 #include "shot.h"
@@ -17,7 +18,7 @@ static plink_t queue;             // outgoing messages waiting for room in an an
 static pbulk_panel_t bulk;        // frame state, filled in the RX interrupt and handled in link_poll()
 static pbus_panel_t bus;          // bus timing, as the RX interrupt sees it
 static volatile bool ready;       // link_init() has run. Until then frames go unanswered
-static uint16_t quiet_s;          // seconds since the last frame from the ESP
+static quiet_t esp;               // its frames, and the seconds since the last one
 static int16_t sync_at = -1;      // the last value sent in the sync after a HELLO, V_NONE = none yet, -1 = idle
 static int16_t settings_at = -1;  // the last of our settings sent since the ESP asked, V_NONE = none yet, -1 = idle
 static uint16_t settings_n;       // sent so far, or taken from the ESP
@@ -86,6 +87,8 @@ static void got_hello(uint32_t v) {
   val_forget_esp();  // its items may have changed, it sends them all again
   forget_helps(-1);
   sync_at = link_compatible() ? V_NONE : -1;
+  settings_at = -1;  // it asks again for the settings it wants, and has forgotten the ones it was sending
+  restoring = false;
   ui_layout_changed();
 }
 
@@ -109,13 +112,13 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
   }
   if (was == PIC_READY && pic_state() == PIC_RECEIVING)
     ui_picture_coming();
-  if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR)
-    overlay_parts_clear();  // the picture they're parts of went
+  if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR || key == K_PIC_BEGIN)
+    overlay_parts_clear();  // the picture they're parts of went, also one that was still coming in
   // Picture came or went, rebuild the screensaver. A new or failed picture drops the old. A patch redraws its own rows
   // and the overlays show and go on their own.
-  if (pic_state() != was || key == K_PIC_CLEAR)
+  if (pic_state() != was || key == K_PIC_CLEAR || key == K_PIC_BEGIN)
     ui_value_changed(V_SCREENSAVER);
-  else if (key == K_PIC_BEGIN || key == K_PIC_PATCH)
+  else if (key == K_PIC_PATCH)
     ui_value_changed(V_NONE);  // "Receiving ..."
 }
 
@@ -125,22 +128,24 @@ static void item_def(item_t *it, const uint8_t *b, int n) {
     return;
   uint8_t type = b[ITEM_DEF_TYPE] <= ITEM_TEXT ? b[ITEM_DEF_TYPE] : ITEM_NONE;
   if (type != it->type)
-    memset(&it->u, 0, sizeof it->u);  // the toggle's words and the text share their room
+    memset(&it->u, 0, sizeof it->u);  // the range, a toggle's words and a text share their room
   it->type = type;
-  uint8_t flags = b[ITEM_DEF_FLAGS];
-  it->flags = it->type == ITEM_TEXT ? flags & ~ITEMF_TREND : flags;  // nothing to chart in a text
+  bool words = type == ITEM_TOGGLE || type == ITEM_TEXT;  // no range or levels, and nothing to chart in a text
+  it->flags = b[ITEM_DEF_FLAGS] & ~(words ? ITEMF_LEVELS : 0) & ~(type == ITEM_TEXT ? ITEMF_TREND : 0);
   it->icon = b[ITEM_DEF_ICON];
   it->dec = b[ITEM_DEF_DEC] & 3;
   it->step = plink_get16(b + ITEM_DEF_STEP);
   it->step = it->step ? it->step : 1;
   it->id = plink_get16(b + ITEM_DEF_ID) & ITEM_ID_MASK;
-  it->min = (int32_t) plink_number(b + ITEM_DEF_MIN, 4);
-  it->max = (int32_t) plink_number(b + ITEM_DEF_MAX, 4);
-  for (int i = 0; i < 4; i++)
-    it->level[i] = plink_i16(b + ITEM_DEF_LEVELS + 2 * i);
+  if (!words) {
+    it->u.min = (int32_t) plink_number(b + ITEM_DEF_MIN, 4);
+    it->u.max = (int32_t) plink_number(b + ITEM_DEF_MAX, 4);
+    for (int i = 0; i < 4; i++)
+      it->u.level[i] = plink_i16(b + ITEM_DEF_LEVELS + 2 * i);
+  }
   if (it->flags & ITEMF_TREND)
     trend_keep(it->id);
-  ui_layout_changed();
+  ui_items_changed();
 }
 
 // Text from the ESP into dst, size counts the 0. Cut on a UTF-8 character boundary
@@ -273,7 +278,7 @@ static void item_msg(uint16_t kind, int i, const uint8_t *b, int n) {
     default:
       return;
   }
-  ui_layout_changed();  // new words can change the layout
+  ui_items_changed();  // new words can change the layout
 }
 
 // A message from the ESP
@@ -285,7 +290,7 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
   }
   if (!link_compatible())
     return;  // different link version, the message can't be trusted
-  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_TINT) {
+  if (key >= K_OVERLAY_FRAMES && key <= K_OVERLAY_SCRIPT) {
     overlay_msg(key, b, n);  // a slot's or place's, no picture data or ack
     return;
   }
@@ -363,23 +368,12 @@ void link_init(void) {
     hello();
 }
 
-void link_poll(void) {
-  if (!HAS(FEAT_ESP))
-    return;
-  uint8_t p[PBULK_PAYLOAD_MAX];
+// What's waiting into the next answers, an answer's worth each, and a screenshot in what's left of it. On its own,
+// so its buffer isn't on the stack under every message that comes in.
+static __attribute__((noinline)) void send_waiting(void) {
+  uint8_t p[PBULK_ANSWER_MAX];
   int n;
-  while ((n = pbulk_panel_take(&bulk, p)) > 0)
-    pbulk_parse(p, n, got_msg, NULL);
-  send_pic_ack();
-  int32_t gone = link_compatible() && plink_room(&queue) ? overlay_gone() : -1;
-  if (gone >= 0)
-    plink_send(&queue, K_OVERLAY_GONE, (uint32_t) gone);
-  int32_t mark = link_compatible() && plink_room(&queue) ? overlay_mark() : -1;
-  if (mark >= 0)
-    plink_send(&queue, K_OVERLAY_MARK, (uint32_t) mark);
-  send_sync();
-  send_settings();
-  while (pbulk_panel_free(&bulk)) {  // an answer's worth each, a screenshot in what's left of it
+  while (pbulk_panel_free(&bulk)) {
     n = plink_pack(&queue, p, PBULK_ANSWER_MAX);
     n += plat_log(p + n, PBULK_ANSWER_MAX - n);
     n += shot_take(p + n, PBULK_ANSWER_MAX - n);
@@ -391,9 +385,26 @@ void link_poll(void) {
   bulk.waiting = n > 255 ? 255 : (uint8_t) n;  // what's left, so the ESP can leave room for it
 }
 
+void link_poll(void) {
+  if (!HAS(FEAT_ESP))
+    return;
+  const uint8_t *in;
+  for (int n; (in = pbulk_panel_take(&bulk, &n)) != NULL; pbulk_panel_taken(&bulk))
+    pbulk_parse(in, n, got_msg, NULL);
+  send_pic_ack();
+  int32_t gone = link_compatible() && plink_room(&queue) ? overlay_gone() : -1;
+  if (gone >= 0)
+    plink_send(&queue, K_OVERLAY_GONE, (uint32_t) gone);
+  int32_t mark = link_compatible() && plink_room(&queue) ? overlay_mark() : -1;
+  if (mark >= 0)
+    plink_send(&queue, K_OVERLAY_MARK, (uint32_t) mark);
+  send_sync();
+  send_settings();
+  send_waiting();
+}
+
 void link_second(void) {
   static uint8_t room_s;
-  static uint32_t frames_seen;
   if (HAS(FEAT_ESP) && ++room_s >= 60) {  // once a minute, the panel's own temperature sensor for Home Assistant
     static int16_t room_sent = T_NONE;
     room_s = 0;
@@ -404,16 +415,9 @@ void link_second(void) {
   }
   // Refused frames don't count, nor ones in the gaps while they're off, since nothing gets through
   uint32_t frames = bulk.frames - bulk.bad - bulk.refused - bulk.no_gaps;
-  if (!HAS(FEAT_ESP)) {
-    frames_seen = frames;
-    quiet_s = ESP_QUIET_S;  // switched off, offline until it's heard again
-  } else if (frames != frames_seen) {
-    frames_seen = frames;
-    quiet_s = 0;
-  } else if (quiet_s < ESP_QUIET_S) {
-    quiet_s++;
-  }
-  bool online = quiet_s < ESP_QUIET_S && link_compatible();
+  if (!HAS(FEAT_ESP))
+    esp = (quiet_t) {frames, ESP_QUIET_S};  // switched off, offline until it's heard again
+  bool online = !quiet(&esp, frames, ESP_QUIET_S) && link_compatible();
   if (online != M.esp_online) {
     M.esp_online = online;
     ui_layout_changed();  // some views show other things without the ESP

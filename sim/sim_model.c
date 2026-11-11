@@ -88,15 +88,21 @@ void sim_item(int i, item_t *it) {
                   .dec = d->dec,
                   .step = d->step,
                   .id = plink_item_id(d->name),
-                  .value = d->value,
-                  .min = d->min,
-                  .max = d->max};
-  memcpy(it->level, d->level, sizeof it->level);
+                  .value = d->value};
+  if (d->type != ITEM_TOGGLE && d->type != ITEM_TEXT) {
+    it->u.min = d->min;
+    it->u.max = d->max;
+    memcpy(it->u.level, d->level, sizeof it->u.level);
+  }
   sim_text(it->label, sizeof it->label, d->label);
   sim_text(it->unit, sizeof it->unit, d->unit);
   if (d->text)
     sim_text(it->u.text, sizeof it->u.text, d->text);
 }
+
+// The week program the simulated unit has, as hw/unit.c has it in the CX60's registers
+static period_t week[7][PERIODS_PER_DAY];
+static uint8_t n_periods[7];
 
 void sim_model_init(void) {
   model_defaults();
@@ -152,15 +158,14 @@ void sim_model_init(void) {
   static const period_t we[] = {{8 * 60, 23 * 60, MODE_NORMAL, 0, 210}, {17 * 60, 19 * 60, MODE_MAX, 1, 210}};
   for (int d = 0; d < 7; d++) {
     if (d < 5) {
-      memcpy(M.week[d], wk, sizeof wk);
-      M.n_periods[d] = 3;
+      memcpy(week[d], wk, sizeof wk);
+      n_periods[d] = 3;
     } else {
-      memcpy(M.week[d], we, sizeof we);
-      M.n_periods[d] = 2;
+      memcpy(week[d], we, sizeof we);
+      n_periods[d] = 2;
     }
   }
-  M.week[4][2].end = 23 * 60 + 30;
-  M.cpu_busy = 6;
+  week[4][2].end = 23 * 60 + 30;
   if (getenv("SIM_LANG"))
     M.language = (uint8_t) atoi(getenv("SIM_LANG"));
   M.esp_online = true;
@@ -185,8 +190,6 @@ void sim_model_init(void) {
   M.cx60_version = 0x0207;
   M.fw_version = 0x000100;  // 0.1.0
   M.bus_addr = 3;
-  M.bus_ok = 184233;
-  M.bus_err = 41;
   M.h_total = 41872;
   M.h_stop = 312;
   M.h_min = 9876;
@@ -210,10 +213,14 @@ void sim_model_init(void) {
   M.features = FBIT(FEAT_ESP) | FBIT(FEAT_EC_FANS);
 }
 
-// Roughly what the CX60 would do. On the panel, hw/unit.c puts the change on the bus instead.
+// Roughly what the CX60 would do. On the panel, hw/unit.c puts the change on the bus instead, and the speed that
+// runs follows when the unit's status says so: sim_slow_unit leaves that out, for a test to do later.
+bool sim_slow_unit;
 void plat_value_changed(val_t v) {
   switch (v) {
     case V_MODE:
+      if (sim_slow_unit)
+        break;
       M.mode_now = M.mode;
       M.fan_sup = M.mode ? M.fan_pct[M.mode - 1][0] : 0;
       M.fan_ext = M.mode ? M.fan_pct[M.mode - 1][1] : 0;
@@ -242,9 +249,33 @@ void plat_save_now(void) {}
 bool sim_fresh;
 bool plat_fresh(void) { return sim_fresh; }
 
-void plat_period_set(void) {}  // schedule.c keeps M.week itself
+int plat_week(int day, period_t *out) {
+  memcpy(out, week[day], n_periods[day] * sizeof *out);
+  return n_periods[day];
+}
+
+// The day's period in M.period's slot, a new one at the end if there's none and the day has room
+static period_t *period_slot(bool add) {
+  period_t *w = week[M.period.day];
+  uint8_t *n = &n_periods[M.period.day];
+  for (int i = 0; i < *n; i++)
+    if (w[i].idx == M.period.p.idx)
+      return &w[i];
+  return add && *n < PERIODS_PER_DAY ? &w[(*n)++] : NULL;
+}
+
+void plat_period_set(void) {
+  period_t *p = period_slot(true);
+  if (p)
+    *p = M.period.p;
+}
 
 void plat_action(int a) {
+  period_t *gone = a == A_REMOVE_PERIOD ? period_slot(false) : NULL;
+  if (gone) {
+    period_t *w = week[M.period.day];
+    *gone = w[--n_periods[M.period.day]];  // sched_day() puts them in order
+  }
   if (a == A_RESET_FILTER)
     M.filter_hours = 0;
   if (a == A_RESET_ALARMS)

@@ -20,6 +20,7 @@ namespace met = flexit::panel::met;
 namespace fetch = flexit::panel::fetch;
 namespace live = flexit::panel::met::live;
 namespace space = flexit::panel::space;
+namespace marks = flexit::panel::marks;
 
 static void step(const char *what) { printf("%s\n", what); }
 
@@ -57,6 +58,11 @@ BaseType_t xTaskCreate(TaskFunction_t f, const char *, uint32_t stack, void *arg
 }
 void vTaskDelete(TaskHandle_t) {}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 0; }
+static int stack_full_at = -1;  // the time it's asked for, from 0, that the stack has nothing left. -1 = never
+uint8_t *pxTaskGetStackStart(TaskHandle_t) {
+  uint8_t *here = (uint8_t *) __builtin_frame_address(0);
+  return stack_full_at >= 0 && !stack_full_at-- ? here : here - (1u << 20);
+}
 static void run_task() {
   if (tasks.empty())
     return;  // a CHECK before found it missing
@@ -78,17 +84,24 @@ struct HttpClient {
   std::string url;  // config's, or where it was moved to
   std::vector<http_request::Header> headers;
   std::shared_ptr<HttpContainer> c;
+  std::string left;  // of an answer that wasn't read to its end: still on the connection, ahead of the next one's
 };
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
-  return new HttpClient{*config, config->url, {}, nullptr};
+  return new HttpClient{*config, config->url, {}, nullptr, {}};
 }
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t c, const char *key, const char *value) {
   c->headers.push_back({key, value});
   return ESP_OK;
 }
 esp_err_t esp_http_client_open(esp_http_client_handle_t c, int) {
+  if (c->c)  // the same server at every URL, so the connection is kept
+    c->left += c->c->body.substr(std::min(c->c->at, c->c->body.size()));
   c->c = web.get(c->url, c->headers, {});
   return c->c ? ESP_OK : ESP_FAIL;
+}
+esp_err_t esp_http_client_flush_response(esp_http_client_handle_t c, int *) {
+  c->c->at = c->c->body.size();
+  return ESP_OK;
 }
 int64_t esp_http_client_fetch_headers(esp_http_client_handle_t c) {
   for (const char *h : {"Content-Type", "Last-Modified", "Expires", "Retry-After"}) {  // as servers write them
@@ -110,6 +123,12 @@ esp_err_t esp_http_client_set_redirection(esp_http_client_handle_t c) {
   return ESP_OK;
 }
 int esp_http_client_read(esp_http_client_handle_t c, char *buf, int len) {
+  if (!c->left.empty()) {
+    size_t n = std::min(c->left.size(), (size_t) len);
+    memcpy(buf, c->left.data(), n);
+    c->left.erase(0, n);
+    return (int) n;
+  }
   return c->c->read((uint8_t *) buf, (size_t) len);
 }
 bool esp_http_client_is_complete_data_received(esp_http_client_handle_t c) { return c->c->is_read_complete(); }
@@ -294,6 +313,12 @@ struct Look : pn_look_t {
   bool shown;
   bool hidden;  // a part of the picture in front of its middle, see follow()
 };
+// What Panel Animation Status lists after how full the panel is, None as it is
+static std::string anim_list() {
+  const std::string &s = panel_animation_status.state;
+  size_t at = s.find(" KB: ");
+  return at == std::string::npos ? s : s.substr(at + 5);
+}
 static Look look(int p) {
   Look l{};
   l.shown = pn_anim(p, &l);
@@ -322,11 +347,16 @@ static void steps(int ms) {
     pn_overlay_step(50);
 }
 
-static bool overlay_shown() { return panel_animation_status.state.rfind("Shown: ", 0) == 0 && settled(); }
+static bool overlay_shown() {  // the ESP has one on the panel
+  for (auto &a : overlay::overlays)
+    if (!a.name.empty() && a.state == overlay::SENT)
+      return settled();
+  return false;
+}
 
 // Runs until the ESP says the animations are want and the link is quiet. The cycles it took, -1 if never.
 static int until_anim_status(const char *want, int max = 3000) {
-  return run_until([want] { return panel_animation_status.state == want && settled(); }, max);
+  return run_until([want] { return anim_list() == want && settled(); }, max);
 }
 
 // Every animation the ESP wants is on the panel
@@ -579,15 +609,10 @@ static void draw_squares(Animation &a, int size, int frames) {
 static std::vector<int> overlay_delays(const char *name) {
   std::vector<int> d;
   const overlay::Overlay *a = overlay::find(name);
-  for (size_t at = 0; a && at + 5 <= a->data.size();) {
+  for (size_t at = 0; a && at + OVERLAY_RECORD_HEAD <= a->data.size();) {
     const uint8_t *r = a->data.data() + at;
-    uint32_t n =
-        r[3] ? pinflate(r + 5, (uint32_t) (a->data.size() - at - 5), nullptr, r[3], a->w / 2, (uint32_t) r[3] * r[4], 0)
-             : 0;
-    if (r[3] && !n)
-      break;
-    d.push_back(r[0]);
-    at += 5 + n;
+    d.push_back(r[OVERLAY_RECORD_DELAY]);
+    at += OVERLAY_RECORD_HEAD + plink_get16(r + OVERLAY_RECORD_LEN);
   }
   return d;
 }
@@ -622,7 +647,7 @@ static bool same_anim(const char *name, int f, int p = 0, bool quiet = false) {
   int colours = panel::median_cut(hist, clear ? 15 : 16, pal, bins);
   for (int i = 0; i < colours; i++)
     pal[i] |= 0xFF000000u;
-  if (memcmp(pal, A.pal, sizeof pal) || A.still != (look(p).still != 0))
+  if (memcmp(pal, A.pal, sizeof pal) || (A.still || A.sheet) != (look(p).still != 0))
     return false;
   std::vector<uint8_t> lut(4096);
   for (int i = 0; i < 4096; i++)
@@ -693,15 +718,16 @@ static std::string sample(const char *file) {
 
 // The scene of the weather picture the panel has, made again as met.h made it
 static const met::Scene &panel_scene() {
-  static SceneBuf sc(false);
+  static SceneBuf sc;
   met::build(sc.s, met::weather, met::lat, met::lon, (uint32_t) flexit_panel_time.t.timestamp, false, met::utc_offset,
              met::options);
   return sc.s;
 }
 
-// A show's case: the show it should be and MET's symbol, the high, middle and low clouds (%), rain (mm), wind (m/s),
-// temperature (C) and fog (%), the time, the landscape and the heater (%), how long it runs (s) and how many shots of
-// it to take, and the place
+// A case of the weather animations: the acts it's of, " + " between their names, which are the only ones that may
+// come on, the first naming its shots, or "" for any that fit. MET's symbol, the high, middle and low clouds (%), rain
+// (mm), wind (m/s), temperature (C) and fog (%), the time, the landscape and the heater (%), how long it runs (s) and
+// how many shots of it to take, and the place
 struct Live {
   const char *want, *symbol;
   float high, mid, low, rain, wind, temp, fog;
@@ -716,12 +742,42 @@ static const char *const LIVE_BAD[] = {
     "waves at most", "No room for animation", "copies at most",   "too big",   "no room in the", "No weather animation",
     "no copy",       "doesn't fit",           "the panel didn't", "half size", "'s script"};
 
-static const char *show_on() { return live::R.show >= 0 ? live::SHOWS[live::R.show].name : "none"; }
+// The acts a case names
+static std::vector<int> acts_of(const char *want) {
+  std::vector<int> acts;
+  for (std::string all = want; !all.empty();) {
+    size_t end = std::min(all.find(" + "), all.size());
+    int i = live::act_of(all.substr(0, end).c_str());
+    CHECK_MSG(i >= 0, "no weather act called '%s'", all.substr(0, end).c_str());
+    if (i >= 0)
+      acts.push_back(i);
+    all.erase(0, std::min(all.size(), end + 3));
+  }
+  return acts;
+}
+// Its first, which names the case
+static std::string first_of(const char *want) { return std::string(want).substr(0, std::string(want).find(" + ")); }
 
-// The show's chance events due now
-static void chances_now() {
+static bool is_on(const char *act) { return live::on(live::act_of(act)); }
+// Whether all the acts a case names are on
+static bool all_on(const char *want) {
+  for (int i : acts_of(want))
+    if (!live::on(i))
+      return false;
+  return true;
+}
+// The acts on
+static std::string cast_on() {
+  std::string names;
+  for (const live::On &o : live::R.cast)
+    names += (names.empty() ? "" : ", ") + std::string(o.name);
+  return names.empty() ? "nothing" : names;
+}
+
+// The acts' chance events due now, or one act's
+static void chances_now(const char *act = nullptr) {
   for (auto &t : live::R.timers)
-    if (t.mean)
+    if (t.mean && (!act || t.act == live::act_of(act)))
       t.at = millis();
 }
 
@@ -733,8 +789,57 @@ static void tick(int n) {
   }
 }
 
-// seconds of the show with the screensaver up, so it plays, and shots of it spread over them as live/NAME_n.ppm.
-// each after every cycle.
+// What each act took of the panel at the most over all the cases so far, its visitors apart, and the most it was
+// granted
+struct Took {
+  live::Room most{}, came{}, granted{};
+};
+static std::map<int, Took> acts_took;
+static std::string over_grant;  // the first act that took more than it was granted, "" if none
+
+// What the acts on take of the panel now, each one's animations, their copies and the pool's bytes: no more than it
+// was granted, and with what came by, a visitor's more
+static void acts_take() {
+  bool copy_visits = (int32_t) (millis() - live::R.busy) < 0;  // a visitor that's a copy of what an act has on
+  for (const live::On &o : live::R.cast) {
+    live::Room own{}, came{};
+    for (const live::Made &m : live::R.names) {
+      const overlay::Overlay *a = m.act == o.act ? overlay::find(m.key) : nullptr;
+      if (!a)
+        continue;
+      live::Room &r = live::R.comers.count(m.key.substr(2)) ? came : own;
+      r.slots++;
+      r.bytes += (int) (a->panel_frame() + a->data.size());
+      for (const overlay::Copy &c : a->copies) {
+        r.places += c.used;
+        r.bytes += c.placed ? (int) ((c.own ? a->panel_frame() : 0) + overlay::pool_bytes(c)) : 0;
+      }
+    }
+    Took &t = acts_took[o.act];
+    auto most = [](const live::Room &a, const live::Room &b) {
+      return live::Room{std::max(a.slots, b.slots), std::max(a.places, b.places), std::max(a.bytes, b.bytes)};
+    };
+    if (!copy_visits)
+      t.most = most(t.most, own);
+    t.came = most(t.came, came);
+    t.granted = most(t.granted, o.grant);
+    bool rains = live::ACTS[o.act].rank == live::WEATHER;  // its bolt comes on its own account
+    const live::Room &guest = live::R.guest;               // what a visitor may take
+    if (over_grant.empty() && !((copy_visits ? o.grant + guest : o.grant).has(rains ? own + came : own) &&
+                                (o.grant + guest).has(own + came))) {
+      char said[200];
+      snprintf(said, sizeof said,
+               "%s takes %d animations, %d copies and %d bytes, and %d, %d and %d that came by, "
+               "granted %d, %d and %d",
+               o.name, own.slots, own.places, own.bytes, came.slots, came.places, came.bytes, o.grant.slots,
+               o.grant.places, o.grant.bytes);
+      over_grant = said;
+    }
+  }
+}
+
+// seconds of the acts with the screensaver up, so they play, and shots of them spread over those as
+// live/NAME_n.ppm. each after every cycle. None takes more of the panel than it was granted, and a visitor's.
 static void play(int seconds, int shots, const std::string &name, const std::function<void()> &each = {}) {
   static std::set<std::string> taken;
   int every = shots ? seconds * 9 / shots : 0;  // 9 cycles a second
@@ -742,6 +847,7 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
   playing = true;
   for (int k = 0, n = 0; k < seconds * 9; k++) {
     tick(1);
+    acts_take();
     if (each)
       each();
     if (every && k % every == every - 1) {
@@ -754,6 +860,8 @@ static void play(int seconds, int shots, const std::string &name, const std::fun
   }
   playing = false;
   pn_saver(0);
+  CHECK_MSG(over_grant.empty(), "%s: %s", name.c_str(), over_grant.c_str());
+  over_grant.clear();
 }
 
 // Copy 0 of a weather sprite as the panel has it, or where the ESP placed it, as the panel may have moved it on
@@ -795,9 +903,8 @@ static void live_quiet(const std::string &name, size_t from) {
     CHECK_MSG(!logged(bad, from), "%s: '%s' in the log", name.c_str(), bad);
 }
 
-// The weather picture for c, drawn again from its weather, time and landscape
-static void weather_of(const Live &c) {
-  met::animate(false);
+// MET's weather for a case
+static met::Weather weather_for(const Live &c) {
   met::Weather w;
   w.ok = true;
   w.time = c.t - c.t % 3600;
@@ -813,30 +920,40 @@ static void weather_of(const Live &c) {
   w.fog = c.fog;
   w.hour[0] = {w.time, c.temp, met::icon_of(c.symbol)};
   w.hours = 1;
-  met::weather = w;
+  return w;
+}
+
+// The weather picture for c, drawn again from its weather, time and landscape
+static void weather_of(const Live &c) {
+  met::animate(false);
+  met::weather = weather_for(c);
   met::lat = c.lat;
   met::lon = c.lon;
   flexit_panel_time.t.timestamp = c.t;
   met::options.ground = c.ground;
   met::options.heater_pct = c.heat;
+  live::R.only = *c.want ? 0 : ~0ull;  // the acts it wants and no others
+  for (int i : acts_of(c.want))
+    live::R.only |= 1ull << i;
+  live::R.pin = -1;
   pic::show("weather");
   met::animate(true);
 }
 
-// The show for c's weather from its start, c.seconds of it with c.shots shots as live/WANT[_TAG]_n.ppm, and its
-// chance events due at once with chances. It's the one c wants, still on at the end, and asks the panel for no more
+// The acts c wants in its weather from their start, c.seconds of them with c.shots shots as live/FIRST[_TAG]_n.ppm,
+// and their chance events due at once with chances. They're all on, still at the end, and ask the panel for no more
 // than it has.
 static void show(const Live &c, const char *tag = "", bool chances = false) {
   size_t from = log_all.size();
-  std::string name = std::string(c.want) + (*tag ? "_" : "") + tag;
+  std::string name = first_of(c.want) + (*tag ? "_" : "") + tag;
   weather_of(c);
   bool drawn = picture(name.c_str(), 6000) >= 0;
-  CHECK_MSG(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
+  CHECK_MSG(drawn && all_on(c.want), "%s: the weather has %s on, not %s", name.c_str(), cast_on().c_str(), c.want);
   if (chances)
     chances_now();
   play(c.seconds, c.shots, name);
   live_quiet(name, from);
-  CHECK_MSG(!strcmp(show_on(), c.want), "%s: not running on", name.c_str());
+  CHECK_MSG(all_on(c.want), "%s: %s on at the end, not %s", name.c_str(), cast_on().c_str(), c.want);
 }
 
 // The copies of lit weather sprites the panel shows in another light than the scene's, see in_light(). None while the
@@ -852,10 +969,10 @@ static int out_of_light() {
   return n;
 }
 
-// The show's own timers go ten minutes on, so what's tried now has the time
+// The acts' own timers go ten minutes on, so what's tried now has the time
 static void show_later() {
   for (auto &t : live::R.timers)
-    if (!t.rare)
+    if (t.act >= 0)
       t.at = millis() + 600000;
 }
 
@@ -867,15 +984,32 @@ static int slots_used() {
   return n;
 }
 
-// Each of the show's visitors in turn, its other timers put off, as live/TAG_K_n.ppm with shots of each. Each asks
-// the panel for no more than it has, and lets go of what it took once it's gone. Those of walkers come from out of
-// sight and go out of it, off the screen or behind the picture's parts, rather than fading in and out in the open.
-static void visits(const char *tag, int shots = 2, std::initializer_list<const char *> walkers = {}) {
-  for (int k = 0; k < live::R.visits; k++) {
+// Whoever came by is gone, which the acts' own timers wait for before they bring the next
+static void visitor_gone() {
+  for (int wait = 0; wait < 9 * 150 && !live::R.comers.empty(); wait++)
+    tick(1);
+}
+
+// Visitor k of an act that's on, brought now. The ms it takes, 0 if it doesn't fit the picture.
+static uint32_t visit(const char *act, int k) {
+  const live::On *o = live::on(live::act_of(act));
+  CHECK_MSG(o && k < (int) o->visits.size(), "%s: no visitor %d, it has %d", act, k, o ? (int) o->visits.size() : -1);
+  live::As as(live::act_of(act));
+  return o && k < (int) o->visits.size() ? o->visits[(size_t) k]() : 0;
+}
+
+// Each of an act's visitors in turn, the acts' timers put off, as live/TAG_K_n.ppm with shots of each. Each asks the
+// panel for no more than it has, and lets go of what it took once it's gone. Those of walkers come from out of sight
+// and go out of it, off the screen or behind the picture's parts, rather than fading in and out in the open.
+static void visits(const char *act, const char *tag, int shots = 2, std::initializer_list<const char *> walkers = {}) {
+  const live::On *host = live::on(live::act_of(act));
+  CHECK_MSG(host && !host->visits.empty(), "%s has no visitors", act);
+  for (int k = 0; host && k < (int) host->visits.size(); k++) {
     show_later();
+    visitor_gone();
     size_t from = log_all.size();
     int slots = slots_used();
-    uint32_t ms = live::R.visit(k);
+    uint32_t ms = visit(act, k);
     if (!ms)
       continue;
     std::string name = std::string(tag) + "_" + std::to_string(k);
@@ -1429,6 +1563,22 @@ static void pictures() {
   pic::show("dusk");
   CHECK_MSG(picture("changed between pieces", 3000) >= 0, "not shown after a change between pieces");
   CHECK_MSG(logged("Picture dusk: 1 pieces", rows_only), "a change between pieces sent it all");
+  // Two pieces once more, and no picture at all while the panel's answer to the first is on its way: the answer
+  // isn't for anything any more, and the picture it's picked again after is all of it
+  draw_dusk(panel_picture_dusk, 250, false);
+  for (int y = 160; y < 200; y++)
+    for (int x = 0; x < 320; x++)
+      panel_picture_dusk.px[(size_t) y * 320 + x] = pic::S.shown.pal[lcg(seed) >> 16 & 1];
+  pic::show("dusk");
+  half = run_until([&] { return pic::S.jobs.size() == 2 && pic::S.t.head && pic::S.t.ended; }, 3000);
+  CHECK_MSG(half >= 0, "the first of two pieces didn't go");
+  pic::picked("None");
+  pic::ack((uint32_t) PIC_DONE << 24 | (uint32_t) pic::S.t.id << 16);  // before the loop has seen that it's gone
+  run(30);
+  CHECK_MSG(pic::S.phase == pic::IDLE && pic::S.shown.rows.empty() && !panel_pic(),
+            "cleared with a piece on its way: phase %d, the panel's state %d", pic::S.phase, panel_pic());
+  pic::picked("dusk");
+  CHECK_MSG(picture("picked again after that", 6000) >= 0, "not shown when it's picked again");
   auto planned = [&] { return run_until([&] { return pic::S.phase == pic::SEND && !pic::S.redo; }, 100) >= 0; };
 
   // A BEGIN on its way when it changes: the panel has dropped its picture for it, so all of it goes again
@@ -1595,21 +1745,19 @@ static void overlay_moving() {
       },
       100);
   CHECK_MSG(ar >= 0, "panel_move_animation didn't move it: at %d,%d", l.x, l.y);
-  CHECK_MSG(panel_animation_status.state == "Shown: ball, moved to 100,40", "status '%s'",
-            panel_animation_status.state.c_str());
+  CHECK_MSG(anim_list() == "ball, moved to 100,40", "status '%s'", panel_animation_status.state.c_str());
   size_t clamped = log_all.size();
   panel_move_animation.execute("ball", 0, 100, 40, 70000, "none");  // ms only has 16 bits
   run(3);
-  CHECK_MSG(logged("over 70000 ms is out of range, it goes to 100,40 over 65535 ms", clamped),
-            "no warning about the glide time");
+  CHECK_MSG(logged("panel_move_animation: over takes 0 to 65535 ms", clamped), "no warning about the glide time");
   panel_drift_animation.execute("ball", 0, -20, 0);
-  ar = until_anim_status("Shown: ball, drifting", 100);
+  ar = until_anim_status("ball, drifting", 100);
   pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98 && l.y == 40, "panel_drift_animation: status '%s', at %d,%d after a step",
             panel_animation_status.state.c_str(), l.x, l.y);
   panel_drift_animation.execute("ball", 0, 0, 0);
-  ar = until_anim_status("Shown: ball", 100);
+  ar = until_anim_status("ball", 100);
   pn_overlay_step(100);
   l = look(0);
   CHECK_MSG(ar >= 0 && l.x == 98, "stopping the drift: status '%s', at %d", panel_animation_status.state.c_str(), l.x);
@@ -1623,14 +1771,14 @@ static void overlay_copies() {
   step("animation copies");
   panel_place_animation.execute("ball", 1, 10, 150, false, 0);
   panel_place_animation.execute("ball", 2, 200, 150, true, 5);  // the ball is on frame 2 now, so 3 frames apart
-  int ar = until_anim_status("Shown: ball (3 copies)", 100);
+  int ar = until_anim_status("ball ×3", 100);
   CHECK_MSG(ar >= 0, "the copies: status '%s'", panel_animation_status.state.c_str());
   Look a = look(1), b = look(2);  // in front of anything a picture has in front of the weather's animations
   CHECK_MSG(
       a.x == 10 && a.y == 150 && b.x == 200 && b.y == 150 && a.depth == OVERLAY_NEAREST && b.depth == OVERLAY_NEAREST,
       "copies at %d,%d and %d,%d, %d and %d deep", a.x, a.y, b.x, b.y, a.depth, b.depth);
   const overlay::Overlay *ball = overlay::find("ball");
-  size_t want = ball->frame_bytes() * 2 + ball->data.size() + OVERLAY_SCRIPT_POOL + 4;  // copy 2's frame and FRAME 5
+  size_t want = ball->frame_bytes() * 2 + ball->data.size() + OVERLAY_SCRIPT_HEAD + 3;  // copy 2's frame and FRAME 5
   CHECK_MSG(pn_overlay_used() == want && overlay::used_by_others(nullptr) == want,
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
             (unsigned) overlay::used_by_others(nullptr));
@@ -1659,28 +1807,28 @@ static void overlay_copies() {
 static void overlay_turning() {
   step("an animation turned and flipped");
   panel_glide_animation.execute("ball", 2, "turn", 450, 0, "none");  // 90
-  panel_flip_animation.execute("ball", 2, true, false);
+  panel_tell_animation.execute("ball", 2, "flip x");
   run(3);
   Look l = look(2), l0 = look(0);
-  CHECK_MSG(l.shown && l.deg == 90 && l.flip == OVERLAY_FLIP_X && l0.shown && !l0.deg && !l0.flip,
+  CHECK_MSG(l.shown && l.deg == 90 && l.flip == OVERLAY_VIEW_FLIP_X && l0.shown && !l0.deg && !l0.flip,
             "turned and flipped: %d degrees, flip %d", l.deg, l.flip);
   panel_glide_animation.execute("ball", 2, "turn", 0, 2000, "none");
   run(3);
   steps(1000);
   l = look(2);
   CHECK_MSG(l.shown && l.deg > 30 && l.deg < 60, "halfway through a turn: %d degrees", l.deg);
-  panel_flip_animation.execute("ball", 2, false, true);
+  panel_tell_animation.execute("ball", 2, "flip y");
   run(3);
   steps(2100);
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 0 && l.flip == OVERLAY_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
+  CHECK_MSG(l.shown && l.deg == 0 && l.flip == OVERLAY_VIEW_FLIP_Y, "a flip halfway through a turn: %d, flip %d", l.deg,
             l.flip);
-  panel_spin_animation.execute("ball", 2, -180);
+  panel_tell_animation.execute("ball", 2, "spin -180");
   run(3);
   steps(500);
   l = look(2);
   CHECK_MSG(l.shown && l.deg > 180 && l.deg < 360, "spinning back: %d degrees", l.deg);
-  panel_spin_animation.execute("ball", 2, 0);
+  panel_tell_animation.execute("ball", 2, "spin 0");
   run(3);
   int stopped = look(2).deg;
   steps(1000);
@@ -1690,11 +1838,38 @@ static void overlay_turning() {
   run(3);
   restart_panel();
   l = look(2);
-  CHECK_MSG(l.shown && l.deg == 180 && l.flip == OVERLAY_FLIP_Y, "after a panel restart: %d, flip %d", l.deg, l.flip);
+  CHECK_MSG(l.shown && l.deg == 180 && l.flip == OVERLAY_VIEW_FLIP_Y, "after a panel restart: %d, flip %d", l.deg,
+            l.flip);
   CHECK_MSG(l.shown && l.opa == 0, "placed again it fades in: opacity %d", l.opa);
   steps(400);
   l = look(2);
   CHECK_MSG(l.shown && l.opa == 1000, "faded in to %d", l.opa);
+}
+
+// Copy 2 half as wide and mirrored round its top right corner, and so after a panel restart
+static void overlay_pivoted() {
+  step("an animation sized round a pivot");
+  panel_glide_animation.execute("ball", 2, "turn", 0, 0, "none");
+  panel_tell_animation.execute("ball", 2, "flip none");
+  panel_tell_animation.execute("ball", 2, "pivot 100, 0");
+  panel_glide_animation.execute("ball", 2, "size_x", -50, 0, "none");
+  run(3);
+  play(1, 0, "");  // drawn, so its box is
+  Look l = look(2);
+  bool right = l.shown && l.pivot_x == 1000 && !l.pivot_y && l.size_x == -500 && l.x1 == l.x + l.w &&
+               l.x2 == l.x + l.w + (l.w + 1) / 2 - 1 && l.y1 == l.y;
+  restart_panel();
+  play(1, 0, "");
+  Look r = look(2);
+  CHECK_MSG(right && r.shown && r.x1 == l.x1 && r.x2 == l.x2 && r.pivot_x == 1000,
+            "right of its corner at %d: %d to %d, after a restart %d to %d", l.x + l.w, l.x1, l.x2, r.x1, r.x2);
+  panel_glide_animation.execute("ball", 2, "size_x", 100, 0, "none");
+  panel_tell_animation.execute("ball", 2, "pivot 50, 50");
+  panel_tell_animation.execute("ball", 2, "blend add");
+  run(3);
+  CHECK_MSG((look(2).view & OVERLAY_VIEW_BLEND) == OVERLAY_BLEND_ADD, "copy 2 not added: view %d", look(2).view);
+  panel_tell_animation.execute("ball", 2, "blend mix");
+  run(3);
 }
 
 // Copy 2 sized, faded and wandering, and back as it was after a restart
@@ -1745,8 +1920,8 @@ static void overlay_wandering() {
 static void overlay_waved() {
   step("an animation waved, mapped and paused");
   int p1 = overlay::find("ball")->copies[1].place;
-  panel_wave_animation.execute("ball", 1, "x", 5, 5, 0, 0, 0, 0, 0, false, "none");
-  panel_map_animation.execute("ball", 1, "opacity", 50, 50, 100, 100);
+  panel_tell_animation.execute("ball", 1, "wave x 5, 5, 0, 0");
+  panel_tell_animation.execute("ball", 1, "map opacity 50, 50, 100, 100");
   panel_frame_rate_animation.execute("ball", 0);
   run(3);
   steps(100);
@@ -1772,31 +1947,43 @@ static void overlay_turned_down() {
   const overlay::Overlay *ball = overlay::find("ball");
   int p1 = ball->copies[1].place;
   size_t warned = log_all.size();
-  panel_wave_animation.execute("ball", 1, "colour", 0, 1, 0, 0, 0, 0, 0, false, "none");
+  panel_tell_animation.execute("ball", 1, "wave colour 0, 1, 0, 0");
   panel_glide_animation.execute("ball", 1, "size", 500, 0, "none");
-  panel_map_animation.execute("ball", 1, "x", 0, 0, 0, 0);
-  for (int i = 0; i < OVERLAY_WAVES; i++)  // small ones, a pixel, a degree or 99 %
-    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[i % OVERLAY_CHANNELS],
-                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1,
-                                 overlay::no_change(i % OVERLAY_CHANNELS) ? 99 : 1, 0, 0, 0, 0, 0, false, "none");
-  panel_wave_animation.execute("ball", 2, "size", 90, 90, 0, 0, 0, 0, 0, false, "none");
-  run(3);
-  for (const char *w :
-       {"'colour' isn't one of x, y, turn, size, opacity, speed", "size 500 over 0 ms, it takes 10..400",
-        "x and y don't follow where it is", "the panel runs 12 waves at most"})
-    CHECK_MSG(logged(w, warned), "no warning '%s'", w);
-  for (int i = 0; i < OVERLAY_WAVES; i++) {
+  panel_tell_animation.execute("ball", 1, "map x 0, 1, 0, 0");
+  panel_tell_animation.execute("ball", 2, "pivot 100.5, 0");
+  panel_tell_animation.execute("ball", 1, "x += nope");
+  panel_tell_animation.execute("ball", 1, "wait 100");
+  // the panel binds OVERLAY_BINDS at a time: small ones, a pixel, a degree or 99 %, with copy 1's from before
+  for (int i = 0; i < OVERLAY_BINDS; i++) {
     int c = i % OVERLAY_CHANNELS;
-    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c),
-                                 overlay::no_change(c), 0, 0, 0, 0, 0, false, "none");
+    panel_tell_animation.execute("ball", i / OVERLAY_CHANNELS,
+                                 std::string(overlay::CHANNELS[c]) + (overlay::no_change(c) ? " *= 99" : " += 1"));
   }
-  panel_map_animation.execute("ball", 1, "opacity", 100, 100, 100, 100);
-  panel_frame_rate_animation.execute("ball", 100);
-  run(3);
+  static_assert(OVERLAY_BINDS > 2 * OVERLAY_CHANNELS && OVERLAY_BINDS < 3 * OVERLAY_CHANNELS, "some of copy 2's");
+  CHECK_MSG(overlay::bound() == OVERLAY_BINDS && !logged("binds", warned), "%d bound of %d", overlay::bound(),
+            OVERLAY_BINDS);
+  panel_tell_animation.execute("ball", 2, "depth += 1");
+  run_until([] { return !panel::link::waiting(); }, 3000);
   steps(100);
-  Look l = look(p1);
-  CHECK_MSG(l.shown && l.x == 10 && l.size == 1000 && l.opa == 1000, "back to no change: at %d, size %d, opacity %d",
-            l.x, l.size, l.opa);
+  for (const char *w :
+       {"'colour' isn't one of x, y, pan_x, pan_y, w, h, turn, phase, size, size_x, size_y, opacity, "
+        "speed, light, level, pivot_x, pivot_y, depth",
+        "size takes 10 to 400", "x and y don't follow where it is", "what's 'nope'?", "it can't be told, it's a script",
+        "the panel binds 40 at a time", "pivot takes 0 to 100 percent of its box"})
+    CHECK_MSG(logged(w, warned), "no warning '%s'", w);
+  Look l = look(ball->copies[2].place);
+  CHECK_MSG(l.shown && l.depth == OVERLAY_NEAREST && same_pool(), "one bind too many: depth %d, %u bytes, the ESP %u",
+            l.depth, pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+  for (int i = 0; i < OVERLAY_BINDS; i++) {  // and free again, overlay_waved()'s too
+    panel_tell_animation.execute("ball", i / OVERLAY_CHANNELS,
+                                 std::string("free ") + overlay::CHANNELS[i % OVERLAY_CHANNELS]);
+  }
+  panel_frame_rate_animation.execute("ball", 100);
+  run_until([] { return !panel::link::waiting(); }, 3000);
+  steps(100);
+  l = look(p1);
+  CHECK_MSG(l.shown && l.x == 10 && l.size == 1000 && l.opa == 1000 && !overlay::bound() && same_pool(),
+            "back to no change: at %d, size %d, opacity %d, %d bound", l.x, l.size, l.opa, overlay::bound());
   l = look(ball->copies[0].place);
   CHECK_MSG(l.shown && l.size == 1000 && l.opa == 1000 && l.deg == 0,
             "copy 0 back to no change: size %d, opacity %d, %d degrees", l.size, l.opa, l.deg);
@@ -1808,12 +1995,10 @@ static void overlay_one_round() {
   panel_place_animation.execute("ball", 3, 20, 20, true, 0);
   panel_rounds_animation.execute("ball", 3, 1);
   run(3);
-  CHECK_MSG(look(3).shown && panel_animation_status.state == "Shown: ball (4 copies)", "copy 3: '%s'",
-            panel_animation_status.state.c_str());
+  CHECK_MSG(look(3).shown && anim_list() == "ball ×4", "copy 3: '%s'", panel_animation_status.state.c_str());
   steps(3000);
   run(5);
-  CHECK_MSG(!look(3).shown && !overlay::find("ball")->copies[3].used &&
-                panel_animation_status.state == "Shown: ball (3 copies)",
+  CHECK_MSG(!look(3).shown && !overlay::find("ball")->copies[3].used && anim_list() == "ball ×3",
             "after its round: '%s'", panel_animation_status.state.c_str());
   panel_glide_animation.execute("ball", 2, "size", 100, 0, "none");
   panel_glide_animation.execute("ball", 2, "opacity", 100, 0, "none");
@@ -1830,7 +2015,7 @@ static void overlay_two() {
                        }});
   size_t big_at = log_all.size();
   overlay::place("big", 0, 16, 16, false, 0);
-  int ar = until_anim_status("Shown: ball (3 copies), big");
+  int ar = until_anim_status("ball ×3, big");
   CHECK_MSG(ar >= 0 && same_anim("big", 0, 3), "two animations: '%s'", panel_animation_status.state.c_str());
   CHECK_MSG(overlay::find("big")->half && !logged("making it at half size", big_at),
             "big: half %d, tried at full size first: %d", overlay::find("big") && overlay::find("big")->half,
@@ -1838,16 +2023,15 @@ static void overlay_two() {
   unsigned used = pn_overlay_used();
   CHECK_MSG(used == overlay::used_by_others(nullptr) && used <= OVERLAY_POOL,
             "the panel's pool holds %u bytes, the ESP thinks %u", used, (unsigned) overlay::used_by_others(nullptr));
-  size_t copy2 = overlay::find("ball")->frame_bytes() + OVERLAY_SCRIPT_POOL + 4;  // its frame and its script
+  // its frame, its script, and what its wander and face take
+  size_t copy2 = overlay::find("ball")->frame_bytes() + OVERLAY_SCRIPT_HEAD + 3 + OVERLAY_ROAM;
   panel_remove_animation.execute("ball", 2);
   run(3);
-  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - copy2 &&
-                panel_animation_status.state == "Shown: ball (2 copies), big",
+  CHECK_MSG(!look(2).shown && pn_overlay_used() == used - copy2 && anim_list() == "ball ×2, big",
             "removing a copy: '%s', %u bytes", panel_animation_status.state.c_str(), pn_overlay_used());
   panel_clear_animation.execute("big");
   run(3);
-  CHECK_MSG(!overlay::find("big") && look(0).shown && !look(3).shown &&
-                panel_animation_status.state == "Shown: ball (2 copies)",
+  CHECK_MSG(!overlay::find("big") && look(0).shown && !look(3).shown && anim_list() == "ball ×2",
             "clearing one animation: '%s'", panel_animation_status.state.c_str());
   overlay::clear("");
   run(3);
@@ -1864,7 +2048,7 @@ static void overlay_half_size() {
   // its drift_x from the yaml, 10 px/s left: half a pixel a step
   pn_overlay_step(100);
   Look l = look(0);
-  CHECK_MSG(panel_animation_status.state == "Shown: noise, drifting" && l.x == 15 && l.y == 16,
+  CHECK_MSG(anim_list() == "noise, drifting" && l.x == 15 && l.y == 16,
             "noise's drift_x: status '%s', at %d,%d after a step", panel_animation_status.state.c_str(), l.x, l.y);
   CHECK_MSG(overlay::find("noise")->data.capacity() == overlay::find("noise")->data.size(), "%u bytes kept for %u",
             (unsigned) overlay::find("noise")->data.capacity(), (unsigned) overlay::find("noise")->data.size());
@@ -1873,14 +2057,14 @@ static void overlay_half_size() {
   CHECK_MSG(ar >= 0 && same_anim("noise", 0), "the animation not sent again after a panel restart");
   l = look(0);
   pn_overlay_step(100);
-  CHECK_MSG(l.x == 16 && l.y == 16 && panel_animation_status.state == "Shown: noise, drifting",
-            "after the restart: at %d,%d, status '%s'", l.x, l.y, panel_animation_status.state.c_str());
+  CHECK_MSG(l.x == 16 && l.y == 16 && anim_list() == "noise, drifting", "after the restart: at %d,%d, status '%s'", l.x,
+            l.y, panel_animation_status.state.c_str());
   l = look(0);
   CHECK_MSG(l.x == 15, "the drift wasn't sent again after a panel restart: at %d", l.x);
   printf("  noise at half size, and again after a panel restart after %d cycles\n", ar);
   panel_anim_noise.turn_off();
   overlay::show("big");  // no yaml, no switch
-  ar = until_anim_status("Shown: big");
+  ar = until_anim_status("big");
   CHECK_MSG(ar >= 0 && overlay::find("big")->half && same_anim("big", 0) && !overlay::find("noise"), "big: %s, half %d",
             panel_animation_status.state.c_str(), overlay::find("big") && overlay::find("big")->half);
 }
@@ -1891,7 +2075,7 @@ static void overlay_not_fitting() {
   overlay::add("edge", {62, 45, 8, 100, 258, 195, 1, noise_px});
   overlay::clear("big");
   overlay::show("edge");
-  int ar = until_anim_status("Shown: edge");
+  int ar = until_anim_status("edge");
   Look l = look(0);
   CHECK_MSG(ar >= 0 && overlay::find("edge")->half && l.x == 258 && l.y == 194 && same_anim("edge", 0),
             "edge: %s, half %d, at %d,%d", panel_animation_status.state.c_str(), overlay::find("edge")->half, l.x, l.y);
@@ -1900,21 +2084,19 @@ static void overlay_not_fitting() {
   overlay::clear("edge");
   overlay::show("noise2");
   ar = run_until([] { return overlay::find("noise2") && overlay::find("noise2")->state == overlay::FAILED; }, 100);
-  CHECK_MSG(ar >= 0 && panel_animation_status.state.rfind("noise2: too big at scale 2 (over ", 0) == 0 &&
-                overlay::find("noise2")->scale == 2,
-            "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), overlay::find("noise2")->scale);
+  CHECK_MSG(
+      ar >= 0 && anim_list().rfind("noise2: too big at scale 2 (over ", 0) == 0 && overlay::find("noise2")->scale == 2,
+      "noise2 at scale 2: %s, scale %d", panel_animation_status.state.c_str(), overlay::find("noise2")->scale);
   overlay::add("scale3", {8, 8, 1, 100, 0, 0, 3, noise_px});
   overlay::clear("noise2");
   overlay::show("scale3");
   run(1);
-  CHECK_MSG(panel_animation_status.state == "scale3: scale has to be 1 or 2", "scale3: %s",
-            panel_animation_status.state.c_str());
+  CHECK_MSG(anim_list() == "scale3: scale has to be 1 or 2", "scale3: %s", panel_animation_status.state.c_str());
   overlay::add("left", {8, 8, 1, 100, -4, 0, 1, noise_px});
   overlay::clear("scale3");
   overlay::show("left");
   run(1);
-  CHECK_MSG(panel_animation_status.state == "left: doesn't fit on the screen at -4,0", "left: %s",
-            panel_animation_status.state.c_str());
+  CHECK_MSG(anim_list() == "left: doesn't fit on the screen at -4,0", "left: %s", panel_animation_status.state.c_str());
   size_t slow_at = log_all.size();
   overlay::add("slow", {8, 8, 2, 5000, 0, 0, 1, noise_px});
   CHECK_MSG(overlay::sources["slow"].frame_ms == 2550 && logged("frame_ms 5000 is outside 40..2550", slow_at),
@@ -1945,7 +2127,7 @@ static void overlay_no_room() {
   step("no room for another animation");
   overlay::show("ball");
   overlay::place("big", 0, 16, 16, false, 0);
-  int ar = until_anim_status("Shown: ball, big", 6000);
+  int ar = until_anim_status("ball, big", 6000);
   CHECK_MSG(ar >= 0, "ball and big: '%s'", panel_animation_status.state.c_str());
   overlay::add("big2", overlay::sources["big"]);
   overlay::add("big3", overlay::sources["big"]);
@@ -1953,14 +2135,14 @@ static void overlay_no_room() {
   overlay::place("big3", 0, 16, 16, false, 0);
   ar = run_until([] { return overlay::find("big3") && overlay::find("big3")->state != overlay::WANT && settled(); },
                  9000);
-  CHECK_MSG(
-      ar >= 0 && overlay::find("big2")->state == overlay::SENT && overlay::find("big3")->state == overlay::FAILED &&
-          panel_animation_status.state.rfind("Shown: ball, big, big2; big3: too big even at half size (over ", 0) == 0,
-      "four animations: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(ar >= 0 && overlay::find("big2")->state == overlay::SENT &&
+                overlay::find("big3")->state == overlay::FAILED &&
+                anim_list().rfind("ball, big, big2; big3: too big even at half size (over ", 0) == 0,
+            "four animations: '%s'", panel_animation_status.state.c_str());
   CHECK_MSG(pn_overlay_used() == overlay::used_by_others(nullptr) && pn_overlay_used() <= OVERLAY_POOL,
             "the panel's pool holds %u bytes, the ESP thinks %u", pn_overlay_used(),
             (unsigned) overlay::used_by_others(nullptr));
-  for (const char *name : {"big4", "big5"}) {  // refused like big3, but each takes a slot
+  for (const char *name : {"big4", "big5", "big6"}) {  // refused like big3, but each takes a slot
     overlay::add(name, overlay::sources["big"]);
     overlay::place(name, 0, 16, 16, false, 0);
     ar = run_until([name] { return overlay::find(name) && overlay::find(name)->state != overlay::WANT && settled(); },
@@ -1968,11 +2150,11 @@ static void overlay_no_room() {
     CHECK_MSG(ar >= 0 && overlay::find(name)->state == overlay::FAILED, "%s: '%s'", name,
               panel_animation_status.state.c_str());
   }
-  overlay::add("big6", overlay::sources["big"]);
-  overlay::place("big6", 0, 16, 16, false, 0);  // no seventh slot
+  overlay::add("big7", overlay::sources["big"]);
+  overlay::place("big7", 0, 16, 16, false, 0);  // no eighth slot
   run(1);
-  CHECK_MSG(!overlay::find("big6") && logged("No room for animation big6: the panel holds 6 at a time"),
-            "a seventh animation: '%s'", panel_animation_status.state.c_str());
+  CHECK_MSG(!overlay::find("big7") && logged("No room for animation big7: the panel holds 7 at a time"),
+            "an eighth animation: '%s'", panel_animation_status.state.c_str());
   overlay::clear("");
   run(3);
 }
@@ -1986,7 +2168,7 @@ static void overlay_repeats() {
   size_t made = log_all.size();
   overlay::show("cycle");
   overlay::show("held");
-  int ar = until_anim_status("Shown: cycle, held");
+  int ar = until_anim_status("cycle, held");
   CHECK_MSG(ar >= 0 && logged("Animation cycle: 16x16, 3 frames (the rest repeat them)", made) &&
                 overlay_delays("cycle") == std::vector<int>({10, 10, 10, 10}) && same_anim("cycle", 0),
             "cycle: '%s', %u records", panel_animation_status.state.c_str(), (unsigned) overlay_delays("cycle").size());
@@ -2105,10 +2287,11 @@ static void overlay_stills() {
 }
 
 // A long frame goes on in empty records. Past the end of the pool they must fit the records' capacity, or the
-// records move, a peak the RAM check doesn't count. The animation is refused there anyway.
+// records move, a peak the RAM check doesn't count. The animation is refused there anyway. With frames enough that
+// their records could pass the pool, or the capacity is what they take.
 static void overlay_long_frame() {
   step("an animation's long frame past the end of the pool");
-  overlay::add("long", {32, 32, 2, 100, 0, 0, 1, noise_px});
+  overlay::add("long", {32, 32, 20, 100, 0, 0, 1, noise_px});
   overlay::show("long");
   overlay::W.a = overlay::find("long");
   overlay::start();
@@ -2135,10 +2318,10 @@ static void overlay_long_frame() {
 static void overlay_off_screen() {
   step("an animation copy off the screen");
   size_t warned = log_all.size();
-  overlay::place("ball", 8, 10, 10, false, 0);
+  overlay::place("ball", 9, 10, 10, false, 0);
   run(5);
-  CHECK_MSG(!overlay::find("ball") && !overlay_ready() && logged("Animation ball: copy 8 isn't one of 0 to 7", warned),
-            "copy 8: ball %d, the panel shows %s", overlay::find("ball") != nullptr, places().c_str());
+  CHECK_MSG(!overlay::find("ball") && !overlay_ready() && logged("Animation ball: copy 9 isn't one of 0 to 8", warned),
+            "copy 9: ball %d, the panel shows %s", overlay::find("ball") != nullptr, places().c_str());
   overlay::place("ball", 1, -40, 300, false, 0);
   bool sent =
       run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::SENT && settled(); },
@@ -2157,14 +2340,14 @@ static void overlay_shown_again() {
     bool at = was.shown && was.x > 10 && was.x <= 16 && was.y == 16;
     steps(500);
     Look l = look(0);
-    return at && l.shown && l.x < was.x && panel_animation_status.state == "Shown: noise, drifting";
+    return at && l.shown && l.x < was.x && anim_list() == "noise, drifting";
   };
   panel_anim_noise.turn_on();
   run_until(anims_sent, 3000);
   panel_remove_animation.execute("noise", 0);
   run(3);
-  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "copy 0 removed: %s, '%s'",
-            places().c_str(), panel_animation_status.state.c_str());
+  CHECK_MSG(!overlay_ready() && anim_list() == "noise", "copy 0 removed: %s, '%s'", places().c_str(),
+            panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
   CHECK_MSG(back(), "shown again: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
@@ -2172,8 +2355,8 @@ static void overlay_shown_again() {
   run(3);
   steps(2000);
   run(5);
-  CHECK_MSG(!overlay_ready() && panel_animation_status.state == "Shown: noise", "after its round: %s, '%s'",
-            places().c_str(), panel_animation_status.state.c_str());
+  CHECK_MSG(!overlay_ready() && anim_list() == "noise", "after its round: %s, '%s'", places().c_str(),
+            panel_animation_status.state.c_str());
   panel_show_animation.execute("noise");
   run(3);
   CHECK_MSG(back(), "shown again after its round: %s, '%s'", places().c_str(), panel_animation_status.state.c_str());
@@ -2185,9 +2368,10 @@ static void overlay_timing() {
   // A GIF that ends on its first frame. The record back to it stays its own, so a round ends there.
   overlay::add("aba", {16, 16, 3, 100, 0, 0, 1, [](int f, int x, int y) { return noise_px(f == 1, x, y); }});
   overlay::show("aba");
+  run_until(anims_sent, 3000);  // records, with no copy of its own yet to make it a sheet
   overlay::place("aba", 1, 100, 100, true, 0);
   overlay::rounds("aba", 1, 1);
-  run_until(anims_sent, 3000);
+  run(3);
   std::string seen;  // the frames it shows, 2 is like 0
   for (int t = 0; t < 100 && look(1).shown; t++, pn_overlay_step(10)) {
     char f = same_anim("aba", 0, 1, true) ? '0' : same_anim("aba", 1, 1, true) ? '1' : '?';
@@ -2222,43 +2406,83 @@ static void overlay_timing() {
   overlay::clear("");
 }
 
-// What making one takes, pdeflate and all. Short of it at full size it's made at half size, short of that too it fails
-// until it's shown again or a hello.
+// What making one takes, pdeflate and all. Short of it, it waits and says so, and is made once the ESP has it. Short
+// of it for RAM_LOOKS, it's made at half size if the ESP has the RAM for that.
 static void overlay_without_ram() {
   step("animations without the RAM");
   size_t tls = panel::requests * panel::REQUEST_RAM;  // met's request from boot, never run here, holds its share
+  auto waits = [](const char *name) {
+    overlay::Overlay *a = overlay::find(name);
+    return a && a->state == overlay::WANT && a->looks && a->data.empty();
+  };
+  const char *waiting = "Animation ball: waiting for the RAM to make it, ";
+  std::string has = "The ESP has " + std::to_string(45 + tls / 1024) + " KB free";
+  // held for a few seconds, by a picture being made or a request: made at full size once it's back
   ram_free = 45 * 1024 + tls;
   size_t warned = log_all.size();
   panel_anim_ball.turn_on();
-  run_until(anims_sent, 3000);
-  CHECK_MSG(overlay::find("ball")->half && same_anim("ball", 0) &&
+  run(60);
+  CHECK_MSG(waits("ball") && !overlay::find("ball")->half && anim_list() == "ball: waiting for the ESP's RAM" &&
+                times_logged(waiting, warned) == 1 && logged(has.c_str(), warned),
+            "ball short of RAM for a while: '%s', said %d times", panel_animation_status.state.c_str(),
+            times_logged(waiting, warned));
+  ram_free = 200 * 1024;
+  int r = run_until(anims_sent, 3000);
+  CHECK_MSG(r >= 0 && r < 40 && !overlay::find("ball")->half && same_anim("ball", 0) && anim_list() == "ball",
+            "ball once the RAM is back: %d cycles, half %d, '%s'", r, overlay::find("ball")->half,
+            panel_animation_status.state.c_str());
+  // short of it at full size for long: at half size
+  overlay::clear("ball");
+  ram_free = 45 * 1024 + tls;
+  warned = log_all.size();
+  overlay::show("ball");
+  r = run_until(anims_sent, 3000);
+  int looks = (int) (overlay::RAM_LOOKS * overlay::RAM_LOOK_MS / 110);  // in cycles
+  CHECK_MSG(r >= looks && r < looks + 60 && overlay::find("ball")->half && same_anim("ball", 0) &&
                 logged("Animation ball: the ESP has the RAM to make it at half size only", warned),
-            "ball without the RAM for full size: half %d", overlay::find("ball")->half);
-  overlay::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});  // scale 2 can't halve
+            "ball without the RAM for full size: half %d after %d cycles", overlay::find("ball")->half, r);
+  // one that can't halve waits on, and a smaller one is made meanwhile
+  overlay::add("ball2x", {32, 32, 4, 100, 0, 100, 2, noise_px});
+  overlay::add("tiny", {16, 16, 1, 100, 200, 100, 1, noise_px});
+  ram_free = 30 * 1024 + tls;
+  overlay::show("ball2x");
+  overlay::show("tiny");
+  run(looks + 100);
+  CHECK_MSG(waits("ball2x") && anim_list() == "ball, tiny; ball2x: waiting for the ESP's RAM", "'%s'",
+            panel_animation_status.state.c_str());
+  ram_free = 200 * 1024;
+  r = run_until(anims_sent, 3000);
+  CHECK_MSG(r >= 0 && r < 40 && anim_list() == "ball, ball2x, tiny", "not made once the RAM is back: %d cycles, '%s'",
+            r, panel_animation_status.state.c_str());
+  // a hello while one waits: it's made once the RAM is back
+  overlay::clear("ball2x");
+  overlay::clear("tiny");
   ram_free = 30 * 1024 + tls;
   overlay::show("ball2x");
   run(3);
-  CHECK_MSG(panel_animation_status.state == "Shown: ball; ball2x: the ESP doesn't have the RAM to make it", "'%s'",
-            panel_animation_status.state.c_str());
+  restart_panel();
+  CHECK_MSG(waits("ball2x"), "ball2x through a hello: '%s'", panel_animation_status.state.c_str());
   ram_free = 200 * 1024;
-  pn_restart();
-  int r = run_until(anims_sent, 3000);
-  CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x", "not made after a hello: '%s'",
-            panel_animation_status.state.c_str());
-  // panel_place_animation tries a failed one again too
-  ram_free = 30 * 1024;
-  overlay::clear("ball2x");
-  overlay::show("ball2x");
-  run(3);
-  ram_free = 200 * 1024;
-  overlay::place("ball2x", 1, 200, 100, false, 0);
   r = run_until(anims_sent, 3000);
-  CHECK_MSG(r >= 0 && panel_animation_status.state == "Shown: ball, ball2x (2 copies)", "placed after it failed: '%s'",
+  CHECK_MSG(r >= 0 && anim_list() == "ball, ball2x", "not made after a hello: '%s'",
             panel_animation_status.state.c_str());
+  overlay::clear("");
+  // a small one whose copy plays its frames takes what its few frames do, not the pool's worth of records twice
+  overlay::add("boat9", {13, 15, 9, 300, 0, 0, 1, noise_px});
+  ram_free = 31 * 1024 + tls;
+  overlay::place("boat9", 0, 100, 100, true, 0);
+  run(30);
+  bool short_of = waits("boat9");
+  ram_free = 32 * 1024 + tls;
+  r = run_until(anims_sent, 3000);
+  ram_free = 200 * 1024;
+  CHECK_MSG(short_of && r >= 0 && anim_list() == "boat9", "a 13x15 of 9 frames with 31 KB, then 32: waited %d, '%s'",
+            short_of, panel_animation_status.state.c_str());
   overlay::clear("");
   // one that would only fail again isn't made again after a hello, until it's shown again
   static int making;
-  panel_animation_status.add_on_state_callback([](const std::string &s) { making += s == "Making noise2"; });
+  panel_animation_status.add_on_state_callback(
+      [](const std::string &s) { making += s.find("making noise2") != std::string::npos; });
   overlay::show("noise2");
   run(3);
   restart_panel();
@@ -2270,60 +2494,216 @@ static void overlay_without_ram() {
   overlay::clear("");
 }
 
-// Copies with a frame of their own past the panel's pool aren't kept, placed before it's sent or after. One placed
-// again elsewhere has its own frame back first.
+// Panel Animation Status: how full the panel is, what's on its way while it's made and sent, and no longer than Home
+// Assistant takes, the rest counted
+static void overlay_status() {
+  step("the animations' status");
+  overlay::clear("");
+  run(3);
+  static bool sending;  // the callback stays
+  panel_animation_status.add_on_state_callback(
+      [](const std::string &s) { sending |= s.find("sending ball") != std::string::npos; });
+  overlay::show("ball");
+  run_until(anims_sent, 3000);
+  const std::string &st = panel_animation_status.state;
+  CHECK_MSG(sending && st.rfind("1 of 7, 1 of 9 places, ", 0) == 0 && anim_list() == "ball", "status '%s'", st.c_str());
+  std::vector<std::string> names;
+  for (int i = 0; i < 6; i++) {  // names long enough that they don't all fit
+    names.push_back("a_rather_long_animation_name_to_fill_the_status_up_" + std::to_string(i));
+    overlay::add(names.back(), overlay::sources["ball"]);
+    overlay::show(names.back());
+  }
+  run_until(anims_sent, 20000);
+  CHECK_MSG(st.size() <= 255 && st.find(" more") != std::string::npos && st.rfind("7 of 7, ", 0) == 0,
+            "seven animations: %u characters, '%s'", (unsigned) st.size(), st.c_str());
+  overlay::clear("");
+  run(3);
+  for (auto &n : names)
+    overlay::sources.erase(n);
+}
+
+// Copies with frames of their own when it's made make it a sheet, which keeps no frame for them. Placed once it's
+// sent, each takes one, and those past the panel's pool aren't kept. One placed again elsewhere has its own frame
+// back first.
 static void overlay_past_pool() {
   step("animation copies past the panel's pool");
-  overlay::show("ball");  // 1825 bytes, and 1152 for each frame of its own: five of those fit, not a sixth
+  overlay::show("ball");
   for (int i = 1; i <= 6; i++)
     overlay::place("ball", i, 40 * i, 150, true, 0);
   run_until(anims_sent, 3000);
   overlay::Overlay *ball = overlay::find("ball");
-  CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
-                !look(6).shown,
-            "six copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u",
+  CHECK_MSG(
+      ball->sheet && ball->copies[6].used && anim_list() == "ball ×7" && same_pool() &&
+          pn_overlay_used() == ball->data.size() && look(ball->copies[6].place).shown &&
+          [&] {  // one of its frames, as the ESP made it
+            for (int f = 0; f < ball->src->frames; f++)
+              if (same_anim("ball", f, ball->copies[6].place, true))
+                return true;
+            return false;
+          }(),
+      "a sheet with six copies of its own: '%s', %u bytes on the panel", panel_animation_status.state.c_str(),
+      pn_overlay_used());
+  overlay::clear("");
+  run(3);
+  overlay::show("ball");  // 1825 bytes, and 1152 for each frame of its own: as many of those as fit, and no more
+  run_until(anims_sent, 3000);
+  ball = overlay::find("ball");
+  int fit = (int) ((OVERLAY_POOL - ball->frame_bytes() - ball->data.size()) / ball->frame_bytes());
+  static_assert(OVERLAY_POOL == 8960, "six fit, with places left over");
+  for (int i = 1; i <= fit + 1; i++)
+    overlay::place("ball", i, 40 * i, 150, true, 0);
+  run(3);
+  ball = overlay::find("ball");
+  int shown = 0;
+  for (int p = 0; p < OVERLAY_PLACES; p++)
+    shown += look(p).shown;
+  std::string all = "ball ×" + std::to_string(fit + 1);
+  auto no_more = [&] { return (int) ball->copies.size() < fit + 2 || !ball->copies[fit + 1].used; };
+  CHECK_MSG(fit == 6 && no_more() && anim_list() == all && same_pool() && shown == fit + 1,
+            "%d copies with frames of their own: '%s', the panel has %u bytes, the ESP thinks %u", fit,
             panel_animation_status.state.c_str(), pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
   size_t warned = log_all.size();
-  overlay::place("ball", 6, 150, 150, true, 0);
+  overlay::place("ball", fit + 1, 150, 150, true, 0);
   overlay::place("ball", 2, 100, 50, true, 0);
   run(3);
   Look l = look(ball->copies[2].place);
-  CHECK_MSG(!ball->copies[6].used && panel_animation_status.state == "Shown: ball (6 copies)" && same_pool() &&
-                l.shown && l.x == 100 && l.y == 50 &&
-                logged("no room in the panel's 8192 bytes for a copy with a frame of its own", warned),
+  CHECK_MSG(no_more() && anim_list() == all && same_pool() && l.shown && l.x == 100 && l.y == 50 &&
+                logged("no room in the panel's 8960 bytes for a copy with a frame of its own", warned),
             "placed with no room: '%s', copy 2 at %d,%d", panel_animation_status.state.c_str(), l.x, l.y);
-  // all eight places taken: no slot for another
-  for (int i = 6; i < OVERLAY_PLACES; i++)
+  // all nine places taken: no slot for another
+  for (int i = fit + 1; i < OVERLAY_PLACES; i++)
     overlay::place("ball", i, 20 * i, 10, false, 0);
   warned = log_all.size();
   overlay::show("noise");
-  CHECK_MSG(!overlay::find("noise") && logged("the panel shows 8 copies at most", warned),
+  CHECK_MSG(!overlay::find("noise") && logged("the panel shows 9 copies at most", warned),
             "a slot taken with no place for it");
   overlay::clear("");
 }
 
-// The panel lets a wave that's settling go for a new one, so only those that aren't count
-static void overlay_waves_settling() {
-  step("animation waves let go for new ones");
+// panel_tell_animation: a copy bound while its script runs on, freed again, and bound again after a panel restart
+static void overlay_told() {
+  step("an animation copy told what binds it");
   overlay::show("ball");
   overlay::place("ball", 1, 10, 150, false, 0);
-  overlay::place("ball", 2, 100, 150, false, 0);
-  for (int i = 0; i < OVERLAY_WAVES; i++) {
-    int c = i % OVERLAY_CHANNELS;
-    panel_wave_animation.execute("ball", i / OVERLAY_CHANNELS, overlay::CHANNELS[c], overlay::no_change(c) ? 50 : 1,
-                                 overlay::no_change(c) ? 90 : 9, 2000, 2000, 0, 0, 0, false, "none");
-  }
+  panel_script_animation.execute("ball", 1, "on: v = y; wait 100; goto on");
+  panel_tell_animation.execute("ball", 1, "x += 30 + sin(ms / 10, 20)");
+  panel_tell_animation.execute("ball", 1, "opacity *= 50");
   run_until(anims_sent, 3000);
-  steps(500);
-  size_t warned = log_all.size();
-  panel_wave_animation.execute("ball", 0, "x", 0, 0, 0, 0, 0, 0, 0, false, "none");
-  panel_wave_animation.execute("ball", 2, "x", 30, 30, 0, 0, 0, 0, 0, false, "none");
+  int p = overlay::find("ball")->copies[1].place, lo = 999, hi = -999;
+  for (int again = 0; again < 2; again++) {
+    for (int t = 0; t < 80; t++) {
+      steps(50);
+      lo = std::min(lo, look(p).x);
+      hi = std::max(hi, look(p).x);
+    }
+    CHECK_MSG(lo >= 20 && lo < 24 && hi > 56 && hi <= 60 && look(p).opa == 500 && same_pool(),
+              "bound%s: x %d to %d, opacity %d, %u bytes, the ESP %u", again ? " after a restart" : "", lo, hi,
+              look(p).opa, pn_overlay_used(), (unsigned) overlay::used_by_others(nullptr));
+    restart_panel();
+    steps(400);
+  }
+  panel_tell_animation.execute("ball", 1, "free x, opacity");
   run(3);
   steps(100);
-  int x = look(overlay::find("ball")->copies[2].place).x;
-  CHECK_MSG(x == 130 && !logged("waves at most", warned), "a wave in place of one stopped: copy 2 at %d", x);
-  panel_wave_animation.execute("ball", 2, "y", 5, 5, 0, 0, 0, 0, 0, false, "none");
-  CHECK_MSG(logged("the panel runs 12 waves at most", warned), "a 13th wave");
+  CHECK_MSG(look(p).x == 10 && look(p).opa == 1000 && !overlay::bound() && same_pool(),
+            "freed: at %d, opacity %d, %d bound", look(p).x, look(p).opa, overlay::bound());
+  overlay::clear("");
+  run(3);
+}
+
+// What docs/panel.md shows is what the compiler takes: each `script: |` and `code: |` of its YAML, with the clips
+// its block names, and each `statement:` an action there tells a copy
+static void overlay_documented() {
+  step("the scripts the docs show");
+  std::ifstream f(DOCS "panel.md");
+  std::vector<std::string> lines;
+  for (std::string l; std::getline(f, l);)
+    lines.push_back(l);
+  auto indent = [](const std::string &l) { return l.find_first_not_of(' '); };
+  auto quoted = [](const std::string &l, const char *key) {  // key: "this"
+    size_t at = l.find(key), a = at == std::string::npos ? at : l.find('"', at), b = l.find('"', a + 1);
+    return a == std::string::npos || b == std::string::npos ? std::string() : l.substr(a + 1, b - a - 1);
+  };
+  int scripts = 0, statements = 0;
+  size_t fence = 0;  // the line the YAML it's in started at
+  for (size_t i = 0; i < lines.size(); i++) {
+    const std::string &l = lines[i];
+    std::string error, told = quoted(l, "statement: ");
+    if (l.rfind("```", 0) == 0)
+      fence = i;
+    if (!told.empty()) {
+      overlay::Program p = overlay::compile(told, error);
+      CHECK_MSG(error.empty() && p.bytes.empty(), "docs/panel.md line %u, '%s': %s", (unsigned) i + 1, told.c_str(),
+                error.empty() ? "it can't be told, it's a script" : error.c_str());
+      statements++;
+    }
+    size_t key = l.find("script: |") != std::string::npos ? l.find("script: |") : l.find("code: |");
+    if (key == std::string::npos || key != indent(l))
+      continue;
+    std::string text, clips;
+    for (size_t k = fence; k < i; k++)
+      if (lines[k].find("clips: ") != std::string::npos)
+        clips = quoted(lines[k], "clips: ");
+    for (size_t k = i + 1; k < lines.size() && (indent(lines[k]) == std::string::npos || indent(lines[k]) > key); k++)
+      text += lines[k] + "\n";
+    overlay::Clips c = overlay::parse_clips(clips, error);
+    if (error.empty())
+      overlay::compile(text, error, c);
+    CHECK_MSG(error.empty(), "docs/panel.md line %u's script: %s", (unsigned) i + 1, error.c_str());
+    scripts++;
+  }
+  CHECK_MSG(scripts >= 7 && statements >= 9, "%d scripts and %d statements found in docs/panel.md", scripts,
+            statements);
+}
+
+// field.yaml's glow: 4 bytes on the panel, which works out what it shows, lightest in its middle and none in its
+// corners, its opacity bound by its script
+static void overlay_field() {
+  step("a field from its yaml");
+  CHECK_MSG(!logged("Animation glow:"), "glow's yaml warned about");
+  std::string none, bad[3];
+  std::vector<uint32_t> cols = overlay::ramp("00FFF4D8, #FFFFF4D8", none);
+  overlay::ramp("FFF4D8, red", bad[0]);
+  overlay::ramp("FFF4D8", bad[1]);
+  std::string many;
+  for (int k = 0; k < 17; k++)
+    many += k ? ", 101010" : "101010";
+  overlay::ramp(many, bad[2]);
+  CHECK_MSG(none.empty() && cols.size() == 16 && cols[0] == 0x00FFF4D8 && cols[15] == 0xFFFFF4D8 &&
+                cols[6] == 0x66FFF4D8 && bad[0] == "'red' isn't a colour like FFF4D8 or 80FFF4D8" &&
+                bad[1] == "a field goes along 2 colours or more" && bad[2] == "16 colours at most",
+            "a field's colours: '%s', %u of them, '%s', '%s'", none.c_str(), (unsigned) cols.size(), bad[0].c_str(),
+            bad[1].c_str());
+  pn_saver(1);
+  pn_draw(50);
+  const int X = 200, Y = 20, FW = 60, FH = 40;
+  uint32_t was[2] = {pn_pixel(X + FW / 2, Y + FH / 2), pn_pixel(X + 1, Y + 1)};
+  panel_anim_glow.turn_on();
+  run_until(anims_sent, 3000);
+  const overlay::Overlay *a = overlay::find("glow");
+  int p = a ? a->copies[0].place : -1, lo = 1000, hi = 0, lit = 0;
+  Look l = look(p);
+  CHECK_MSG(a && a->field && a->data.size() == OVERLAY_FIELD_LEN && l.shown && l.x == X && l.y == Y && l.w == FW &&
+                l.h == FH && (l.view & OVERLAY_VIEW_BLEND) == OVERLAY_BLEND_ADD && same_pool() &&
+                pn_overlay_used() < 64,
+            "the glow: at %d,%d, %d x %d, view %d, %u bytes, the ESP %u", l.x, l.y, l.w, l.h, l.view, pn_overlay_used(),
+            (unsigned) overlay::used_by_others(nullptr));
+  auto bright = [](uint32_t c) { return (int) ((c >> 16 & 255) + (c >> 8 & 255) + (c & 255)); };
+  for (int t = 0; t < 8; t++)  // faded in
+    pn_draw(50);
+  for (int t = 0; t < 80; t++) {
+    pn_draw(50);
+    lo = std::min(lo, look(p).opa);
+    hi = std::max(hi, look(p).opa);
+    lit = std::max(lit, bright(pn_pixel(X + FW / 2, Y + FH / 2)) - bright(was[0]));
+  }
+  CHECK_MSG(lo >= 200 && lo < 260 && hi > 940 && hi <= 1000 && lit > 60 && pn_pixel(X + 1, Y + 1) == was[1],
+            "its opacity %d to %d, its middle %d lighter, its corner %06X then %06X", lo, hi, lit, was[1],
+            pn_pixel(X + 1, Y + 1));
+  pn_saver(0);
+  panel_anim_glow.turn_off();
+  run(5);
+  CHECK_MSG(!overlay::find("glow") && same_pool(), "the glow turned off");
 }
 
 // Taking a copy off or clearing another while one is on its way: it goes on, and the panel has what the ESP thinks
@@ -2438,12 +2818,26 @@ static void overlay_script_action() {
       {1, "move x +", "line 1: a number or a name expected"},
       {1, "wait 100\ngoto nowhere", "line 2: no 'nowhere:'"},
       {1, "clip fly", "line 1: what's 'fly'?"},
-      {1, "move x(kite.9), 0", "line 1: no copy 9, they're 0 to 7"},
+      {1, "move x(kite.9), 0", "line 1: no copy 9, they're 0 to 8"},
       {1, "wait 100.5", "only whole numbers"},
       {1, "mark 256", "marks are 0 to 255"},
       {2, "clip up", "copy 2 has no frame of its own"},
       {1, "a = 1; b = 2; c = 3; d = 4; e = 5; f = 6; g = 7; k = 8; m = 9", "only 8 of its own"},
       {1, "tint 0x1000000", "a tint is a colour like 0xFF77BB"},
+      {1, "glide light 201", "light takes 0 to 200"},
+      {1, "glide w -1 over 100", "w takes 0 to 1024"},
+      {1, "map x 0, 1, 0, 1", "x and y don't follow where it is"},
+      {1, "shape 4, 5", "a shape is runs of width, top and bottom"},
+      {1, "shape 4, 5, 1", "its bottom under its top"},
+      {1, "tell kite.2 wait 100", "tell sends another copy what moves, shows or binds it"},
+      {1, "k = 1\ntell kite.2 x += k", "another copy's is bound by what it has itself, or what's shared"},
+      {1, "frame += 1", "'frame' is only bound with :="},
+      {1, "v = sin(1, 2, 3)", "sin takes 2"},
+      {1, "v = wave(ms, 0, 1)", "wave takes 5 to 9"},
+      {1, "v = pick(x, 1, y)", "pick's list is whole numbers"},
+      {1, "free nothing", "what's 'nothing'?"},
+      {1, "tell kite.2 tell kite.0 flip x", "one tell at a time"},
+      {1, "wander -5, 5, 0, 180, 0, 0, 0, 0", "its speeds and times can't be below 0"},
   };
   std::vector<uint8_t> was = overlay::find("kite")->copies[1].script.bytes;
   for (auto &b : bad) {
@@ -2453,35 +2847,128 @@ static void overlay_script_action() {
               "'%s' on copy %d isn't warned about with '%s': %s", b.script, b.copy, b.why,
               log_all.substr(warned).c_str());
   }
+  {  // what a script tells other copies counts for the panel's memory and binds, a copy that isn't shown is nobody,
+    // and its own fade for an end is as long as a fade can be
+    std::string err;
+    overlay::Program p = overlay::compile("wait 100\ntell kite.2 wander 5, 9, 0, 180, 0, 0, 0, 0\n"
+                                          "tell kite.2 opacity *= 50 + sin(ms / 9, 50)\ntell kite.2 free opacity\n"
+                                          "wander 5, 9, 0, 180, 0, 0, 0, 0\nend",
+                                          err);
+    const uint8_t *fade = nullptr;
+    for (auto &k : p.patches)
+      if (k.kind == overlay::Program::FADE)
+        fade = &p.bytes[k.at];
+    CHECK_MSG(err.empty() && p.roams && p.gives > OVERLAY_ROAM + 8 && p.gives < OVERLAY_ROAM + 40 &&
+                  p.gives_binds == 1 && fade && fade[-1] == OVERLAY_V32 && fade + 4 < p.bytes.data() + p.bytes.size(),
+              "what a script gives other copies: '%s', %u bytes, %d bound", err.c_str(), (unsigned) p.gives,
+              p.gives_binds);
+    CHECK_MSG(overlay::place_of("kite", 7) == OVERLAY_NOBODY && overlay::place_of("nothing", 0) == OVERLAY_NOBODY &&
+                  overlay::place_of("kite", 1) == overlay::find("kite")->copies[1].place,
+              "a copy that isn't shown is at %d", overlay::place_of("kite", 7));
+  }
+  {  // What a value's operators take, by the steps they make: the same as with brackets round each. And how deep
+    // its brackets and how high what it works out may go, which is what an ESP's stack has room for: one that
+    // took more of it wrote over the heap.
+    auto steps = [](const std::string &value, std::string &err) { return overlay::compile("v = " + value, err).bytes; };
+    static const char *const SAME[][2] = {
+        {"1 + x * 3 - y / 2", "(1 + (x * 3)) - (y / 2)"},
+        {"x - y - 3", "(x - y) - 3"},
+        {"x % 4 * y", "(x % 4) * y"},
+        {"x * y / 3", "scale(x, y, 3)"},
+        {"x < y or not x == 3 and y > 2", "(x < y) or ((not (x == 3)) and (y > 2))"},
+        {"not x + 1 < y", "not ((x + 1) < y)"},
+        {"not not x", "not (not x)"},
+        {"--x", "-(-x)"},
+        {"-x * y", "(-x) * y"},
+        {"min(x, max(y, 2 * (x + 1))) + 1", "(min(x, (max(y, (2 * (x + 1)))))) + 1"},
+    };
+    for (auto &pair : SAME) {
+      std::string err[2];
+      std::vector<uint8_t> plain = steps(pair[0], err[0]), bracketed = steps(pair[1], err[1]);
+      CHECK_MSG(err[0].empty() && err[1].empty() && !plain.empty() && plain == bracketed,
+                "'%s' isn't '%s': '%s', '%s', %u and %u bytes", pair[0], pair[1], err[0].c_str(), err[1].c_str(),
+                (unsigned) plain.size(), (unsigned) bracketed.size());
+    }
+    std::string err, apart;
+    CHECK_MSG(steps("x * (y / 3)", err) != steps("x * y / 3", apart) && err.empty() && apart.empty(),
+              "brackets round a division change nothing: '%s', '%s'", err.c_str(), apart.c_str());
+    auto inside = [](const char *open, int n) {
+      std::string value = "x";
+      for (int k = 0; k < n; k++)
+        value = open + value + ")";
+      return value;
+    };
+    auto sum_of = [](int n) {
+      std::string sum = "x";
+      for (int k = 1; k < n; k++)
+        sum += " + x";
+      return sum;
+    };
+    using overlay::text::HIGHEST;
+    using overlay::text::NESTED;
+    struct {
+      std::string value;
+      const char *why;  // "" if it's made
+    } ends[] = {
+        {inside("(", NESTED), ""},
+        {inside("(", NESTED + 1), "more than 6 brackets inside each other"},
+        {inside("abs(", NESTED), ""},
+        {inside("abs(", NESTED + 1), "more than 6 brackets inside each other"},
+        {inside("clamp(0, 9, ", 3), ""},
+        {inside("clamp(0, 9, ", 4), "too much to work out at once"},
+        {sum_of(HIGHEST), ""},
+        {sum_of(HIGHEST + 1), "too much to work out at once"},
+        {std::string(HIGHEST - 1, '-') + "x", ""},
+        {std::string(200, '-') + "x", "too much to work out at once"},
+        {"x + not y", "what's 'not'?"},
+        {"x < not y", "what's 'not'?"},
+    };
+    for (auto &e : ends) {
+      std::string why;
+      bool made = !steps(e.value, why).empty() && why.empty();
+      CHECK_MSG(*e.why ? !made && why.find(e.why) != std::string::npos : made, "'%s' %s: '%s'", e.value.c_str(),
+                *e.why ? "is made, or isn't refused for what it is" : "isn't made", why.c_str());
+    }
+    // The stack is looked at before a script is read, at each bracket and at each step up a value. Wherever it's
+    // found full the script isn't made, and says so.
+    int looks = 0;
+    for (bool made = false; !made && looks < 100; looks++) {
+      stack_full_at = looks;
+      made = !steps("min(x, (y + 1) * 3)", err).empty();
+      CHECK_MSG(made ? err.empty() && stack_full_at >= 0 : err.find("no room on the stack") != std::string::npos,
+                "the stack found full the %d. time it's looked at: '%s'", looks + 1, err.c_str());
+    }
+    stack_full_at = -1;
+    CHECK_MSG(looks > 6 && looks < 100, "the stack is looked at %d times for a call and a bracket", looks - 1);
+    overlay::Program rows = overlay::compile("a: b: c: wait 100\ngoto b", err);
+    CHECK_MSG(err.empty() && !rows.bytes.empty(), "three labels on one step: '%s'", err.c_str());
+  }
   {  // a clip by name shows its w x h of the frames, one by number all of them, and a tint is told before it starts
     std::string err;
     overlay::Program p =
         overlay::compile("tint 0xFF77BB\nclip stay\nclip 1 to 2\ntint none", err, {{"stay", {4, 9, 17, 300}}});
     std::vector<uint8_t> clips = {OVERLAY_DO_CLIP,
-                                  OVERLAY_V16,
+                                  OVERLAY_V8,
                                   4,
-                                  0,
-                                  OVERLAY_V16,
+                                  OVERLAY_V8,
                                   9,
-                                  0,
                                   OVERLAY_CLIP_NOW,
                                   17,
                                   0,
                                   44,
                                   1,
                                   OVERLAY_DO_CLIP,
-                                  OVERLAY_V16,
+                                  OVERLAY_V8,
                                   1,
-                                  0,
-                                  OVERLAY_V16,
+                                  OVERLAY_V8,
                                   2,
-                                  0,
                                   OVERLAY_CLIP_NOW,
                                   0,
                                   0,
                                   0,
                                   0,
                                   OVERLAY_DO_SEND,
+                                  OVERLAY_SELF,
                                   K_OVERLAY_TINT - K_OVERLAY_FRAMES,
                                   OVERLAY_TINT_LEN,
                                   0,
@@ -2494,6 +2981,63 @@ static void overlay_script_action() {
     CHECK_MSG(
         err.empty() && p.bytes == clips && p.told.size() == 1 && p.told[0].key == K_OVERLAY_TINT && p.told[0].m == tint,
         "clips and tints: '%s', %u bytes, %u told", err.c_str(), (unsigned) p.bytes.size(), (unsigned) p.told.size());
+  }
+  {  // views: the box glided, its frame scrolled and the box grown, repeats and flips told as views, a shape as a step,
+     // another copy told as it runs, and all of a copy read
+    std::string err;
+    overlay::Program p = overlay::compile("glide w 90\nscroll 1.5, -2\ngrow 3, 0\nrepeat both mirror\nflip x\n"
+                                          "shape 4, 0, 10, 6, 2, 8\ntell kite.2 glide pan_x 7\n"
+                                          "v = pan_x + w(kite.2) + frames + frame_w + frame_h + depth + speed",
+                                          err);
+    const unsigned R = OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_REPEAT_Y | OVERLAY_VIEW_MIRROR;
+    std::vector<uint8_t> shape = {OVERLAY_DO_SHAPE, 6, 4, 0, 0, 0, 10, 0, 6, 0, 2, 0, 8, 0};
+    using overlay::msg::sets;
+    bool told =
+        p.told.size() == 5 && p.told[0].key == K_OVERLAY_GLIDE && p.told[1].key == K_OVERLAY_DRIFT &&
+        sets(K_OVERLAY_DRIFT, p.told[1].m) == (1u << OVERLAY_PAN_X | 1u << OVERLAY_PAN_Y) &&
+        p.told[1].m[OVERLAY_DRIFT_HEAD] == OVERLAY_PAN_X && plink_i16(&p.told[1].m[OVERLAY_DRIFT_HEAD + 1]) == 150 &&
+        plink_i16(&p.told[1].m[OVERLAY_DRIFT_HEAD + OVERLAY_GLIDE_EACH + 1]) == -200 &&
+        sets(K_OVERLAY_DRIFT, p.told[2].m) == (1u << OVERLAY_W | 1u << OVERLAY_H) && p.told[3].key == K_OVERLAY_VIEW &&
+        p.told[3].m[OVERLAY_VIEW_MASK] == R && p.told[3].m[OVERLAY_VIEW_FLAGS] == R &&
+        p.told[4].key == K_OVERLAY_VIEW && p.told[4].m[OVERLAY_VIEW_FLAGS] == OVERLAY_VIEW_FLIP_X;
+    bool sends =
+        p.bytes.size() > shape.size() + 3 && std::equal(shape.begin(), shape.end(), p.bytes.begin()) &&
+        p.bytes[shape.size()] == OVERLAY_DO_SEND && p.bytes[shape.size() + 2] == K_OVERLAY_GLIDE - K_OVERLAY_FRAMES &&
+        std::any_of(p.patches.begin(), p.patches.end(), [&](const overlay::Program::Patch &k) {
+          return k.kind == overlay::Program::PLACE && k.at == shape.size() + 1 && k.name == "kite" && k.copy == 2;
+        });
+    CHECK_MSG(err.empty() && told && sends, "views: '%s', %u told, %u bytes", err.c_str(), (unsigned) p.told.size(),
+              (unsigned) p.bytes.size());
+  }
+  {  // several channels in one glide, each with its value, and a pivot and a depth as glides of theirs
+    std::string err;
+    overlay::Program p =
+        overlay::compile("glide opacity 40 size_x -50 turn 9 over 300 ease out\npivot 99.5, 0\ndepth 7", err);
+    const std::vector<uint8_t> &g = p.told.empty() ? std::vector<uint8_t>() : p.told[0].m;
+    const std::vector<uint8_t> each = {OVERLAY_OPACITY, 40, 0, OVERLAY_SIZE_X, 0xCE, 0xFF, OVERLAY_TURN, 9, 0};
+    bool glide = p.told.size() == 3 && p.told[0].key == K_OVERLAY_GLIDE &&
+                 g.size() == OVERLAY_GLIDE_HEAD + each.size() &&
+                 std::equal(each.begin(), each.end(), g.begin() + OVERLAY_GLIDE_HEAD) &&
+                 plink_get16(&g[OVERLAY_GLIDE_MS]) == 300 && g[OVERLAY_GLIDE_EASE] == OVERLAY_EASE_OUT;
+    const std::vector<uint8_t> at = {OVERLAY_PIVOT_X, 0xE3, 0x03, OVERLAY_PIVOT_Y, 0, 0}, deep = {OVERLAY_DEPTH, 7, 0};
+    bool pivot = glide && p.told[1].key == K_OVERLAY_GLIDE && p.told[2].key == K_OVERLAY_GLIDE &&
+                 std::equal(at.begin(), at.end(), p.told[1].m.begin() + OVERLAY_GLIDE_HEAD) &&
+                 std::equal(deep.begin(), deep.end(), p.told[2].m.begin() + OVERLAY_GLIDE_HEAD);
+    std::string twice, out, soft_out;
+    overlay::compile("glide size 50 size 60", twice);
+    overlay::compile("pivot 50, 101", out);
+    overlay::compile("soft 0, 0, 1025, 0", soft_out);
+    // a blend told as a view, soft edges as a step
+    std::string e2;
+    overlay::Program q = overlay::compile("blend screen\nsoft 2, 0, 10, 4\nsoft none", e2);
+    std::vector<uint8_t> steps = {OVERLAY_DO_SOFT, 2, 0, 0, 0, 10, 0, 4, 0, OVERLAY_DO_SOFT, 0, 0, 0, 0, 0, 0, 0, 0};
+    pivot &= e2.empty() && q.told.size() == 1 && q.told[0].key == K_OVERLAY_VIEW &&
+             q.told[0].m[OVERLAY_VIEW_MASK] == OVERLAY_VIEW_BLEND &&
+             q.told[0].m[OVERLAY_VIEW_FLAGS] == OVERLAY_BLEND_SCREEN && q.bytes == steps &&
+             soft_out == "line 1: soft takes 0 to 1024 px for each edge";
+    CHECK_MSG(err.empty() && pivot && twice == "line 1: size twice" &&
+                  out == "line 1: pivot takes 0 to 100 percent of its box",
+              "a glide of several and a pivot: '%s', '%s', '%s'", err.c_str(), twice.c_str(), out.c_str());
   }
   std::string long_one;
   for (int k = 0; k < OVERLAY_SCRIPT_MAX / 4; k++)
@@ -2771,6 +3315,15 @@ static void met_picture() {
           "colour %06X moved from %d to %d", (unsigned) was_pal[k], k, j);
   panel_weather_forecast.turn_on();
   CHECK_MSG(picture("weather with the forecast", 3000) >= 0, "weather picture with the forecast not shown");
+  std::string fk = marks::overlay_of("weather");
+  CHECK_MSG(run_until(
+                [&] {
+                  const overlay::Overlay *a = overlay::find(fk);
+                  return a && a->state == overlay::SENT && settled();
+                },
+                600) >= 0,
+            "the forecast not over the weather");
+  play_ms(400);  // faded in
   pn_shot(outdir, "esp_weather_forecast");
   panel_weather_forecast.turn_off();
   ram_block = sizeof(met::Drawing) - 1;  // the scene's biggest piece
@@ -2883,7 +3436,7 @@ static void met_date_line() {
   tz_offset_s = 13 * 3600;
   met::redraw();
   CHECK_MSG(met::draw(), "the scene not drawn");
-  static SceneBuf want(false);
+  static SceneBuf want;
   met::build(
       want.s, met::weather, met::lat, met::lon, 1780228800, false, [](uint32_t) { return 13 * 3600; }, met::options);
   want.s.live = met::drawing->scene.live;
@@ -2911,10 +3464,11 @@ static void met_date_line() {
 #include "live_days.inc"
 #include "live_rare.inc"
 #include "live_texts.inc"
+#include "live_cast.inc"
 
 static void weather_scene() {
   step("the weather scene (packages/code/met/met_scene.h)");
-  static SceneBuf sb(true);
+  static SceneBuf sb;
   met::Scene &s = sb.s;
   auto wx = [](const char *sym, float cloud, float temp, float wind, float from) {
     met::Weather w;
@@ -2952,11 +3506,59 @@ static void weather_scene() {
     met::Options o{};
     o.heater_pct = 60;
     draw(w, utc(2026, 5, 17, 10), o);
-    int dir = from < 180 ? 1 : -1, flag = s.stamps->at[s.nstamps - 1].x - s.pole_x,
-        smoke = s.stamps->at[0].x + s.stamps->at[0].w / 2 - (s.cabin_x + 9);
+    int dir = from < 180 ? 1 : -1, flag = 0,
+        smoke = s.stamps->at[0].x + s.stamps->at[0].w / 2 - (s.cabin_x + met::CHIMNEY_X);
+    for (int i = 0; i < s.nstamps; i++)
+      if (s.stamps->at[i].tag == met::L_FLAG)
+        flag = s.stamps->at[i].x - s.pole_x;
     CHECK_MSG(s.slant * dir > 0 && flag * dir > 0 && smoke * dir > 0, "wind from %.0f: rain %d, flag %d, smoke %d",
               from, s.slant, flag, smoke);
   }
+  // Christmas is from Advent's first Sunday, or 1 December, to 13 January: the julenek stands by the cabin, the
+  // spruce has its lights after dark and the eaves theirs from dusk to dawn. A snowman comes once 8 cm of snow lie,
+  // and a snow lantern is lit by the door on a snowy evening.
+  met::Options deep{};
+  deep.snow_cm = 12;
+  met::Weather frost = wx("clearsky_day", 0, -5, 2, 200);
+  draw(frost, utc(2026, 12, 20, 11), deep);
+  bool nek = s.nek.x >= 0 && !s.yule_lights && !s.nlights, man = s.snowman.x >= 0 && s.lantern.x < 0;
+  draw(frost, utc(2027, 1, 13, 3), deep);
+  bool night = s.nek.x >= 0 && s.yule_lights && s.nlights && s.lantern.x < 0;  // asleep, the lights still on
+  draw(frost, utc(2027, 1, 13, 18), deep);
+  bool evening = s.yule_lights && s.nlights && s.lantern.x >= 0;
+  deep.snow_cm = 3;
+  draw(frost, utc(2027, 1, 14, 18), deep);
+  CHECK_MSG(nek && man && night && evening && s.nek.x < 0 && !s.yule_lights && !s.nlights && s.snowman.x < 0 &&
+                s.lantern.x >= 0,
+            "the julenek by day %d, the snowman %d, the lights at night %d, the evening's and the lantern %d, and "
+            "after Christmas: nek %d, lights %d, snowman in 3 cm %d",
+            nek, man, night, evening, s.nek.x, s.yule_lights, s.snowman.x);
+  // in town they stand in the park, all below the road, and the old houses have the lights
+  deep.snow_cm = 12;
+  deep.ground = met::G_CITY;
+  draw(frost, utc(2026, 12, 20, 17), deep);
+  int park = std::min({s.nek.y, s.snowman.y, s.lantern.y});
+  CHECK_MSG(
+      s.nek.x >= 0 && s.snowman.x >= 0 && s.lantern.x >= 0 && park > met::ROAD_NEAR && s.yule_lights,
+      "Christmas in town: the julenek at %d, the snowman at %d, the lantern at %d, the highest at row %d, lights %d",
+      s.nek.x, s.snowman.x, s.lantern.x, park, s.yule_lights);
+  deep.ground = met::G_HILLS;
+  // Advent's first Sunday is 29 November in 2026 and 3 December in 2028, when 1 December starts it
+  for (auto f : {std::make_tuple(utc(2026, 11, 28, 12), false), std::make_tuple(utc(2026, 11, 29, 12), true),
+                 std::make_tuple(utc(2028, 11, 30, 12), false), std::make_tuple(utc(2028, 12, 1, 12), true)}) {
+    met::Now n(frost, deep, OSLO_LAT, OSLO_LON, std::get<0>(f), 3600);
+    CHECK_MSG(n.yule == std::get<1>(f), "%d.%d.%d: Christmas on %d", n.day, n.month, n.year, n.yule);
+  }
+  // the pennant stands straight out in a fresh breeze and hangs in a calm
+  int tall[2] = {};
+  for (int k = 0; k < 2; k++) {
+    draw(wx("clearsky_day", 0, 12, k ? 8.0f : 0.0f, 270), utc(2026, 7, 14, 10), {});
+    for (int i = 0; i < s.nstamps; i++)
+      if (s.stamps->at[i].tag == met::L_FLAG)
+        tall[k] = s.stamps->at[i].h;
+  }
+  CHECK_MSG(tall[0] > 20 && tall[1] == met::PENNANT_H, "the pennant's rows in a calm %d, in a breeze %d", tall[0],
+            tall[1]);
   // the coast's trees stay put in any weather, with or without the boat
   draw(wx("fair_day", 10, 18, 3, 200), utc(2026, 7, 10, 12), {met::G_COAST});
   auto tree_xs = [&] {
@@ -2979,23 +3581,62 @@ static void weather_scene() {
     CHECK_MSG(n.flag_up == std::get<4>(f), "the flag at %.2f N at %02d local with the sun at %.1f: up %d",
               std::get<0>(f), n.hour, n.sun.el, n.flag_up);
   }
+  // spring comes later up north: the grass is green and the birches in leaf in Oslo in mid May, not yet in Tromso,
+  // and nowhere on 1 April
+  for (auto f :
+       {std::make_tuple(OSLO_LAT, utc(2026, 4, 1, 10), 1, false),
+        std::make_tuple(OSLO_LAT, utc(2026, 5, 15, 10), 2, true),
+        std::make_tuple(69.65, utc(2026, 5, 15, 10), 2, false), std::make_tuple(69.65, utc(2026, 5, 5, 10), 1, false),
+        std::make_tuple(OSLO_LAT, utc(2026, 7, 1, 10), 3, true),
+        std::make_tuple(OSLO_LAT, utc(2026, 10, 1, 10), 4, true),
+        std::make_tuple(OSLO_LAT, utc(2026, 11, 1, 10), 4, false),
+        std::make_tuple(69.65, utc(2026, 11, 1, 10), 1, false)}) {
+    met::Now n(wx("fair_day", 20, 9, 2, 200), o, std::get<0>(f), OSLO_LON, std::get<1>(f), 3600);
+    CHECK_MSG(n.season == std::get<2>(f) && n.leaves == std::get<3>(f), "%.0f N on %d.%d: season %d, in leaf %d",
+              std::get<0>(f), n.day, n.month, n.season, n.leaves);
+  }
+  // snow lies by what has fallen and melted, not by the temperature now: a cold clear night in October leaves the
+  // ground bare, snow whitens it once a centimetre has come, a mild hour leaves it and a mild week takes it
+  met::SnowCover cover;
+  auto lies = [&](const met::Weather &v, uint32_t t) {
+    cover.step(v, t);
+    met::Options with{};
+    with.snow_cm = cover.cm;
+    return met::Now(v, with, OSLO_LAT, OSLO_LON, t, 3600).white;
+  };
+  met::Weather snowfall = wx("snow", 100, -2, 2, 200), mild = wx("cloudy", 80, 2, 2, 200);
+  snowfall.rain = 1;
+  uint32_t oct = utc(2026, 10, 20, 2);
+  bool bare = !lies(wx("clearsky_night", 0, -4, 1, 200), oct), first = lies(snowfall, oct + 1800),
+       white = lies(snowfall, oct + 3 * 3600), stays = lies(mild, oct + 5 * 3600);
+  for (int h = 6; h < 60; h += 5)
+    lies(wx("cloudy", 80, 5, 2, 200), oct + (uint32_t) h * 3600);
+  CHECK_MSG(bare && !first && white && stays && cover.cm == 0,
+            "snow on the ground: bare at -4 %d, white at once %d, after 3 h of snow %d, through a mild hour %d, "
+            "%.1f cm after two mild days",
+            bare, first, white, stays, (double) cover.cm);
+  // with no memory it goes by the weather and the month: white at +1 in January, bare at -4 in October
+  CHECK_MSG(
+      met::snow_likely(wx("cloudy", 80, 1, 2, 200), 1) && !met::snow_likely(wx("clearsky_night", 0, -4, 2, 200), 10),
+      "snow by the weather alone");
   // the forecast's hours are labelled in the local time of each, across the end of summer time
   met::Weather w = wx("cloudy", 50, 8, 3, 200);
   w.time = utc(2026, 10, 25);
   for (int i = 0; i < met::HOURS; i++)
     w.hour[w.hours++] = {w.time + i * 3600u, 8, met::I_CLOUD};
-  int at[4], n = met::marks(w, w.time + 1800, oslo_offset, at);
+  int at[4], n = met::hour_marks(w, w.time + 1800, oslo_offset, at);
   CHECK_MSG(n == 4 && at[0] == 2 && met::local_hour(w.hour[at[0]].time, oslo_offset) == 3 && at[1] == 5,
             "forecast marks after the change: %d of them, the first hour %d", n, at[0]);
-  // the lighthouse blinks every other redraw, whatever the redraw interval
-  int lamps[2];
+  // the lighthouse's lamp is lit at night whatever the redraw, the animations' glow and beam going round it
+  int lit = 0;
   for (uint32_t frame : {0, 1}) {
     met::Options c{met::G_COAST};
     c.frame = frame;
     draw(wx("clearsky_night", 0, 8, 2, 200), utc(2026, 9, 10, 21, 30), c);
-    lamps[frame] = s.nstamps;
+    for (int i = 0; i < s.nstamps; i++)
+      lit += s.stamps->at[i].x == met::LH_X - 1 && s.stamps->at[i].c == met::WARM_LIGHT;
   }
-  CHECK_MSG(lamps[0] == lamps[1] + 1, "the lamp doesn't blink: %d and %d stamps", lamps[0], lamps[1]);
+  CHECK_MSG(lit == 2, "the lamp lit in %d of 2 redraws", lit);
   // the moon wraps around the edges like the sun
   draw(wx("clearsky_night", 0, 2, 2, 200), utc(2026, 10, 26, 21), {});
   CHECK_MSG(s.moon, "no moon to wrap");
@@ -3016,6 +3657,31 @@ static void weather_scene() {
     }
   }
   CHECK_MSG(smallest >= 4, "a cloud lobe %d wide", smallest);
+  // the mountains stand in the middle and low clouds: wherever one of those is over the ridge or a peak it's the
+  // cloud that shows, so the rain falls out of clouds that are there
+  met::Weather pour = wx("rain", 90, 8, 3, 200);
+  pour.rain = 2;
+  draw(pour, utc(2026, 10, 20, 12), {met::G_MOUNTAINS});
+  int shroud = 0, peaks = 0;
+  for (int i = 0; i < s.nclouds; i++) {
+    const met::Cloud &c = s.cloud[i];
+    for (int y = c.top; y <= c.base && !met::high_cloud(s, i); y++) {
+      met::row(s, y, r);
+      for (int j = 0; j < c.n; j++) {
+        int h = met::half(y - c.e[j].y, c.e[j].rx, c.e[j].ry), cx = met::cloud_x(s, i) + c.e[j].x;
+        for (int x = std::max(0, cx - h); x <= std::min(met::W - 1, cx + h); x++) {
+          if (y < std::min(s.land->ridge[x], s.land->hill[0][x]))
+            continue;
+          bool cloud = false;
+          for (int l = 1; l < 3; l++)
+            cloud |= r[x] == s.ix[met::C_LIT + l] || r[x] == s.ix[met::C_SHADE + l];
+          (cloud ? shroud : peaks)++;
+        }
+      }
+    }
+  }
+  CHECK_MSG(shroud > 2000 && !peaks, "rain in the mountains: %d px of cloud over them, %d px of them over a cloud",
+            shroud, peaks);
   // the Christmas tree has lights on both sides
   draw(wx("cloudy", 95, -3, 2, 200), utc(2026, 12, 24, 16), {});
   int left = 0, right = 0, tree = -1;
@@ -3068,7 +3734,7 @@ static void end_lost() {
   lose = 1;
   panel_anim_noise.turn_off();
   panel_anim_ball.turn_on();
-  int r = until_anim_status("Shown: ball");
+  int r = until_anim_status("ball");
   CHECK_MSG(r >= 0 && !lose && same_anim("ball", 0), "the animation not sent again: %s",
             panel_animation_status.state.c_str());
   printf("  ball: %s after %d cycles\n", panel_animation_status.state.c_str(), r);
@@ -3077,10 +3743,10 @@ static void end_lost() {
   run(3);
   panel_anim_ball.turn_on();
   r = run_until([] { return overlay::find("ball") && overlay::find("ball")->state == overlay::FAILED; }, 3000);
-  CHECK_MSG(r >= 0 && !lose && panel_animation_status.state == "ball: the panel didn't answer", "lost answers: %s",
+  CHECK_MSG(r >= 0 && !lose && anim_list() == "ball: the panel didn't answer", "lost answers: %s",
             panel_animation_status.state.c_str());
   pn_restart();
-  r = until_anim_status("Shown: ball");
+  r = until_anim_status("ball");
   CHECK_MSG(r >= 0 && overlay_ready() && same_anim("ball", 0), "not tried again after a panel restart: %s",
             panel_animation_status.state.c_str());
   h = real;
@@ -3143,7 +3809,7 @@ static void refused() {
   turn = 1;
   ids = panel::transfer_ids;
   overlay::show("ball");  // tried again
-  r = until_anim_status("Shown: ball");
+  r = until_anim_status("ball");
   CHECK_MSG(r >= 0 && !turn && went() == 2 && same_anim("ball", 0), "an animation with a bad CRC: %d transfers, '%s'",
             went(), panel_animation_status.state.c_str());
   h = real;
@@ -3166,12 +3832,12 @@ static void overlay_while_away() {
             "DATA queued while the panel was away: %u bytes on, %u more queued", (unsigned) (overlay::W.t.pos - pos),
             panel::link::waiting() - queued);
   server->updating_ = false;
-  r = until_anim_status("Shown: noise, drifting");
+  r = until_anim_status("noise, drifting");
   CHECK_MSG(r >= 0 && same_anim("noise", 0), "noise not shown once the panel was back: '%s'",
             panel_animation_status.state.c_str());
   panel_anim_noise.turn_off();
   panel_anim_ball.turn_on();
-  until_anim_status("Shown: ball");
+  until_anim_status("ball");
 }
 
 static void unknown_names() {
@@ -3466,7 +4132,6 @@ static void online_picked() {
 }
 
 // ---------------------------------------------------------------- the space pictures
-namespace marks = flexit::panel::marks;
 
 // A picture from the PPMs the Makefile makes, see ESP_PICTURES
 static void picture_of(Image &img, const char *file) {
@@ -4132,6 +4797,26 @@ static void screen_camera() {
   CHECK_MSG(c >= 0, "no image once the RAM was back");
   cam.single = cam.stream = false;
   watch([] { return !panel::shot::S.asked; }, 600);
+  // The RAM goes while the tiles of a new picture come: the rest aren't kept, and with it back the next shot is of
+  // every tile
+  pn_saver(1);
+  cam.single = true;
+  auto kept = [] {
+    auto &t = panel::shot::S.tiles;
+    return std::count_if(t.begin(), t.end(), [](auto &b) { return b != nullptr; });
+  };
+  c = watch([] { return panel::shot::S.asked && panel::shot::S.head_n; }, 300);
+  long had = kept();
+  ram_free = 4 * 1024;
+  draw_cycles(60);
+  CHECK_MSG(c >= 0 && shot::S.lost && shot::S.all && kept() <= had + 1, "tiles kept without the RAM: %ld, then %ld",
+            had, (long) kept());
+  ram_free = free;
+  c = watch([] { return !panel_screen.single; }, 600);
+  CHECK_MSG(c >= 0, "no image once the RAM was back, with tiles on their way");
+  cam.single = cam.stream = false;
+  watch([] { return !panel::shot::S.asked; }, 600);
+  pn_saver(0);
   loop_between = false;
 }
 
@@ -4200,7 +4885,7 @@ static void overlay_coloured() {
   panel_glide_animation.execute("ball", 0, "light", OVERLAY_LIGHT_MAX + 1, 0, "none");
   run(3);
   CHECK_MSG(logged("panel_tint_animation: 'red' isn't a colour like FF77BB", bad) &&
-                logged("panel_glide_animation: light 201 over 0 ms, it takes 0..200", bad) && look(p).light == 1000,
+                logged("panel_glide_animation: light takes 0 to 200", bad) && look(p).light == 1000,
             "no warnings about the tint and the light");
   panel_tint_animation.execute("ball", 0, "none");
   run(3);
@@ -4243,6 +4928,7 @@ int main(int argc, char **argv) {
   overlay_moving();
   overlay_copies();
   overlay_turning();
+  overlay_pivoted();
   overlay_wandering();
   overlay_waved();
   overlay_turned_down();
@@ -4263,8 +4949,11 @@ int main(int argc, char **argv) {
   overlay_yaml_script();
   overlay_script_action();
   overlay_without_ram();
+  overlay_status();
   overlay_past_pool();
-  overlay_waves_settling();
+  overlay_told();
+  overlay_documented();
+  overlay_field();
   overlay_on_its_way();
   met_requests();
   met_reading();
@@ -4280,6 +4969,8 @@ int main(int argc, char **argv) {
   live_rare();
   live_texts();
   live_kept();
+  live_cast();
+  live_cast_costs();
   live_costs();
   weather_scene();
   picture_cleared_mid_anim();

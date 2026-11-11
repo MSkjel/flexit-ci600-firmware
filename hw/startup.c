@@ -62,12 +62,14 @@ void DMA1_Channel3_IRQHandler(void) __attribute__((weak, alias("Default_Handler"
 void TIM2_IRQHandler(void) __attribute__((weak, alias("Default_Handler")));
 void TIM3_IRQHandler(void) __attribute__((weak, alias("Default_Handler")));
 
-// Cortex-M3 exceptions and the 60 STM32F103xE interrupts. 0x08002100 is only 256-byte aligned, so only vectors
-// below offset 0x100 work.
-_Static_assert(16 + IRQ_USART1 < 64 && 16 + IRQ_DMA1_CH3 < 64 && 16 + IRQ_TIM2 < 64 && 16 + IRQ_TIM3 < 64,
+// Cortex-M3 exceptions and the first 48 of the STM32F103xE's 60 interrupts. 0x08002100 is only 256-byte aligned, so
+// only vectors below offset 0x100 work, and the table ends there.
+#define VECTORS (0x100 / 4)
+_Static_assert(16 + IRQ_USART1 < VECTORS && 16 + IRQ_DMA1_CH3 < VECTORS && 16 + IRQ_TIM2 < VECTORS &&
+                   16 + IRQ_TIM3 < VECTORS,
                "vectors below 0x100");
 #pragma GCC diagnostic ignored "-Woverride-init"  // the IRQ entries below override the Default_Handler range
-__attribute__((section(".isr_vector"), used)) void (*const vectors[16 + 60])(void) = {
+__attribute__((section(".isr_vector"), used)) void (*const vectors[VECTORS])(void) = {
     (void (*)(void)) &_estack,
     Reset_Handler,
     NMI_Handler,
@@ -75,7 +77,7 @@ __attribute__((section(".isr_vector"), used)) void (*const vectors[16 + 60])(voi
     [4 ... 10] = Default_Handler,
     [11 ... 14] = Default_Handler,
     SysTick_Handler,
-    [16 ... 16 + 59] = Default_Handler,
+    [16 ... VECTORS - 1] = Default_Handler,
     [16 + IRQ_USART1] = USART1_IRQHandler,
     [16 + IRQ_DMA1_CH3] = DMA1_Channel3_IRQHandler,  // SPI1 TX DMA, pixels to the display
     [16 + IRQ_TIM2] = TIM2_IRQHandler,               // the microsecond clock, see board.c

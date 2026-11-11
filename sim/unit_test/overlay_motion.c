@@ -7,7 +7,7 @@ static bool overlay_angle(int k, int *deg, int *flip) {
   if (!overlay_look(k, &l))
     return false;
   *deg = l.deg;
-  *flip = l.flip;
+  *flip = l.view & (OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y);
   return true;
 }
 
@@ -30,26 +30,24 @@ static bool ghosts_shown(bool right, bool below) {
 
 // GLIDE of place p's channel c to v over ms, eased
 static void glide_msg(int p, int c, int v, int ms, int ease) {
-  uint8_t m[7];
-  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, 1u << c, ms, ease, &v));
+  uint8_t m[OVERLAY_GLIDE_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, ms, ease, EACH(c, v)));
 }
 
 static void drift_ch(int p, int c, int v) {
-  uint8_t m[4];
-  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, p, 1u << c, &v));
+  uint8_t m[OVERLAY_DRIFT_HEAD + OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, p, EACH(c, v)));
 }
 
 // place 0 to x, y over ms, or drifting vx, vy px/s, each one message
 static void move_msg(int x, int y, int ms) {
-  uint8_t m[9];
-  int v[2] = {x, y};
-  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, 0, 1u << OVERLAY_X | 1u << OVERLAY_Y, ms, 0, v));
+  uint8_t m[OVERLAY_GLIDE_HEAD + 2 * OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, 0, ms, 0, EACH(OVERLAY_X, x, OVERLAY_Y, y)));
 }
 
 static void drift_msg(int vx, int vy) {
-  uint8_t m[6];
-  int v[2] = {vx, vy};
-  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, 0, 1u << OVERLAY_X | 1u << OVERLAY_Y, v));
+  uint8_t m[OVERLAY_DRIFT_HEAD + 2 * OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_DRIFT, m, sim_overlay_drift(m, 0, EACH(OVERLAY_X, vx, OVERLAY_Y, vy)));
 }
 
 // GLIDE and DRIFT of x and y: glides land on the target, drifts wrap round the screen, bad messages are ignored
@@ -63,25 +61,22 @@ static void test_anim_move(void) {
   place(0, 0, 10, 10, 0, 0);
   show_overlays();
   CHECK(overlay_at(10, 10) && ghosts_shown(false, false));  // 16x8 where it was placed
-  uint8_t glide[9] = {0, 1u << OVERLAY_X, 0, 0, 0, 100}, drift[4] = {0, 1u << OVERLAY_X, 0xD8, 0xFF};
-  overlay_msg(K_OVERLAY_GLIDE, glide, 6);  // the wrong length
-  overlay_msg(K_OVERLAY_GLIDE, glide, 9);  // one channel, two values
+  uint8_t glide[10] = {0, 0, 0, 0, OVERLAY_X, 100, 0, OVERLAY_SIZE, 5, 0}, drift[5] = {0, OVERLAY_X, 0xD8, 0xFF};
+  overlay_msg(K_OVERLAY_GLIDE, glide, 6);  // a value cut short
+  overlay_msg(K_OVERLAY_GLIDE, glide, 8);  // a channel without one
   overlay_msg(K_OVERLAY_DRIFT, drift, 5);
   overlay_msg(K_OVERLAY_GLIDE, NULL, 0);
-  glide[1] = 0;  // no channel
-  overlay_msg(K_OVERLAY_GLIDE, glide, 5);
-  glide[1] = 1u << OVERLAY_CHANNELS;  // no such channel
+  overlay_msg(K_OVERLAY_GLIDE, glide, OVERLAY_GLIDE_HEAD);  // no channel
+  overlay_msg(K_OVERLAY_GLIDE, glide, sizeof glide);        // x is fine, size 5 isn't, so neither goes
+  glide[4] = OVERLAY_CHANNELS;                              // no such channel
   overlay_msg(K_OVERLAY_GLIDE, glide, 7);
-  glide[1] = 1u << OVERLAY_X | 1u << OVERLAY_SIZE;
-  plink_put16(glide + 7, 5);  // x is fine, size 5 isn't, so neither goes
-  overlay_msg(K_OVERLAY_GLIDE, glide, sizeof glide);
-  glide[1] = 1u << OVERLAY_X;
-  glide[4] = OVERLAY_EASE_IN << 2;  // no such ease
+  glide[4] = OVERLAY_X;
+  glide[OVERLAY_GLIDE_EASE] = OVERLAY_EASE_IN << 2;  // no such ease
   overlay_msg(K_OVERLAY_GLIDE, glide, 7);
-  drift[1] = 1u << OVERLAY_SIZE;  // only x, y and turn drift
-  overlay_msg(K_OVERLAY_DRIFT, drift, sizeof drift);
+  drift[1] = OVERLAY_SIZE;  // only those before size drift
+  overlay_msg(K_OVERLAY_DRIFT, drift, 4);
   glide[0] = 1;  // no such place
-  glide[4] = 0;
+  glide[OVERLAY_GLIDE_EASE] = 0;
   overlay_msg(K_OVERLAY_GLIDE, glide, 7);
   sim_run(200);
   CHECK(overlay_at(10, 10));
@@ -282,7 +277,15 @@ static void odd_frames(void) {
   }
 }
 
-static void flip_msg(int p, int flip) { overlay_msg(K_OVERLAY_FLIP, (uint8_t[]) {(uint8_t) p, (uint8_t) flip}, 2); }
+static void flip_msg(int p, int flip) {
+  uint8_t m[OVERLAY_VIEW_LEN];
+  overlay_msg(K_OVERLAY_VIEW, m, sim_overlay_view(m, p, OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y, (unsigned) flip));
+}
+
+static void pivot_msg(int p, int x, int y) {
+  uint8_t m[OVERLAY_GLIDE_HEAD + 2 * OVERLAY_GLIDE_EACH];
+  overlay_msg(K_OVERLAY_GLIDE, m, sim_overlay_glide(m, p, 0, 0, EACH(OVERLAY_PIVOT_X, x, OVERLAY_PIVOT_Y, y)));
+}
 
 // Turns and FLIP: quarter turns and flips draw exactly, turns go the short way, spins add up, bad messages are
 // ignored
@@ -303,11 +306,11 @@ static void test_anim_turn(void) {
   CHECK(box_at(14, 6));  // centred where the 16 x 8 frame was
   glide_msg(0, OVERLAY_TURN, 180, 0, 0);
   CHECK(drawn_as(16, 8, at_180) && box_at(10, 10));
-  flip_msg(0, OVERLAY_FLIP_X);
+  flip_msg(0, OVERLAY_VIEW_FLIP_X);
   glide_msg(0, OVERLAY_TURN, 0, 0, 0);
   CHECK(overlay_angle(0, &a, &flip));
   CHECK_EQ(a, 0);
-  CHECK_EQ(flip, OVERLAY_FLIP_X);
+  CHECK_EQ(flip, OVERLAY_VIEW_FLIP_X);
   CHECK(drawn_as(16, 8, at_flip_x));
   glide_msg(0, OVERLAY_TURN, 90, 0, 0);
   CHECK(drawn_as(8, 16, at_flip_x_90));
@@ -328,11 +331,10 @@ static void test_anim_turn(void) {
   int b;
   CHECK(overlay_angle(0, &b, &flip));
   CHECK_EQ(b, a);
-  // a bad flip, the wrong length and no such place change nothing
-  flip_msg(0, 4);
-  flip_msg(5, OVERLAY_FLIP_Y);
-  overlay_msg(K_OVERLAY_FLIP, (uint8_t[]) {0, OVERLAY_FLIP_Y, 0}, 3);
-  overlay_msg(K_OVERLAY_FLIP, NULL, 0);
+  // the wrong length and no such place change nothing
+  flip_msg(5, OVERLAY_VIEW_FLIP_Y);
+  overlay_msg(K_OVERLAY_VIEW, (uint8_t[]) {0, OVERLAY_VIEW_FLIP_Y, OVERLAY_VIEW_FLIP_Y, 0}, 4);
+  overlay_msg(K_OVERLAY_VIEW, NULL, 0);
   CHECK(overlay_angle(0, &b, &flip));
   CHECK_EQ(b, a);
   CHECK(!flip);
@@ -459,10 +461,7 @@ static void test_anim_look(void) {
   show_overlays();
   overlay_clear_msg(0 | 5000 << 8);
   unsigned frame = AW / 2 * AH;
-  uint32_t n2 = overlay_records(d2, 5), m = (OVERLAY_POOL - frame - n2) / 5;
-  for (uint32_t i = 0; i < m; i++)
-    memcpy(d2 + n2 + 5 * i, (uint8_t[]) {10, 0, 0, 0, 0}, 5);
-  n2 += 5 * m;
+  uint32_t n2 = pad_records(d2, overlay_records(d2, 5), OVERLAY_POOL - frame);
   CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
   CHECK(!overlay_pos(0, &x, &y));
   CHECK_EQ(overlay_used(), frame + n2);
@@ -580,8 +579,10 @@ static void test_anim_paths(void) {
   // a wander about its area, resting now and then. A seed of its own, the time it was placed depends on the tests
   // before.
   places[0].rng = 1;
+  unsigned used = overlay_used();
   area_msg(60, 40, 260, 200, OVERLAY_EDGE_BOUNCE, OVERLAY_EDGE_BOUNCE);
   wander_msg(20, 60, 0, 180, 200, 800, 0, 300);
+  CHECK_EQ(overlay_used(), used + OVERLAY_ROAM);  // what it takes while it does
   t = trail(1200, 60, 40, 260, 200);
   CHECK(t.inside && t.hi_x - t.lo_x > 100 && t.hi_y - t.lo_y > 60 && t.rests > 0);
   // heading right with little spread, it turns back off the right edge and goes all the way left
@@ -600,19 +601,21 @@ static void test_anim_paths(void) {
 
   // frames that face right, mirrored to face left, leaning up to 30 degrees, upright when it stops
   area_msg(0, 0, PIC_MAX_W, PIC_MAX_H, OVERLAY_EDGE_BOUNCE, OVERLAY_EDGE_BOUNCE);
-  move_msg(150, 100, 0);
   face_msg(OVERLAY_FACE_MIRROR | OVERLAY_FACE_LEVEL, 0, 30, 0, 8);
+  CHECK_EQ(overlay_used(), used + OVERLAY_ROAM);  // the two take it once
+  move_msg(150, 100, 0);                          // the wander is over, and it still faces
+  CHECK_EQ(overlay_used(), used + OVERLAY_ROAM);
   int a, flip;
   drift_msg(-50, 0);
   sim_run(50);
   CHECK(overlay_angle(0, &a, &flip));
   CHECK_EQ(a, 0);
-  CHECK_EQ(flip, OVERLAY_FLIP_X);
+  CHECK_EQ(flip, OVERLAY_VIEW_FLIP_X);
   drift_msg(-50, 50);  // down to the left
   sim_run(50);
   CHECK(overlay_angle(0, &a, &flip));
   CHECK_EQ(a, 330);
-  CHECK_EQ(flip, OVERLAY_FLIP_X);
+  CHECK_EQ(flip, OVERLAY_VIEW_FLIP_X);
   drift_msg(50, 50);  // down to the right: unmirrored, the same lean the other way
   sim_run(50);
   CHECK(overlay_angle(0, &a, &flip));
@@ -651,25 +654,55 @@ static void test_anim_paths(void) {
   sim_run(200);
   CHECK(overlay_angle(0, &a, &flip));
   CHECK_EQ(a, 45);
+  CHECK_EQ(overlay_used(), used);  // and with neither, nothing
+  // without the room neither starts, and it goes on as it did: slot 1 padded with empty records until the pool is
+  // full
+  static uint8_t d2[OVERLAY_POOL];
+  uint32_t n2 = overlay_records(d2, 10);
+  n2 = pad_records(d2, n2, OVERLAY_POOL - used - AW / 2 * AH);
+  CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
+  unsigned full = overlay_used();
+  CHECK(OVERLAY_POOL - full < OVERLAY_ROAM);
+  move_msg(100, 100, 0);
+  drift_msg(100, 0);
+  wander_msg(0, 0, 0, 0, 0, 0, 0, 0);
+  face_msg(0, 270, 180, 0, 8);
+  sim_run(200);
+  CHECK(overlay_pos(0, &x, &y));
+  CHECK_EQ(x, 120);
+  CHECK(overlay_angle(0, &a, &flip));
+  CHECK_EQ(a, 45);
+  CHECK_EQ(overlay_used(), full);
+  // and a place that goes gives it back
+  overlay_clear_msg(1);
+  wander_msg(0, 0, 0, 0, 0, 0, 0, 0);
+  CHECK_EQ(overlay_used(), used + OVERLAY_ROAM);
+  overlay_clear_msg(OVERLAY_PLACE_BIT | 0);
+  CHECK_EQ(overlay_used(), used);
   lv_obj_del(overlays);
   overlay_clear_msg(OVERLAY_ALL);
 }
 
-static void wave_msg(int p, int c, int lo, int hi, int rise, int fall, int hold_hi, int hold_lo, int jitter,
-                     int flags) {
-  uint8_t m[16] = {(uint8_t) p, (uint8_t) c};
-  int v[6] = {lo, hi, rise, fall, hold_hi, hold_lo};
-  for (int i = 0; i < 6; i++)
-    plink_put16(m + 2 + 2 * i, v[i]);
-  m[14] = (uint8_t) jitter;
-  m[15] = (uint8_t) flags;
-  overlay_msg(K_OVERLAY_WAVE, m, sizeof m);
+// BIND of place p: what, an op | what it binds, to the value in v
+static void bind_to(int p, unsigned what, const uint8_t *v, int n) {
+  uint8_t m[OVERLAY_BIND_VALUE + 64];
+  overlay_msg(K_OVERLAY_BIND, m, sim_overlay_bind(m, p, what, v, n));
+}
+#define BIND(p, what, ...) bind_to(p, what, BYTES(__VA_ARGS__))
+static void unbind(int p, int c) { bind_to(p, OVERLAY_BIND_FREE | (unsigned) c, NULL, 0); }
+
+// A wave of place p's channel c from when it was placed, as the ESP binds one: added, or a share times it
+static void wave_bind(int p, int c, int lo, int hi, int rise, int fall, int hold_hi, int hold_lo, int jitter,
+                      int flags) {
+  BIND(p, (scales(c) ? OVERLAY_BIND_MUL : OVERLAY_BIND_ADD) | (unsigned) c,
+       X(OWN(OVERLAY_GET_MS), V32(lo * unit(c)), V32(hi * unit(c)), V16(rise), V16(fall), V16(hold_hi), V16(hold_lo),
+         V8(jitter), V8(flags), OVERLAY_OP_WAVE));
 }
 
-// WAVE: a size breathes there and back and settles, a blink holds at each end, a wave on x eases at its slow end,
-// random legs stay between low and high, a wave scales a glide and a fade out, and there are OVERLAY_WAVES at most,
-// counting the stopped ones only until they're needed
-static void test_anim_wave(void) {
+// BIND and OVERLAY_OP_WAVE: a size breathes there and back, a blink holds at each end, a wave on x eases at its slow
+// end, random legs stay between low and high, a channel takes one bind of each op and they go together, a bad one
+// changes nothing, they go with their place, and there are OVERLAY_BINDS at most
+static void test_anim_bind(void) {
   no_overlays();
   odd_frames();
   uint8_t d[512];
@@ -677,7 +710,9 @@ static void test_anim_wave(void) {
   CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
   place(0, 0, 100, 100, 0, 0);
   show_overlays();
-  wave_msg(0, OVERLAY_SIZE, 100, 120, 1000, 1000, 0, 0, 0, 0);
+  unsigned used = overlay_used();
+  wave_bind(0, OVERLAY_SIZE, 100, 120, 1000, 1000, 0, 0, 0, 0);
+  CHECK_EQ(overlay_used(), used + 1 + 31);  // its value, and a byte for how long that is
   static const int BREATH[] = {1100, 1200, 1100, 1000, 1100};
   bool ok = true;
   for (int i = 0; i < 5; i++) {
@@ -685,13 +720,12 @@ static void test_anim_wave(void) {
     ok &= look_size(0) == BREATH[i];
   }
   CHECK(ok);
-  wave_msg(0, OVERLAY_SIZE, 100, 100, 500, 500, 0, 0, 0, 0);  // back down over the fall time
-  sim_run(250);
-  CHECK_EQ(look_size(0), 1050);
-  sim_run(350);
+  unbind(0, OVERLAY_SIZE);  // as it was at once
   CHECK_EQ(look_size(0), 1000);
+  CHECK_EQ(overlay_used(), used);
   // on for 500 ms and off for 300, at once
-  wave_msg(0, OVERLAY_OPACITY, 0, 100, 0, 0, 500, 300, 0, 0);
+  place(0, 0, 100, 100, 0, 0);
+  wave_bind(0, OVERLAY_OPACITY, 0, 100, 0, 0, 500, 300, 0, 0);
   sim_run(450);
   CHECK_EQ(look_opa(0), 1000);
   sim_run(100);
@@ -700,9 +734,9 @@ static void test_anim_wave(void) {
   CHECK_EQ(look_opa(0), 0);
   sim_run(100);
   CHECK_EQ(look_opa(0), 1000);
-  wave_msg(0, OVERLAY_OPACITY, 100, 100, 0, 0, 0, 0, 0, 0);
   // 100 px right and back, slow at the low end: it eases in going out and eases out coming back
-  wave_msg(0, OVERLAY_X, 0, 100, 1000, 1000, 0, 0, 0, OVERLAY_WAVE_SLOW_LOW);
+  place(0, 0, 100, 100, 0, 0);
+  wave_bind(0, OVERLAY_X, 0, 100, 1000, 1000, 0, 0, 0, OVERLAY_WAVE_SLOW_LOW);
   int16_t x, y;
   sim_run(500);
   CHECK(overlay_pos(0, &x, &y));
@@ -717,9 +751,9 @@ static void test_anim_wave(void) {
   sim_run(500);
   CHECK(overlay_pos(0, &x, &y));
   CHECK_EQ(x, 100);
-  wave_msg(0, OVERLAY_X, 0, 0, 0, 0, 0, 0, 0, 0);
   // random legs with times that vary
-  wave_msg(0, OVERLAY_SIZE, 50, 150, 200, 200, 0, 0, 50, OVERLAY_WAVE_RANDOM);
+  place(0, 0, 100, 100, 0, 0);
+  wave_bind(0, OVERLAY_SIZE, 50, 150, 200, 200, 0, 0, 50, OVERLAY_WAVE_RANDOM);
   int lo = 9999, hi = 0;
   for (int i = 0; i < 200; i++) {
     sim_run(50);
@@ -727,74 +761,93 @@ static void test_anim_wave(void) {
     hi = LV_MAX(hi, look_size(0));
   }
   CHECK(lo >= 500 && hi <= 1500 && hi - lo > 500);
-  // it stays where low = high says, and scales what a glide sets
-  wave_msg(0, OVERLAY_SIZE, 120, 120, 0, 0, 0, 0, 0, 0);
+  // a share times what a glide sets, with something added, or set whatever that is
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_SIZE, V16(1200));
   glide_msg(0, OVERLAY_SIZE, 200, 0, 0);
-  sim_run(1000);
   CHECK_EQ(look_size(0), 2400);
-  wave_msg(0, OVERLAY_SIZE, 100, 100, 0, 0, 0, 0, 0, 0);
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_SIZE, V16(-400));
+  CHECK_EQ(look_size(0), 2000);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, V16(500));
+  CHECK_EQ(look_size(0), 200);
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_SIZE, V16(100));  // in place of the one that added
+  CHECK_EQ(look_size(0), 700);
+  unbind(0, OVERLAY_SIZE);  // all three
+  CHECK_EQ(look_size(0), 2000);
   glide_msg(0, OVERLAY_SIZE, 100, 0, 0);
-  sim_run(100);
-  CHECK_EQ(look_size(0), 1000);
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_X, V32(50000));                                   // px in thousandths
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_Y, X(OWN(OVERLAY_X), V16(100), OVERLAY_OP_MUL));  // a tenth of where x has it
+  CHECK(overlay_pos(0, &x, &y) && x == 50 && y == 105);
+  unbind(0, OVERLAY_X);
+  unbind(0, OVERLAY_Y);
+  CHECK(overlay_pos(0, &x, &y) && x == 100 && y == 100);
+  CHECK_EQ(overlay_used(), used);
   // bad ones change nothing
-  wave_msg(0, OVERLAY_SIZE, 120, 110, 0, 0, 0, 0, 0, 0);
-  wave_msg(0, OVERLAY_SIZE, 120, 120, 0, 0, 0, 0, 101, 0);
-  wave_msg(0, OVERLAY_SIZE, 120, 120, 0, 0, 0, 0, 0, OVERLAY_WAVE_RANDOM << 1);
-  wave_msg(0, OVERLAY_CHANNELS, 120, 120, 0, 0, 0, 0, 0, 0);
-  overlay_msg(K_OVERLAY_WAVE, (uint8_t[16]) {0, OVERLAY_SIZE, 120, 0, 120}, 15);
-  sim_run(100);
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_BIND_FRAME, V8(1));    // a frame is only set
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_BIND_TARGETS, V8(1));  // nothing to bind
+  BIND(0, OVERLAY_BIND_SET | (OVERLAY_BIND_REG + OVERLAY_REGS), V8(1));
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, OVERLAY_V16, 1);               // cut short
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, V16(500), 0);                  // something after it
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, X(V16(500), V8(1)));           // two numbers left
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, X(V16(500), OVERLAY_OP_ADD));  // nothing to add it to
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, X(V16(500), OVERLAY_OPS));
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, X(OWN(OVERLAY_GETS)));
+  BIND(0, OVERLAY_BIND_SET | OVERLAY_SIZE, X(OVERLAY_OP_GET, OVERLAY_X, OVERLAY_PLACES));
+  BIND(0, OVERLAY_BIND_FREE | OVERLAY_SIZE, V8(1));
+  BIND(5, OVERLAY_BIND_SET | OVERLAY_SIZE, V16(500));  // no such place
   CHECK_EQ(look_size(0), 1000);
-  // OVERLAY_WAVES at most, one more waits for one to go
+  CHECK_EQ(overlay_used(), used);
+  // OVERLAY_BINDS at most, one more waits for one to go
   lv_obj_clean(lv_scr_act());
   place(1, 0, 10, 10, 0, 0);
   place(2, 0, 10, 50, 0, 0);
   show_overlays();
-  for (int i = 0; i < OVERLAY_WAVES; i++) {
-    int c = i % OVERLAY_CHANNELS, v = c >= OVERLAY_SIZE ? 90 : 1;
-    wave_msg(i / OVERLAY_CHANNELS, c, v, v, 0, 0, 0, 0, 0, 0);
+  for (int i = 0; i < OVERLAY_BINDS; i++) {
+    bool mul = i % 2;
+    BIND(i / (2 * OVERLAY_CHANNELS),
+         (mul ? OVERLAY_BIND_MUL : OVERLAY_BIND_ADD) | (unsigned) (i / 2 % OVERLAY_CHANNELS), V16(mul ? 900 : 1));
   }
-  wave_msg(2, OVERLAY_SIZE, 150, 150, 0, 0, 0, 0, 0, 0);
-  sim_run(100);
-  CHECK_EQ(look_size(0), 900);
+  BIND(2, OVERLAY_BIND_MUL | OVERLAY_SIZE, V16(1500));
+  CHECK_EQ(look_size(0), 901);  // nine tenths, and one added
   CHECK_EQ(look_size(2), 1000);
-  wave_msg(0, OVERLAY_SIZE, 100, 100, 0, 0, 0, 0, 0, 0);
-  sim_run(100);
-  wave_msg(2, OVERLAY_SIZE, 150, 150, 0, 0, 0, 0, 0, 0);
-  sim_run(100);
+  CHECK_EQ(overlay_used(), used + OVERLAY_BINDS * 4);
+  unbind(0, OVERLAY_SIZE);
+  BIND(2, OVERLAY_BIND_MUL | OVERLAY_SIZE, V16(1500));
   CHECK_EQ(look_size(0), 1000);
   CHECK_EQ(look_size(2), 1500);
-  // one stopped but still on its way back makes room at once for a new one, not for a stop of none
-  wave_msg(0, OVERLAY_OPACITY, 100, 100, 1000, 1000, 0, 0, 0, 0);
-  wave_msg(2, OVERLAY_TURN, 0, 0, 0, 0, 0, 0, 0, 0);
-  sim_run(100);
-  CHECK(look_opa(0) > 900 && look_opa(0) < 1000);
-  wave_msg(2, OVERLAY_OPACITY, 50, 50, 0, 0, 0, 0, 0, 0);
-  sim_run(100);
-  CHECK_EQ(look_opa(0), 1000);
-  CHECK_EQ(look_opa(2), 500);
-  // a place that goes takes its waves with it, and one leaving fades out flicker and all
+  // a place that goes takes its binds with it, and one leaving fades out flicker and all
+  overlay_clear_msg(OVERLAY_PLACE_BIT | 0);
   overlay_clear_msg(OVERLAY_PLACE_BIT | 1);
-  wave_msg(2, OVERLAY_OPACITY, 50, 100, 100, 100, 0, 0, 0, OVERLAY_WAVE_RANDOM);
+  CHECK_EQ(overlay_used(), used + 4);
+  wave_bind(2, OVERLAY_OPACITY, 50, 100, 100, 100, 0, 0, 0, OVERLAY_WAVE_RANDOM);
   overlay_clear_msg(OVERLAY_PLACE_BIT | 2 | 500 << 8);
   sim_run(300);
   CHECK(overlay_pos(2, &x, &y) && look_opa(2) >= 200 && look_opa(2) <= 400);
   sim_run(300);
   CHECK(!overlay_pos(2, &x, &y));
+  CHECK_EQ(overlay_used(), used);
+  // one on its way out with a frame of its own goes early for the room a bind needs, its own too, which it then
+  // doesn't get: slot 1 padded with empty records until the pool is full
+  static uint8_t d2[OVERLAY_POOL];
+  uint32_t frame = AW / 2 * AH, n2 = overlay_records(d2, 10);
+  place(0, 0, 100, 100, 1, 0);
+  n2 = pad_records(d2, n2, OVERLAY_POOL - used - 2 * frame);
+  CHECK_EQ(status(overlay_send(1, AW, n2, d2, plink_crc32(0, d2, n2))), PIC_DONE);
+  overlay_clear_msg(OVERLAY_PLACE_BIT | 0 | 500 << 8);
+  CHECK(overlay_pos(0, &x, &y) && OVERLAY_POOL - overlay_used() < OVERLAY_RECORD_HEAD);
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_X, V32(5000));
+  CHECK(!overlay_pos(0, &x, &y));
+  CHECK_EQ(overlay_used(), used + frame + n2);
   lv_obj_clean(lv_scr_act());
   overlay_clear_msg(OVERLAY_ALL);
+  CHECK_EQ(overlay_used(), 0);
 }
 
-static void map_msg(int p, int c, int left, int right, int top, int bottom) {
-  uint8_t m[10] = {(uint8_t) p, (uint8_t) c};
-  int v[4] = {left, right, top, bottom};
-  for (int i = 0; i < 4; i++)
-    plink_put16(m + 2 + 2 * i, v[i]);
-  overlay_msg(K_OVERLAY_MAP, m, sizeof m);
-}
+// From lo to hi as an OVERLAY_GET_AT_* goes across the area
+#define ACROSS(at, lo, hi) OWN(at), V16((hi) - (lo)), V16(OVERLAY_AT_MAX), OVERLAY_OP_SCALE, V16(lo), OVERLAY_OP_ADD
 
-// MAP: size, opacity, turn and speed follow where its middle is across its area, and the places bigger from their
-// map are drawn in front
-static void test_anim_map(void) {
+// OVERLAY_GET_AT_X and _Y: what's bound to them follows where its pivot is across its area, at once, and the bigger
+// places are drawn in front
+static void test_anim_where(void) {
   no_overlays();
   odd_frames();
   uint8_t d[512];
@@ -803,14 +856,18 @@ static void test_anim_map(void) {
   place(0, 0, 0, 0, 0, 0);
   show_overlays();
   area_msg(0, 0, 320, 200, OVERLAY_EDGE_BOUNCE, OVERLAY_EDGE_BOUNCE);
-  map_msg(0, OVERLAY_SIZE, 100, 100, 50, 100);  // smaller further up
-  move_msg(152, 96, 0);                         // the 16 x 8 frame's middle halfway down
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_SIZE, X(ACROSS(OVERLAY_GET_AT_Y, 500, 1000)));  // smaller further up
+  move_msg(152, 96, 0);                                                              // its middle halfway down
   CHECK_EQ(look_size(0), 750);
+  pivot_msg(0, OVERLAY_PIVOT_MAX / 2, OVERLAY_PIVOT_MAX);  // where it is is its pivot, here its bottom
+  CHECK_EQ(look_size(0), 760);
+  pivot_msg(0, OVERLAY_PIVOT_MAX / 2, OVERLAY_PIVOT_MAX / 2);
   move_msg(152, -4, 0);  // at the top
   CHECK_EQ(look_size(0), 500);
   move_msg(152, 296, 0);  // below the area it's the bottom's
   CHECK_EQ(look_size(0), 1000);
-  map_msg(0, OVERLAY_SIZE, 50, 100, 50, 100);  // left to right too, the two multiply
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_SIZE,  // left to right too, the two multiplied
+       X(ACROSS(OVERLAY_GET_AT_X, 500, 1000), ACROSS(OVERLAY_GET_AT_Y, 500, 1000), V16(1000), OVERLAY_OP_SCALE));
   move_msg(-8, -4, 0);
   CHECK_EQ(look_size(0), 250);
   move_msg(152, 96, 0);
@@ -818,18 +875,17 @@ static void test_anim_map(void) {
   glide_msg(0, OVERLAY_SIZE, 200, 0, 0);  // and what a glide sets
   CHECK_EQ(look_size(0), 1124);
   glide_msg(0, OVERLAY_SIZE, 100, 0, 0);
-  map_msg(0, OVERLAY_SIZE, 100, 100, 100, 100);
-  map_msg(0, OVERLAY_OPACITY, 100, 100, 20, 100);  // fainter further up
+  unbind(0, OVERLAY_SIZE);
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_OPACITY, X(ACROSS(OVERLAY_GET_AT_Y, 200, 1000)));  // fainter further up
   CHECK_EQ(look_size(0), 1000);
   CHECK_EQ(look_opa(0), 600);
-  map_msg(0, OVERLAY_OPACITY, 100, 100, 100, 100);
+  unbind(0, OVERLAY_OPACITY);
   int a, flip;
-  map_msg(0, OVERLAY_TURN, 0, 360, 0, 0);  // rolls as it goes, half way round in the middle
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_TURN, X(OWN(OVERLAY_GET_AT_X), V16(360), OVERLAY_OP_MUL));  // rolls as it goes
   CHECK(overlay_angle(0, &a, &flip));
   CHECK_EQ(a, 180);
-  map_msg(0, OVERLAY_TURN, 0, 0, 0, 0);
-  map_msg(0, OVERLAY_X, 50, 50, 50, 50);  // not x or y
-  map_msg(0, OVERLAY_SPEED, 50, 50, 100, 100);
+  unbind(0, OVERLAY_TURN);
+  BIND(0, OVERLAY_BIND_MUL | OVERLAY_SPEED, V16(500));
   drift_msg(40, 0);
   sim_run(500);
   int16_t x, y;
@@ -841,13 +897,92 @@ static void test_anim_map(void) {
   lv_obj_clean(lv_scr_act());
   place(0, 0, 100, 150, 0, 0);
   place(1, 0, 200, 20, 0, 0);
-  map_msg(0, OVERLAY_SIZE, 100, 100, 50, 100);
-  map_msg(1, OVERLAY_SIZE, 100, 100, 50, 100);
+  for (int p = 0; p < 2; p++)
+    BIND(p, OVERLAY_BIND_MUL | OVERLAY_SIZE, X(ACROSS(OVERLAY_GET_AT_Y, 500, 1000)));
   show_overlays();
   overlay_look_t l[2];
   CHECK(overlay_look(0, &l[0]) && overlay_look(1, &l[1]) && l[0].order > l[1].order);
   move_msg(100, 0, 0);
   CHECK(overlay_look(0, &l[0]) && overlay_look(1, &l[1]) && l[0].order < l[1].order);
+  lv_obj_clean(lv_scr_act());
+  overlay_clear_msg(OVERLAY_ALL);
+}
+
+// Pan and the box move like the other channels: drifts at its speed, a glide stops them, what's bound adds, a box is
+// no less than nothing and draws nothing there, and what they move is drawn again
+static void test_anim_pan(void) {
+  no_overlays();
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 50, 50, 0, 0);
+  show_overlays();
+  frames_msg(0, 0);
+  overlay_look_t l;
+  drift_ch(0, OVERLAY_PAN_Y, 40);
+  sim_run(500);
+  CHECK(overlay_look(0, &l) && l.pan[1] == 20 && l.w == AW * 2 && l.h == AH * 2);
+  CHECK(!sim_stale());
+  glide_msg(0, OVERLAY_SPEED, 50, 0, 0);
+  sim_run(500);
+  CHECK(overlay_look(0, &l) && l.pan[1] == 30);
+  glide_msg(0, OVERLAY_PAN_Y, -3, 0, 0);
+  sim_run(500);
+  CHECK(overlay_look(0, &l) && l.pan[1] == -3);
+  drift_ch(0, OVERLAY_W, -100);  // to nothing, and it stays there
+  sim_run(1000);
+  CHECK(overlay_look(0, &l) && l.w == 0 && !l.tiles);
+  CHECK(!sim_stale());
+  glide_msg(0, OVERLAY_W, OVERLAY_BOX_MAX + 1, 0, 0);  // too big, so not at all
+  glide_msg(0, OVERLAY_W, -1, 0, 0);
+  CHECK(overlay_look(0, &l) && l.w == 0);
+  glide_msg(0, OVERLAY_W, 40, 0, 0);
+  CHECK(overlay_look(0, &l) && l.w == 40 && l.tiles && lv_area_get_width(&l.box) == 40);
+  // where it is across its area adds to pan
+  area_msg(0, 0, 320, 240, OVERLAY_EDGE_BOUNCE, OVERLAY_EDGE_BOUNCE);
+  BIND(0, OVERLAY_BIND_ADD | OVERLAY_PAN_X, X(OWN(OVERLAY_GET_AT_X), V8(32), OVERLAY_OP_MUL));
+  move_msg(140, 50, 0);  // its middle halfway across
+  CHECK(overlay_look(0, &l) && l.pan[0] == 16);
+  glide_msg(0, OVERLAY_PAN_X, 5, 0, 0);
+  sim_run(100);
+  CHECK(overlay_look(0, &l) && l.pan[0] == 21);
+  CHECK(!sim_stale());
+  // a pan that drifts goes round with a frame that repeats, 16 px, also from as far as a glide can put it, and round
+  // two of them with every other one mirrored. One that doesn't repeat stops as far as that.
+  uint8_t vm[OVERLAY_VIEW_LEN];
+  unbind(0, OVERLAY_PAN_X);
+  glide_msg(0, OVERLAY_SPEED, 100, 0, 0);
+  glide_msg(0, OVERLAY_PAN_X, 32760, 0, 0);
+  overlay_msg(K_OVERLAY_VIEW, vm, sim_overlay_view(vm, 0, OVERLAY_VIEW_REPEAT_X, OVERLAY_VIEW_REPEAT_X));
+  CHECK(overlay_look(0, &l) && l.pan[0] == 32760 % 16);
+  drift_ch(0, OVERLAY_PAN_X, 100);
+  sim_run(1000);
+  CHECK(overlay_look(0, &l) && l.pan[0] == (32760 + 100) % 16);
+  CHECK(!sim_stale());
+  drift_ch(0, OVERLAY_PAN_X, 0);
+  glide_msg(0, OVERLAY_PAN_X, 40, 0, 0);
+  overlay_msg(K_OVERLAY_VIEW, vm, sim_overlay_view(vm, 0, OVERLAY_VIEW_MIRROR, OVERLAY_VIEW_MIRROR));
+  CHECK(overlay_look(0, &l) && l.pan[0] == 40 % 32);
+  overlay_msg(K_OVERLAY_VIEW, vm, sim_overlay_view(vm, 0, OVERLAY_VIEW_REPEAT_X | OVERLAY_VIEW_MIRROR, 0));
+  glide_msg(0, OVERLAY_PAN_X, INT16_MAX - 10, 0, 0);
+  drift_ch(0, OVERLAY_PAN_X, 100);
+  sim_run(1000);
+  CHECK(overlay_look(0, &l) && l.pan[0] == INT16_MAX);
+  // mirrored by a size below 0, what a frame changes is drawn again where that shows: the dot that moves
+  no_overlays();
+  dot_frames(true);
+  n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 50, 50, 0, 0);
+  show_overlays();
+  glide_msg(0, OVERLAY_SIZE_X, -100, 0, 0);
+  int stale = 0;
+  for (int i = 0; i < 30; i++) {  // each of its frames, two rounds of them
+    sim_run(20);
+    stale += sim_stale();
+  }
+  CHECK_EQ(stale, 0);
   lv_obj_clean(lv_scr_act());
   overlay_clear_msg(OVERLAY_ALL);
 }
@@ -888,7 +1023,7 @@ static void test_anim_redraw(void) {
   sim_run(100);
   unsigned long plain = loop_px();
   CHECK_EQ(plain, 8 * 4 + 8 * 2 + 8 * 6 + 8 * 4);  // the rectangles the records changed, at 2x
-  flip_msg(0, OVERLAY_FLIP_X | OVERLAY_FLIP_Y);
+  flip_msg(0, OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y);
   sim_run(100);
   CHECK_EQ(loop_px(), plain);
   CHECK(!sim_stale());
@@ -904,16 +1039,90 @@ static void test_anim_redraw(void) {
   glide_msg(0, OVERLAY_SIZE, 100, 0, 0);
   sim_run(100);
   unsigned long px = sim_px;
-  wave_msg(0, OVERLAY_SIZE, 97, 100, 1000, 1000, 0, 0, 0, 0);  // 16 x 8 all the way
-  sim_run(3000);
+  wave_bind(0, OVERLAY_SIZE, 97, 100, 1000, 1000, 0, 0, 0, 0);  // 16 x 8 all the way
+  sim_run(2500);
   CHECK_EQ(sim_px, px);
   CHECK(look_size(0) < 1000);
   lv_obj_clean(lv_scr_act());
   overlay_clear_msg(OVERLAY_ALL);
 }
 
+static void at_narrow(int bx, int by, int *ix, int *iy) {  // half as wide
+  *ix = 2 * bx + 1;
+  *iy = by;
+}
+static void at_narrow_mirrored(int bx, int by, int *ix, int *iy) {
+  *ix = 15 - 2 * bx;
+  *iy = by;
+}
+static void at_low_upside_down(int bx, int by, int *ix, int *iy) {  // half as high, upside down
+  *ix = bx;
+  *iy = 7 - 2 * by;
+}
+
+// size_x, size_y and the pivot: a size across or down draws exactly, mirrored below 0. Flip, the sizes and turn go
+// round the pivot, which stays where it is on the screen. A bad pivot changes nothing.
+static void test_anim_pivot(void) {
+  no_overlays();
+  odd_frames();
+  uint8_t d[512];
+  uint32_t n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 40, 40, 0, 0);
+  show_overlays();
+  glide_msg(0, OVERLAY_SIZE_X, 50, 0, 0);  // round the middle
+  CHECK(drawn_as(8, 8, at_narrow) && box_at(44, 40));
+  glide_msg(0, OVERLAY_SIZE_X, -50, 0, 0);
+  CHECK(drawn_as(8, 8, at_narrow_mirrored) && box_at(44, 40));
+  glide_msg(0, OVERLAY_SIZE_X, 100, 0, 0);
+  glide_msg(0, OVERLAY_SIZE_Y, -50, 0, 0);
+  CHECK(drawn_as(16, 4, at_low_upside_down) && box_at(40, 42));
+  glide_msg(0, OVERLAY_SIZE_Y, 100, 0, 0);
+  glide_msg(0, OVERLAY_SIZE_X, -50, 0, 0);
+  pivot_msg(0, OVERLAY_PIVOT_MAX, 0);  // round the top right corner, at 56, 40: mirrored it's right of it
+  CHECK(drawn_as(8, 8, at_narrow_mirrored) && box_at(56, 40));
+  glide_msg(0, OVERLAY_SIZE_X, 50, 0, 0);
+  CHECK(drawn_as(8, 8, at_narrow) && box_at(48, 40));
+  glide_msg(0, OVERLAY_SIZE_X, 100, 0, 0);
+  flip_msg(0, OVERLAY_VIEW_FLIP_X);
+  CHECK(drawn_as(16, 8, at_flip_x) && box_at(56, 40));
+  flip_msg(0, 0);
+  glide_msg(0, OVERLAY_SIZE, 200, 0, 0);
+  CHECK(drawn_as(32, 16, at_200) && box_at(24, 40));
+  glide_msg(0, OVERLAY_SIZE, 100, 0, 0);
+  glide_msg(0, OVERLAY_TURN, 90, 0, 0);
+  CHECK(drawn_as(8, 16, at_90) && box_at(48, 24));
+  glide_msg(0, OVERLAY_TURN, 0, 0, 0);
+  // over time it stays at the pivot, all the way through 0 to the other side
+  overlay_look_t l;
+  glide_msg(0, OVERLAY_SIZE_X, -100, 1000, 0);
+  bool kept = true;
+  for (int t = 0; t < 10; t++) {
+    sim_run(100);
+    kept &= overlay_look(0, &l) && (l.size_xy[0] < 0 ? l.box.x1 == 56 : l.box.x2 == 55);
+  }
+  CHECK(kept && l.size_xy[0] == -1000 && drawn_as(16, 8, at_flip_x));
+  pivot_msg(0, OVERLAY_PIVOT_MAX + 1, 0);
+  CHECK(overlay_look(0, &l) && l.pivot[0] == OVERLAY_PIVOT_MAX && box_at(56, 40));
+  // placed again, round its middle
+  lv_obj_del(overlays);
+  place(0, 0, 40, 40, 0, 0);
+  show_overlays();
+  CHECK(overlay_look(0, &l) && l.pivot[0] == OVERLAY_PIVOT_MAX / 2 && l.size_xy[0] == 1000 && drawn_as(16, 8, at_same));
+  lv_obj_del(overlays);
+  overlay_clear_msg(OVERLAY_ALL);
+}
+
 const check_test_t OVERLAY_MOTION_TESTS[] = {
-    {"overlay_move", test_anim_move}, {"overlay_ease", test_anim_ease},     {"overlay_turn", test_anim_turn},
-    {"overlay_look", test_anim_look}, {"overlay_paths", test_anim_paths},   {"overlay_wave", test_anim_wave},
-    {"overlay_map", test_anim_map},   {"overlay_redraw", test_anim_redraw}, {0},
+    {"overlay_move", test_anim_move},
+    {"overlay_ease", test_anim_ease},
+    {"overlay_turn", test_anim_turn},
+    {"overlay_look", test_anim_look},
+    {"overlay_paths", test_anim_paths},
+    {"overlay_bind", test_anim_bind},
+    {"overlay_where", test_anim_where},
+    {"overlay_pan", test_anim_pan},
+    {"overlay_redraw", test_anim_redraw},
+    {"overlay_pivot", test_anim_pivot},
+    {0},
 };

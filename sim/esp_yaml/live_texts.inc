@@ -1,5 +1,5 @@
-// The shows beside the panel's texts over the picture, where most have them: the clock and the date at the bottom
-// left, the temperatures at the bottom right. What a show parks on the land must show beside them, in the gap
+// The acts beside the panel's texts over the picture, where most have them: the clock and the date at the bottom
+// left, the temperatures at the bottom right. What an act parks on the land must show beside them, in the gap
 // between the clock and the temperatures or under the temperatures, see GAP_L in met_scene.h. The texts are on for
 // these, and each is shot as live/texts_TAG.ppm.
 
@@ -29,7 +29,7 @@ static float under_texts(const char *sprite, int i) {
   return (float) under / (float) (w * h);
 }
 
-// c's show with the texts on, its chance events due at once if chances, until copy i of sprite is placed, or parked
+// c's acts with the texts on, their chance events due at once if chances, until copy i of sprite is placed, or parked
 // with parked, still a while, within wait s. Then 3 s of it, or while it stays parked, under a text by a tenth at most
 // all the while, with a shot as live/texts_TAG.ppm.
 static void beside_texts(const Live &c, const char *sprite, const char *tag, int wait = 10, int i = 0,
@@ -38,7 +38,7 @@ static void beside_texts(const Live &c, const char *sprite, const char *tag, int
   std::string name = std::string("texts_") + tag;
   weather_of(c);
   bool drawn = picture(name.c_str(), 6000) >= 0;
-  CHECK_MSG(drawn && !strcmp(show_on(), c.want), "%s: the weather shows %s", name.c_str(), show_on());
+  CHECK_MSG(drawn && all_on(c.want), "%s: the weather has %s on", name.c_str(), cast_on().c_str());
   if (chances)
     chances_now();
   pn_saver(1);
@@ -66,8 +66,28 @@ static void beside_texts(const Live &c, const char *sprite, const char *tag, int
 }
 
 static void live_texts() {
-  step("the shows beside the clock and the temperatures");
+  step("the weather animations beside the clock and the temperatures");
   pn_saver_texts(SAVER_PIC_ALL, 0);  // the clock, the date and the temperatures over the picture, at the bottom
+  // where the birds come down: none of the picture's perches has a bird on it under a text, in any landscape
+  for (met::Ground ground : {met::G_HILLS, met::G_COAST, met::G_MOUNTAINS, met::G_CITY}) {
+    weather_of({"", "clearsky_day", 0, 0, 0, 0, 3, 16, 0, utc(2026, 6, 7, 11), ground, 0, 0, 0});
+    CHECK_MSG(picture("perches", 6000) >= 0, "the picture for its perches not drawn");
+    pn_saver(1);
+    playing = true;
+    tick(9);  // so the texts are up
+    int box[12 * 4], nb = pn_texts(box, 12), under = 0;
+    playing = false;
+    pn_saver(0);
+    std::vector<live::Perch> where = live::perches(panel_scene(), true);
+    for (const live::Perch &p : where)
+      for (int b = 0; b < nb; b++) {
+        const int *t = box + b * 4;
+        int half = 11 * p.size / 100, up = 15 * p.size / 100;  // the gull, the biggest of them
+        under += p.x + half >= t[0] && p.x - half <= t[2] && p.y >= t[1] && p.y - up <= t[3];
+      }
+    CHECK_MSG(nb >= 3 && where.size() >= 2 && !under, "%s: %zu perches, %d of them under one of the %d texts",
+              met::GROUNDS[ground], where.size(), under, nb);
+  }
   // the owl on the cabin's ridge, or a flat roof in town
   Live owl = {"Halloween", "clearsky_night", 0, 0, 0, 0, 2, 4, 0, utc(2026, 10, 31, 22), met::G_HILLS, 0, 10, 0};
   beside_texts(owl, "owl", "owl_hills", 120, 0, true, true);
@@ -88,11 +108,24 @@ static void live_texts() {
   fire.ground = met::G_CITY;
   beside_texts(fire, "pyre", "bonfire_town");
   // the lights on the spruce by home, and the park's flag on Christmas Day
-  Live xmas = {"Christmas Eve", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2025, 12, 24, 17), met::G_HILLS, 2, 10, 0};
+  Live xmas = {"Christmas Eve + The lights on the spruce",
+               "clearsky_night",
+               0,
+               0,
+               0,
+               0,
+               2,
+               -6,
+               0,
+               utc(2025, 12, 24, 17),
+               met::G_HILLS,
+               2,
+               10,
+               0};
   beside_texts(xmas, "treelights", "xmas_hills");
   beside_texts(xmas, "treestar", "xmas_hills_star");
-  Live xmas_town = {"Christmas Eve in town",   "cloudy",    0, 0,  80, 0,     4,    -10, 0,
-                    utc(2025, 12, 25, 10, 30), met::G_CITY, 0, 10, 0,  78.22, 15.65};
+  Live xmas_town = {"Christmas Eve in town + The flag", "cloudy",    0, 0,  80, 0,     4,    -10, 0,
+                    utc(2025, 12, 25, 10, 30),          met::G_CITY, 0, 10, 0,  78.22, 15.65};
   beside_texts(xmas_town, "flag", "flag_town");
   // the moose grazing in front of the cabin, the reindeer along the bottom, not away for a hiker
   Live moose = {"A moose at dusk",        "clearsky_day", 0, 0,  0, 0, 3, 8, 0,
@@ -124,11 +157,37 @@ static void live_texts() {
   beside_texts(summer, "butterfly", "butterflies_hills");
   beside_texts(summer, "brimstone", "brimstone_hills");
   // the eiders and the boat on the water in the gap
-  Live sail = {"Sailboat, glitter and eiders", "clearsky_day", 0, 0,  0, 0, 3, 14, 0,
-               utc(2026, 9, 20, 15),           met::G_COAST,   0, 10, 0};
+  Live sail = {"The sailboat + Light on the water + Glitter on the water + Eiders + Off the coast",
+               "clearsky_day",
+               0,
+               0,
+               0,
+               0,
+               3,
+               14,
+               0,
+               utc(2026, 9, 20, 15),
+               met::G_COAST,
+               0,
+               10,
+               0};
   beside_texts(sail, "eiders", "eiders_oslo");
-  Live north = {"Sailboat, glitter and eiders", "fair_day",   10, 0,  0, 0,     5,   20, 0,
-                utc(2026, 7, 15, 11),           met::G_COAST, 0,  10, 0, 64.38, 25.4};
+  Live north = {"The sailboat + Light on the water + Eiders + Off the coast",
+                "fair_day",
+                10,
+                0,
+                0,
+                0,
+                5,
+                20,
+                0,
+                utc(2026, 7, 15, 11),
+                met::G_COAST,
+                0,
+                10,
+                0,
+                64.38,
+                25.4};
   beside_texts(north, "eiders", "eiders_north");
   beside_texts(north, "boat", "boat_north");
   pn_saver_texts(SAVER_PIC, 0);

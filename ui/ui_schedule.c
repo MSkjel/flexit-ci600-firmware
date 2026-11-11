@@ -55,7 +55,7 @@ const screen_t SCR_SCHEDULE = {.title = S_WEEK_PROGRAM, .build = week_build, .up
 
 typedef struct {
   lv_obj_t *row[PERIODS_PER_DAY], *text[PERIODS_PER_DAY];  // each row and its times or "Add period"
-  int n;                                                   // rows: periods, plus "Add period" if there's room
+  int periods, n;                                          // rows: the periods, plus "Add period" if there's room
 } day_t;
 SCREEN_STATE(day_t, day);
 
@@ -75,12 +75,14 @@ static void day_build(lv_obj_t *b, intptr_t arg) {
   int d = (int) arg % 7;
   ui_set_title(tr(DAY_NAMES[d]));
   mk_day_bar(b, 12, 8, 296, 14, d);
-  day->n = M.n_periods[d] + sched_can_add(d);
+  period_t w[PERIODS_PER_DAY];
+  day->periods = sched_day(d, w);
+  day->n = day->periods + sched_can_add(d);
   clamp_sel(day->n, 0);
   for (int s = 0; s < day->n; s++) {
     lv_obj_t *row = day->row[s] = mk_box(b, 8, 32 + s * DAY_ROW, 304, DAY_ROW - 4, T.bg, 8);
-    if (s < M.n_periods[d])
-      day->text[s] = period_row(row, &M.week[d][s]);
+    if (s < day->periods)
+      day->text[s] = period_row(row, &w[s]);
     else
       lv_obj_set_pos(day->text[s] = mk_label(row, &font_f14, T.faint, _(S_ADD_PERIOD)), 30, 8);
   }
@@ -99,7 +101,7 @@ static bool day_key(int k) {
     return sel_key(k, day->n);
   frame_t *f = ui_frame();
   int d = (int) f->arg % 7;
-  bool existing = f->sel < M.n_periods[d];
+  bool existing = f->sel < day->periods;
   if (!sched_edit(d, existing ? f->sel : -1))
     return true;
   if (!existing)

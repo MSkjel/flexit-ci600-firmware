@@ -1,5 +1,6 @@
 // hw/mbserver.c, bus.c and unit.c: the Modbus server, the bus and the CX60's registers in and out of the model
 #include "unit_test.h"
+#include "room.h"
 
 // ---------------------------------------------------------------- the Modbus server
 
@@ -543,9 +544,44 @@ static void test_unit(void) {
   CHECK_EQ(toasts, 1);
 }
 
+// The panel's own sensor, smoothed: not there at once, but all the way within a minute, up, down and below zero
+static void test_room(void) {
+  model_defaults();
+  M.room_offset = 0;
+  static const uint16_t ADC[][2] = {{1990, 1977}, {3400, 3413}};  // 26.4 and 26.7 C, -3.6 and -3.8
+  for (int k = 0; k < 2; k++) {
+    int16_t at[2];
+    for (int i = 0; i < 2; i++) {  // as the sensor has them
+      stub_room_adc = ADC[k][i];
+      M.t_room = T_NONE;
+      room_second();
+      at[i] = M.t_room;
+    }
+    CHECK(at[0] != at[1] && abs(at[0] - at[1]) < 4);
+    room_second();
+    CHECK_EQ(M.t_room, at[1]);
+    for (int i = 0; i < 2; i++) {  // to the other and back
+      stub_room_adc = ADC[k][i];
+      room_second();
+      CHECK(M.t_room != at[i]);
+      for (int s = 0; s < 60; s++)
+        room_second();
+      CHECK_EQ(M.t_room, at[i]);
+    }
+  }
+  room_offset_changed();
+  stub_room_adc = 1990;
+  room_second();
+}
+
 const check_test_t UNIT_TESTS[] = {
-    {"mbserver", test_mbserver},         {"bus_burst", test_bus_burst},
-    {"bus_clock", test_bus_clock},       {"unit", test_unit},
-    {"temperatures", test_temperatures}, {"advanced", test_advanced},
-    {"bus_values", test_bus_values},     {0},
+    {"mbserver", test_mbserver},
+    {"bus_burst", test_bus_burst},
+    {"bus_clock", test_bus_clock},
+    {"unit", test_unit},
+    {"temperatures", test_temperatures},
+    {"advanced", test_advanced},
+    {"bus_values", test_bus_values},
+    {"room", test_room},
+    {0},
 };

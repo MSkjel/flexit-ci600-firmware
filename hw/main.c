@@ -14,6 +14,7 @@
 #include "room.h"
 #include "rs485.h"
 #include "settings.h"
+#include "sent.h"
 #include "shot.h"
 #include "stm32f1.h"
 #include "trend.h"
@@ -23,10 +24,8 @@
 model_t M;
 
 // Two draw buffers, LVGL renders into one while DMA sends the other.
-#define LV_LINES 8
-_Static_assert(SCR_W *LV_LINES <= 0xFFFF, "a strip goes out in one DMA transfer");
-_Static_assert(LV_LINES >= 8 && LV_LINES % 8 == 0, "pic_round and shot_round want whole 8-line strips");
-static lv_color_t draw_buf[2][SCR_W * LV_LINES];
+_Static_assert(SENT_STRIP <= 0xFFFF, "a strip goes out in one DMA transfer");
+static lv_color_t draw_buf[2][SENT_STRIP];
 static lv_disp_drv_t drv;
 
 // Drawing time and CPU load. tools/perf.py reads this over SWD and knows the layout.
@@ -38,67 +37,81 @@ volatile struct {
   uint32_t busy_pm;                 // awake time over the last second, per mille
   uint32_t stack_free;              // bytes of stack never used so far
 } PERF;
-volatile uint8_t dbg_key;  // write a KEY_x here over SWD to press that key
-static uint32_t flush_px;
+volatile uint8_t dbg_key;           // write a KEY_x here over SWD to press that key
+static uint32_t drawn_px, sent_px;  // pixels LVGL has drawn since the start, and those of them sent to the LCD
 
 bool plat_const(const void *p) { return (uintptr_t) p >= FLASH_BASE_ADDR && (uintptr_t) p < FLASH_SETTINGS; }
 uint32_t plat_entropy(void) { return board_entropy(); }
 int plat_log(uint8_t *out, int room) { return prof_log(out, room); }
 
-static void flushed(void) { lv_disp_flush_ready(&drv); }
+static struct {
+  lv_area_t area;
+  const lv_color_t *px;
+  uint32_t changed;  // the tiles of it still to go, see sent_changed()
+} strip;             // on its way to the LCD
 
-// LVGL has the next strip drawn and waits for the DMA to finish the last one. Sleep instead of spinning, the DMA
-// interrupt or the 1 ms tick wakes it.
-static void wait(lv_disp_drv_t *d) {
-  (void) d;
-  board_sleep();
-}
-
-static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
-  if (ui_held()) {
-    lv_disp_flush_ready(d);
+// The strip's next tiles to the LCD. After the first from the interrupt that ends the ones before.
+static void send_next(void) {
+  lv_area_t r;
+  const lv_color_t *px = sent_run(&strip.area, strip.px, &strip.changed, &r);
+  if (!px)
     return;
+  sent_px += lv_area_get_size(&r);
+  lcd_draw(r.x1, r.y1, r.x2, r.y2, (const uint16_t *) px, (unsigned) lv_area_get_width(&strip.area), send_next);
+}
+
+// Comparing a strip's tiles takes time too, under an 8th of what sending them all does. It pays while the LCD is
+// what LVGL waits for: when the strip before, had all of it gone, would still be on its way for that long. Then only
+// the tiles that changed go. A strip that took longer to draw than to send goes whole, as before.
+#define COMPARE_PART 8
+static uint32_t whole_out;  // board_us() when the strip before would be out if all of it had gone
+
+// LVGL draws the next strip in its other buffer while this one goes out, so the one before must be out when this
+// returns
+static void flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *px) {
+  if (!ui_held()) {
+    uint32_t all = lcd_us(lv_area_get_size(a));
+    bool compare = (int32_t) (whole_out - board_us()) > (int32_t) (all / COMPARE_PART);
+    uint32_t changed = compare ? sent_changed(a, px) : sent_all(a);
+    lcd_wait();
+    whole_out = board_us() + all;
+    strip.area = *a;
+    strip.px = px;
+    strip.changed = changed;
+    drawn_px += lv_area_get_size(a);
+    send_next();
+    shot_flushed(a, px);  // while the DMA sends it
   }
-  lcd_draw(a->x1, a->y1, a->x2, a->y2, (const uint16_t *) px, flushed);
-  shot_flushed(a, px);  // while the DMA sends it
-  flush_px += (uint32_t) (a->x2 - a->x1 + 1) * (uint32_t) (a->y2 - a->y1 + 1);
+  lv_disp_flush_ready(d);
 }
 
-static uint32_t heap_peak;  // most of LVGL's memory seen in use, checked after each redraw
-
-static uint32_t heap_used(void) {
-  lv_mem_monitor_t m;
-  lv_mem_monitor(&m);
-  return m.total_size - m.free_size;
-}
+// LVGL's free memory now and the least there has been, which lvgl-ci600.patch keeps count of
+extern size_t _lv_tlsf_free, _lv_tlsf_free_least;
 
 static uint32_t full_us, full_send_us;  // the last big redraw scaled to the whole screen, for Diagnostics
 
 static void draw(void) {
-  flush_px = 0;
+  uint32_t drawn = drawn_px, sent = sent_px;
   lcd_send_us = 0;
-  lcd_fast(M.fast_display);
   uint32_t t = board_us();
   lv_timer_handler();
-  if (!flush_px)
+  drawn = drawn_px - drawn;
+  if (!drawn)
     return;
-  bool big = flush_px >= (uint32_t) SCR_W * SCR_H / 2;  // a new page, the status bar stays
+  bool big = drawn >= (uint32_t) SCR_W * SCR_H / 2;  // a new page, the status bar stays
   if (big)
     lcd_wait();  // so the last strip counts
   uint32_t us = board_us() - t;
   if (big) {
-    full_us = (uint32_t) ((uint64_t) us * SCR_W * SCR_H / flush_px);
-    full_send_us = (uint32_t) ((uint64_t) lcd_send_us * SCR_W * SCR_H / flush_px);
+    full_us = (uint32_t) ((uint64_t) us * SCR_W * SCR_H / drawn);
+    full_send_us = (uint32_t) ((uint64_t) lcd_send_us * SCR_W * SCR_H / drawn);
   }
   PERF.frames++;
   PERF.last_us = us;
   if (us > PERF.max_us)
     PERF.max_us = us;
   PERF.last_flush_us = lcd_send_us;  // DMA time, mostly overlapping LVGL drawing the next strip
-  PERF.last_px = flush_px;
-  uint32_t used = heap_used();
-  if (used > heap_peak)
-    heap_peak = used;
+  PERF.last_px = sent_px - sent;
 }
 
 static void keys(uint32_t ms) {
@@ -124,44 +137,45 @@ static uint32_t boot_crc(void) {
 }
 
 void plat_stats(plat_stats_t *s) {
-  uint32_t used = heap_used();
   *s = (plat_stats_t) {.uptime_s = uptime_s,
                        .cpu_mhz = board_hz() / 1000000,
+                       .cpu_busy = (PERF.busy_pm + 5) / 10,
+                       .fault_pc = board_fault_pc(),
+                       .bus_ok = MB.frames,
+                       .bus_err = MB.errors,
+                       .bus_ours = MB.ours,
                        .restarts = board_restarts(),
                        .full_us = full_us,
                        .full_send_us = full_send_us,
                        .stack_free = PERF.stack_free,
                        .saves = settings_saves(),
                        .heap_size = LV_MEM_SIZE,
-                       .heap_used = used,
-                       .heap_peak = used > heap_peak ? used : heap_peak,
+                       .heap_used = LV_MEM_SIZE - _lv_tlsf_free,
+                       .heap_peak = LV_MEM_SIZE - _lv_tlsf_free_least,
                        .cpuid = SCB->CPUID,
                        .boot_crc = boot_crc()};
 }
 
 // Processor speed. The clock only changes at a start. A speed over 72 restarts into a trial at it, saved as 72 until
 // the trial is answered, so no answer or a power cut is back at 72. A crash or the watchdog over 72 sets it back to
-// 72, see cpu_clock_choice(). Fast display at 80 gets a trial too, 20 MHz may be too fast for the display. Over 80
-// it's off, see fast_display_ok(). Saves during a trial keep the value from before it, see val_trial().
-static bool on_trial;  // waiting for ui_trial()'s answer
-static int running;    // the CPU_MHZ[] index the clock runs at, 0 without the crystal
+// 72, see cpu_clock_choice(). Saves during a trial keep the value from before it, see val_trial().
+static int running;  // the CPU_MHZ[] index the clock runs at, 0 without the crystal
 
 // After settings_load(). *crashed is the MHz the last run crashed at if that was over 72, the speed is back at 72
 // then, else 0. True if a setting changed that's saved right away.
 static bool clock_start(int *crashed) {
-  uint8_t last = M.reset_cause == RESET_POWER ? 0 : board_clock_mark();  // RAM can outlast a short cut
+  uint8_t last = board_clock_mark();
   bool revert;
-  int mhz = cpu_clock_choice(M.cpu_speed, last, M.reset_cause, &revert), s = cpu_speed_of(mhz);
+  int s = cpu_clock_choice(M.cpu_speed, last, M.reset_cause, &revert);
   bool trial = s && CLOCK_TRIAL(last) == s;
   board_set_clock_mark(0);
   if (s) {
     board_set_clock_mark(CLOCK_MARK(s, trial ? s : 0));  // first, so a hang while switching counts too
-    if (board_set_clock((uint32_t) mhz)) {
+    if (board_set_clock((unsigned) s)) {
       running = s;
       M.cpu_speed = (uint8_t) s;
-      on_trial = trial;
       if (trial)
-        val_trial(V_CPU_SPEED);  // saved as 72 until it's kept, a restart carries on with the trial
+        val_trial(true);  // saved as 72 until it's kept, a restart carries on with the trial
     } else {
       board_set_clock_mark(0);  // no crystal
     }
@@ -169,10 +183,7 @@ static bool clock_start(int *crashed) {
   *crashed = revert ? CPU_MHZ[CLOCK_RAN(last)] : 0;
   if (revert)
     M.cpu_speed = 0;
-  bool fast_off = M.fast_display && !fast_display_ok();  // from flash, or restored by the ESP
-  if (fast_off)
-    M.fast_display = false;
-  return revert || fast_off;
+  return revert;
 }
 
 // Processor speed changed, which takes a restart
@@ -186,8 +197,7 @@ static void clock_changed(void) {
 }
 
 void plat_trial_end(bool keep) {
-  on_trial = false;
-  val_trial(V_NONE);
+  val_trial(false);
   board_set_clock_mark(CLOCK_MARK(running, 0));
   if (keep)
     plat_save(true);  // the setting that was on trial
@@ -199,11 +209,6 @@ void plat_value_changed(val_t v) {
     room_offset_changed();
   if (v == V_CPU_SPEED)
     clock_changed();
-  if (v == V_FAST_DISPLAY && M.fast_display && running && !on_trial) {
-    on_trial = true;
-    val_trial(V_FAST_DISPLAY);
-    ui_trial(V_FAST_DISPLAY);
-  }
   unit_value_changed(v);
 }
 
@@ -244,14 +249,20 @@ static void second(void) {
   ui_second();
   PERF.busy_pm = board_busy_pm();
   PERF.stack_free = board_stack_free();
-  M.cpu_busy = (uint8_t) ((PERF.busy_pm + 5) / 10);
-  prof_second();
+  prof_second(drawn_px, sent_px);
 }
 
-int main(void) {
+// A crash at a speed over 72 MHz put it back to 72. Kept out of main(), whose frame is under every call there is.
+static __attribute__((noinline)) void crash_toast(int mhz) {
+  char t[48];
+  lv_snprintf(t, sizeof t, _(S_CRASHED_AT_MHZ), mhz);
+  ui_toast_text(IC_ALERT, t);
+}
+
+__attribute__((noreturn)) int main(void) {
   board_init();
   model_defaults();
-  M.reset_cause = board_reset_cause(&M.fault_pc);
+  M.reset_cause = board_reset_cause();
   unit_init();
   settings_load();  // panel settings and the cached CX60 settings
   int crashed;
@@ -264,13 +275,11 @@ int main(void) {
   bool known = lcd_init();
   lv_init();
   static lv_disp_draw_buf_t db;
-  lv_disp_draw_buf_init(&db, draw_buf[0], draw_buf[1], SCR_W * LV_LINES);
+  lv_disp_draw_buf_init(&db, draw_buf[0], draw_buf[1], SENT_STRIP);
   lv_disp_drv_init(&drv);
   drv.hor_res = SCR_W;
   drv.ver_res = SCR_H;
   drv.flush_cb = flush;
-  drv.wait_cb = wait;
-  drv.rounder_cb = shot_round;
   drv.draw_buf = &db;
   lv_disp_drv_register(&drv);
   uint32_t now_s = board_rtc_get();
@@ -279,15 +288,12 @@ int main(void) {
     clock_follow(now_s, now_s);  // the saved dst_now may be stale, or the settings wiped
   ui_init();
   link_init();
-  if (crashed) {
-    char t[48];
-    lv_snprintf(t, sizeof t, _(S_CRASHED_AT_MHZ), crashed);
-    ui_toast_text(IC_ALERT, t);
-  }
+  if (crashed)
+    crash_toast(crashed);
   if (!known)
     ui_toast(IC_ALERT, S_UNKNOWN_DISPLAY_CONTROLLER);
-  if (on_trial)
-    ui_trial(V_CPU_SPEED);
+  if (val_on_trial())
+    ui_trial();
   prof_init();
 
   // Every 5 ms is plenty, the bus is answered in its interrupt. Sleep in between, awake the core runs flat out

@@ -53,13 +53,15 @@ static int about_rows(kv_t *r) {
 static int bus_rows(kv_t *r) {
   int n = 0;
   ROW(S_UNIT, "%s", M.bus_offline ? _(S_NO_CONTACT_LOWER) : _(S_TALKING));
-  ROW(S_POLLS_TO_THIS_PANEL, "%lu", (unsigned long) M.bus_ours);
-  ROW(S_FRAMES_OK, "%lu", (unsigned long) M.bus_ok);
-  uint64_t frames = (uint64_t) M.bus_ok + M.bus_err;
-  unsigned long bp = frames ? (unsigned long) (M.bus_err * 10000ull / frames) : 0;  // 0.01 % steps
+  plat_stats_t s;
+  plat_stats(&s);
+  ROW(S_POLLS_TO_THIS_PANEL, "%lu", (unsigned long) s.bus_ours);
+  ROW(S_FRAMES_OK, "%lu", (unsigned long) s.bus_ok);
+  uint64_t frames = (uint64_t) s.bus_ok + s.bus_err;
+  unsigned long bp = frames ? (unsigned long) (s.bus_err * 10000ull / frames) : 0;  // 0.01 % steps
   char pct[16];
   sprint(pct, sizeof pct, "%lu.%02lu", bp / 100, bp % 100);
-  ROW(S_ERRORS, "%lu (%s)", (unsigned long) M.bus_err, add_unit(pct, sizeof pct, "%"));
+  ROW(S_ERRORS, "%lu (%s)", (unsigned long) s.bus_err, add_unit(pct, sizeof pct, "%"));
   if (HAS(FEAT_ESP)) {
     const pbulk_panel_t *b = link_bulk_state();
     const pbus_panel_t *w = link_bus_state();
@@ -104,11 +106,11 @@ static int diag_rows(kv_t *r) {
     ROW(S_UPTIME, "%02u:%02u:%02u", (unsigned) (up / 3600), (unsigned) (up / 60 % 60), (unsigned) (up % 60));
   char why[24];
   if (M.reset_cause == RESET_FAULT)
-    lv_snprintf(why, sizeof why, _(S_START_CRASH), (unsigned long) M.fault_pc);
+    lv_snprintf(why, sizeof why, _(S_START_CRASH), (unsigned long) s.fault_pc);
   else
     lv_snprintf(why, sizeof why, "%s", tr(STARTS[M.reset_cause]));
   ROW(S_LAST_START, s.restarts == 1 ? _(S_START_ONE_RESTART) : _(S_START_RESTARTS), why, (unsigned long) s.restarts);
-  ROW(S_PROCESSOR, _(S_MHZ_BUSY), (unsigned) s.cpu_mhz, M.cpu_busy);
+  ROW(S_PROCESSOR, _(S_MHZ_BUSY), (unsigned) s.cpu_mhz, (unsigned) s.cpu_busy);
   char used[12], peak[12];
   ROW(S_MEMORY, _(S_MEMORY_USE), kb(used, sizeof used, s.heap_used), (unsigned) (s.heap_size / 1024),
       kb(peak, sizeof peak, s.heap_peak));
@@ -148,14 +150,14 @@ static void info_build(lv_obj_t *b, intptr_t arg) {
     int y = 6 + i * INFO_ROW;
     if (i % 2 == 0)
       mk_box(b, 8, y - 2, 304, INFO_ROW, T.surface, 6);
-    if (r[i].k == S_NONE) {  // a value alone, centred
-      info->v[i] = mk_label(b, &font_f14, T.dim, r[i].v);
-      lv_obj_align(info->v[i], LV_ALIGN_TOP_MID, 0, y + 1);
+    if (r[i].k == S_NONE) {  // a value alone, centred: in an odd width, as a label centred itself would be
+      info->v[i] = mk_text(b, &font_f14, T.dim, r[i].v, SCR_W - 1, LV_TEXT_ALIGN_CENTER);
+      lv_obj_set_pos(info->v[i], 1, y + 1);
       continue;
     }
     lv_obj_set_pos(mk_label(b, &font_f14, T.dim, tr(r[i].k)), 18, y + 1);
-    info->v[i] = mk_label(b, &font_f14, T.text, r[i].v);
-    lv_obj_align(info->v[i], LV_ALIGN_TOP_RIGHT, -18, y + 1);
+    info->v[i] = mk_text(b, &font_f14, T.text, r[i].v, SCR_W - 18, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_set_pos(info->v[i], 0, y + 1);
   }
   ui_hints(S_NONE, S_NONE, S_BACK, S_HELP);
   ui_help(PAGES[info->page].help);
@@ -265,8 +267,7 @@ static const struct {
 static void notices_fade(int i) {
   int mid = notices->y[i] + notices->h[i] / 2, d = LV_MIN(mid, SCR_H - mid);
   lv_opa_t o = d >= NOTICE_FADE ? LV_OPA_COVER : d <= 0 ? LV_OPA_TRANSP : (lv_opa_t) (d * LV_OPA_COVER / NOTICE_FADE);
-  if (lv_obj_get_style_text_opa(notices->l[i], 0) != o)
-    lv_obj_set_style_text_opa(notices->l[i], o, 0);
+  lv_obj_set_style_text_opa(notices->l[i], o, 0);
 }
 
 // Places lines on free labels until the screen is full below

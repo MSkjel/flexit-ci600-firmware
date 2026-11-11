@@ -54,12 +54,8 @@ $(OBJ_DIR)/esp_met/%.o: $(ESP_MET)/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
-# packages/code/marks/*.cpp and space/*.cpp, the space pictures' glyphs and the rovers' maps
-MARKS_OBJ := $(patsubst $(ESP_CODE)/%.cpp,$(OBJ_DIR)/esp_%.o,\
-                         $(wildcard $(ESP_CODE)/marks/*.cpp $(ESP_CODE)/space/*.cpp))
-$(OBJ_DIR)/esp_marks/%.o: $(ESP_CODE)/marks/%.cpp $(BUILD_MK)
-	@mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
+# packages/code/space/*.cpp, the rovers' maps
+SPACE_OBJ := $(patsubst $(ESP_CODE)/space/%.cpp,$(OBJ_DIR)/esp_space/%.o,$(wildcard $(ESP_CODE)/space/*.cpp))
 $(OBJ_DIR)/esp_space/%.o: $(ESP_CODE)/space/%.cpp $(BUILD_MK)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
@@ -75,14 +71,15 @@ $(OBJ_DIR)/esp_panel/%.o: $(ESP_CODE)/panel/%.cpp $(BUILD_MK)
 # esp_test runs the ESP's panel packages, YAML lambdas and all, against the panel's link code on a fake CX60
 ESP_YAML := $(wildcard $(ESP_REPO)/packages/panel.yaml $(ESP_REPO)/packages/panel/*.yaml)
 # gen.py also checks the ESP's copies of proto/ against proto.lock, and lists the headers in packages/code
-ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/* $(ESP_CODE)/marks/* $(ESP_CODE)/space/*)
+ESP_PROTO := $(wildcard $(ROOT)/proto/*.[ch] $(ESP_CODE)/panel/* $(ESP_MET)/* $(ESP_CODE)/space/*)
 $(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML) $(ESP_PROTO)
 	@test -d $(ESP_REPO) || { echo "needs the ESP repo: ESP_REPO=<esphome-flexit-modbus-server>"; exit 1; }
 	@mkdir -p $(dir $@)
 	python3 esp_yaml/gen.py $(ESP_REPO) $@
 $(OBJ_DIR)/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
 $(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DSAMPLES='"$(abspath esp_yaml)/"' \
-                                     -DPICTURES='"$(abspath $(BUILD)/esp_yaml)/"'
+                                     -DPICTURES='"$(abspath $(BUILD)/esp_yaml)/"' \
+                                     -DDOCS='"$(abspath $(ESP_REPO))/docs/"'
 # The photos it shows, from the samples, as PPMs
 ESP_PICTURES := $(addprefix $(BUILD)/esp_yaml/,mars_sample.ppm epic_sample.ppm)
 TO_PPM := python3 -c "import sys; from PIL import Image; Image.open(sys.argv[1]).convert('RGB').save(sys.argv[2])"
@@ -90,12 +87,13 @@ $(BUILD)/esp_yaml/%_sample.ppm: esp_yaml/%_sample.png
 	@mkdir -p $(dir $@)
 	$(TO_PPM) $< $@
 $(BUILD)/esp_test: $(SIMLIB) $(CHECK_OBJ) $(call obj,sim/sim_model sim/esp_yaml/panel_side sim/esp_yaml/harness) \
-                   $(PANEL_OBJ) $(MET_OBJ) $(MARKS_OBJ) | $(ESP_PICTURES)
+                   $(PANEL_OBJ) $(MET_OBJ) $(SPACE_OBJ) | $(ESP_PICTURES)
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 # met_render draws the ESP's weather picture from packages/code/met/met_scene.h for a set of weathers and times
 $(OBJ_DIR)/sim/met_render.o: CPPFLAGS += -I$(ESP_MET)
-$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ)
+$(BUILD)/met_render: $(call obj,sim/met_render proto/plink proto/pdeflate sim/ppm) $(MET_OBJ) \
+                     $(OBJ_DIR)/esp_panel/marks_font.o
 	$(CXX) -o $@ $^ $(LDLIBS)
 
 $(OBJ_DIR)/%.o: $(ROOT)/%.cpp $(BUILD_MK)
@@ -116,7 +114,7 @@ HASH_SCREENS := sha256sum $(SCREENS) | LC_ALL=C sort -k 2
 # CX60, the ESP's bytes late in big chunks and a second panel on the bus; a CX60 in between with another seed; and
 # a screenshot's stream from the panel while pictures go to it
 check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
-	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/strips $(OUT)/esp $(OUT)/replay
+	rm -rf $(OUT)/shots $(OUT)/shots_no $(OUT)/esp $(OUT)/replay
 	$(BUILD)/unit_test
 	$(BUILD)/link_test
 	$(BUILD)/fuzz_test
@@ -129,10 +127,6 @@ check: $(addprefix $(BUILD)/,$(PROGS)) $(BUILD)/esp_test lang
 	$(BUILD)/replay captures/cap1.txt $(OUT)/replay glued
 	$(BUILD)/sim $(OUT)/shots
 	SIM_LANG=1 $(BUILD)/sim $(OUT)/shots_no
-	SIM_LINES=8 $(BUILD)/sim $(OUT)/strips
-	@cd $(OUT)/shots && sha256sum *.ppm checks/*.ppm > ../strips_40.txt
-	@cd $(OUT)/strips && sha256sum *.ppm checks/*.ppm | cmp -s - ../strips_40.txt \
-	  || { echo "the 8-line strips draw differently from the 40-line ones"; exit 1; }
 	$(BUILD)/lang_test
 	@cd $(OUT) && $(HASH_SCREENS) > screens.txt
 	@diff $(CURDIR)/golden.txt $(OUT)/screens.txt | sed -n 's/^> [0-9a-f]*  /changed: /p'

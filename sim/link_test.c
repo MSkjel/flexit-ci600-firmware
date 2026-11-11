@@ -65,10 +65,11 @@ static void esp_send(uint16_t key, uint32_t v) {
 
 // The panel's main loop. Takes what came in and puts its own messages in the next answers, DATA in what's left.
 static void panel_loop(void) {
-  uint8_t p[PBULK_PAYLOAD_MAX];
+  uint8_t p[PBULK_ANSWER_MAX];
+  const uint8_t *in;
   int n;
-  while ((n = pbulk_panel_take(&P, p)) > 0)
-    pbulk_parse(p, n, at_panel, NULL);
+  for (; (in = pbulk_panel_take(&P, &n)) != NULL; pbulk_panel_taken(&P))
+    pbulk_parse(in, n, at_panel, NULL);
   while (pbulk_panel_free(&P)) {
     n = plink_pack(&L, p, PBULK_ANSWER_MAX);
     int k = (int) (data_goal - data_put) * 4, room = (PBULK_ANSWER_MAX - n - PBULK_MSG_HEAD) & ~3;

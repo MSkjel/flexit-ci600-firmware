@@ -12,6 +12,7 @@
 static uint8_t rx[RX_MAX], tx[MB_MAX_FRAME];
 static int rx_len;            // the burst so far, only the interrupt writes it
 static uint32_t burst_start;  // time of the burst's first byte
+static volatile bool cut;     // the burst coming in is given up to what rs485_wait_quiet() was asked for
 static int tx_len, tx_pos;    // the reply being sent, only used by the interrupt
 
 void rs485_init(void) {
@@ -26,7 +27,8 @@ bool rs485_busy(void) { return USART1->CR1 & (USART_CR1_TXEIE | USART_CR1_TCIE);
 
 // Early in the CX60's status broadcast, or with no CX60 at all. The rest of it and the gap after take 27 ms or
 // more, and we miss nothing there: the status comes again next cycle and the ESP sends its frame again. A page
-// erase can take 40 ms, and then the CX60's first poll after the gap is lost too. It polls again next cycle.
+// erase can take 40 ms, and then the CX60's first poll after the gap is lost too. It polls again next cycle. What's
+// left of the broadcast when the interrupt runs again is dropped as it is, not counted as a bad frame.
 #define STATUS_EARLY 24  // bytes, 2 ms
 bool rs485_wait_quiet(uint32_t ms) {
   const pbus_panel_t *w = link_bus_state();
@@ -34,9 +36,10 @@ bool rs485_wait_quiet(uint32_t ms) {
   for (uint32_t t = board_ms();;) {
     uint32_t s = board_irq_save();
     bool status = rx_len >= head && rx_len <= STATUS_EARLY && pbus_status_part(rx, head) == head;
-    bool cx60 = board_ms() - w->status_ms < 1000;
+    bool cx60 = board_ms() - w->status_ms < 1000, quiet = !rs485_busy() && (status || !cx60);
+    cut = quiet && status;
     board_irq_restore(s);
-    if (!rs485_busy() && (status || !cx60))
+    if (quiet)
       return true;
     if (board_ms() - t >= ms)
       return false;
@@ -85,7 +88,8 @@ void USART1_IRQHandler(void) {
     int n = rx_len;
     rx_len = 0;
     bool modbus;
-    int r = bus_burst(rx, n, burst_start, idle, board_ms(), tx, &modbus);
+    int r = cut ? 0 : bus_burst(rx, n, burst_start, idle, board_ms(), tx, &modbus);
+    cut = false;
     if (r > 0) {
       while (!modbus && board_us() - idle < PBUS_PANEL_WAIT_US) {
       }  // give the ESP's driver time to let go of the bus

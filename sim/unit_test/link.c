@@ -324,13 +324,13 @@ static int32_t dumped(val_t v) {
   return -1;
 }
 
-// A setting on trial goes to flash and to the ESP's copy as 0, 72 MHz or off, until it's kept. The rest are saved.
+// A speed on trial goes to flash and to the ESP's copy as 72 MHz until it's kept. The rest are saved.
 static void test_link_trial(void) {
   link_up();
   memset(stub_flash, 0xFF, FLASH_SETTINGS_PAGES * FLASH_PAGE);
   settings_load();
   M.cpu_speed = 2;  // a trial at 88 MHz, see hw/main.c
-  val_trial(V_CPU_SPEED);
+  val_trial(true);
   M.brightness = 42;
   plat_save_now();  // as a restart does
   CHECK_EQ(dumped(V_CPU_SPEED), 0);
@@ -341,28 +341,44 @@ static void test_link_trial(void) {
   CHECK_EQ(M.brightness, 42);
   // kept
   M.cpu_speed = 2;
-  val_trial(V_NONE);
+  val_trial(false);
   plat_save_now();
   CHECK_EQ(dumped(V_CPU_SPEED), 2);
   link_up();
   settings_load();
   CHECK_EQ(M.cpu_speed, 2);
-  // Fast display at 80 MHz
-  M.cpu_speed = 1;
-  M.fast_display = true;
-  val_trial(V_FAST_DISPLAY);
-  plat_save_now();
-  CHECK_EQ(dumped(V_FAST_DISPLAY), 0);
+}
+
+// A picture's parts go with it, also when another one's BEGIN comes while it was still coming in
+static void test_link_parts(void) {
   link_up();
-  settings_load();
-  CHECK(!M.fast_display);
-  CHECK_EQ(M.cpu_speed, 1);
-  val_trial(V_NONE);
+  no_overlays();
+  dot_frames(false);
+  uint8_t d[512], g[OVERLAY_GLIDE_HEAD + OVERLAY_GLIDE_EACH], h[PIC_BEGIN_HEAD + PIC_PAL_LEN];
+  uint32_t n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 10, 10, 0, 0);
+  overlay_msg(K_OVERLAY_GLIDE, g, sim_overlay_glide(g, 0, 0, 0, EACH(OVERLAY_DEPTH, 10)));
+  show_overlays();
+  uint8_t part[PIC_PART_LEN] = {0};
+  plink_put16(part + PIC_PART_X1, 100);
+  plink_put16(part + PIC_PART_Y1, 100);
+  plink_put16(part + PIC_PART_COLOURS, PIC_ALL_COLOURS);
+  part[PIC_PART_DEPTH] = 200;
+  from_esp(K_PIC_BEGIN, h, plink_pic_begin(h, 1, PIC_PALETTE, 320, 240, 4000, palette()), true);
+  from_esp(K_PIC_PART, part, sizeof part, true);
+  CHECK(pic_state() == PIC_RECEIVING && overlay_covered(0, 12, 12));
+  from_esp(K_PIC_BEGIN, h, plink_pic_begin(h, 2, PIC_PALETTE, 320, 240, 4000, palette()), true);
+  CHECK(pic_state() == PIC_RECEIVING && !overlay_covered(0, 12, 12));
+  from_esp(K_PIC_CLEAR, part, 4, true);
+  lv_obj_clean(lv_scr_act());
+  overlay_clear_msg(OVERLAY_ALL);
 }
 
 const check_test_t LINK_TESTS[] = {
     {"link", test_link},
     {"link_picture", test_link_picture},
+    {"link_parts", test_link_parts},
     {"link_trial", test_link_trial},
     {0},
 };

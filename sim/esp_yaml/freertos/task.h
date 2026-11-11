@@ -5,3 +5,4 @@ BaseType_t xTaskCreate(TaskFunction_t f, const char *name, uint32_t stack, void 
                        TaskHandle_t *task);
 void vTaskDelete(TaskHandle_t task);
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t task);
+uint8_t *pxTaskGetStackStart(TaskHandle_t task);  // where its stack ends: far away, unless a test has it full

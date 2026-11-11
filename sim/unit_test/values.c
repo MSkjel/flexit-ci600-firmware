@@ -73,10 +73,10 @@ static void test_items(void) {
   *co2 = (item_t) {.type = ITEM_SENSOR,
                    .flags = ITEMF_VIEW | ITEMF_TREND | ITEMF_LEVELS,
                    .id = 77,
-                   .max = 2000,
-                   .level = {0, 0, 800, 1200}};
-  *target = (item_t) {.type = ITEM_NUMBER, .flags = ITEMF_MENU, .id = 78, .step = 50, .min = 400, .max = 1500};
-  *button = (item_t) {.type = ITEM_BUTTON, .flags = ITEMF_VIEW, .id = 79, .max = 1};
+                   .u.max = 2000,
+                   .u.level = {0, 0, 800, 1200}};
+  *target = (item_t) {.type = ITEM_NUMBER, .flags = ITEMF_MENU, .id = 78, .step = 50, .u.min = 400, .u.max = 1500};
+  *button = (item_t) {.type = ITEM_BUTTON, .flags = ITEMF_VIEW, .id = 79, .u.max = 1};
   val_t v = V_ITEM_FIRST + 2;
   CHECK(!val_known(V_ITEM_FIRST));
   CHECK(val_known(v));
@@ -157,13 +157,24 @@ static void test_leds(void) {
   panel_leds(l, 0);
   CHECK(!l[2]);
   // a blink set by the ESP actually blinks
+  M.esp_online = true;
   M.leds = 3 << 4;  // the OK LED
   panel_leds(l, 100);
   bool a = l[2];
   panel_leds(l, 600);
   CHECK(a != l[2]);
-  M.leds = 0;
+  // an alarm light the ESP turned off is the panel's own again once the ESP is gone
   M.night = false;
+  M.alarms[0] = (alarm_t) {.code = 9, .active = true};
+  M.n_alarms = 1;
+  M.leds = LED_OFF;
+  panel_leds(l, 0);
+  CHECK(!l[0]);
+  M.esp_online = false;
+  panel_leds(l, 0);
+  CHECK(l[0]);
+  M.leds = 0;
+  M.n_alarms = 0;
 }
 
 const check_test_t VALUES_TESTS[] = {

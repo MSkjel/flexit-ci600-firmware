@@ -51,9 +51,6 @@ _Static_assert((PIC_MAX_W + 1) / 2 <= UINT8_MAX, "a row's bytes in left");
 
 static uint32_t row_bytes(void) { return (pic.w + 1u) / 2u; }
 
-// Bytes of row a PackBits code makes: the c + 1 after it below 128, else the one after it c - 126 times
-static unsigned run_len(uint8_t c) { return c < 128 ? c + 1u : c - 126u; }
-
 static void clear(void) { pic.state = PIC_NONE; }
 
 void pic_reset(void) {
@@ -161,11 +158,11 @@ static bool parse(const uint8_t *b, uint32_t n) {
     if (xfer.rows >= rows)
       return false;  // past the last row
     uint8_t c = b[i++];
-    unsigned m = run_len(c);
+    unsigned m = plink_run(c);
     if (m > left)
       return false;  // a run across the end of a row
     left -= m;
-    skip = c < 128 ? m : 1;
+    skip = plink_run_bytes(c);
   }
   xfer.left = (uint8_t) left;
   xfer.skip = (uint8_t) skip;
@@ -230,8 +227,8 @@ static int32_t data(const uint8_t *b, int n) {
 
 // The packed row after the one at p. Its runs end at the row's end, parse() checked that.
 static const uint8_t *next_row(const uint8_t *p) {
-  for (uint32_t out = 0, rb = row_bytes(); out < rb; p += *p < 128 ? *p + 2u : 2u)
-    out += run_len(*p);
+  for (uint32_t out = 0, rb = row_bytes(); out < rb; p += 1 + plink_run_bytes(*p))
+    out += plink_run(*p);
   return p;
 }
 
@@ -421,9 +418,9 @@ uint16_t pic_height(void) { return pic.h; }
 __attribute__((optimize("O3"))) static const uint8_t *draw_row(const uint8_t *p, int x1, int x2, lv_color_t *d) {
   for (int x = 0, end = (int) row_bytes() * 2; x < end;) {  // x: the run's first pixel
     uint8_t c = *p++;
-    int n = (int) run_len(c), a = LV_MAX(x, x1), b = LV_MIN(x + 2 * n - 1, x2);
+    int n = (int) plink_run(c), a = LV_MAX(x, x1), b = LV_MIN(x + 2 * n - 1, x2);
     const uint8_t *s = c < 128 ? p + (a - x) / 2 : p;
-    p += c < 128 ? n : 1;
+    p += plink_run_bytes(c);
     x += 2 * n;
     if (a > b)
       continue;
@@ -484,7 +481,7 @@ void pic_in(int y, int x1, int x2, uint16_t colours, uint32_t *bits, int base) {
   const uint8_t *p = row_at((unsigned) y);
   for (int x = 0; x <= x2;) {  // x: the run's first pixel
     uint8_t c = *p++;
-    int n = 2 * (int) run_len(c);
+    int n = 2 * (int) plink_run(c);
     for (int i = LV_MAX(x, x1); i < x + n && i <= x2; i++) {
       uint8_t two = c < 128 ? p[(i - x) / 2] : *p;
       if (colours >> (i & 1 ? two & 15 : two >> 4) & 1) {
@@ -492,20 +489,9 @@ void pic_in(int y, int x1, int x2, uint16_t colours, uint32_t *bits, int base) {
         bits[k / 32] |= 1u << k % 32;
       }
     }
-    p += c < 128 ? n / 2 : 1;
+    p += plink_run_bytes(c);
     x += n;
   }
-}
-
-void pic_round(lv_disp_drv_t *d, lv_area_t *a) {
-  (void) d;
-  // LVGL asking how high a strip may be, only while it draws. Below 8 lines it would find none and loop forever.
-  bool probe = lv_disp_get_default()->rendering_in_progress;
-  if (!shown || pic.format != PIC_JPEG || (probe ? a->y2 < 7 : !_lv_area_is_on(a, &shown->coords)))
-    return;
-  int top = shown->coords.y1;
-  a->y1 = (lv_coord_t) (a->y1 - ((a->y1 - top) & 7));
-  a->y2 = (lv_coord_t) (a->y2 + (7 - ((a->y2 - top) & 7)));
 }
 
 // The picture object draws straight into LVGL's draw buffer, only the part being drawn now
@@ -515,8 +501,11 @@ static void pic_event(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_DELETE && o == shown)
     shown = NULL;
   else if (lv_event_get_code(e) == LV_EVENT_COVER_CHECK) {
-    if (ours && _lv_area_is_in(lv_event_get_cover_area(e), &o->coords, 0))
-      lv_event_set_cover_res(e, LV_COVER_RES_COVER);
+    // The object itself has said it's see-through, and lv_event_set_cover_res() only takes a stronger answer than
+    // that. Its pixels all are drawn, so nothing behind it needs to be.
+    lv_cover_check_info_t *info = lv_event_get_param(e);
+    if (ours && info->res == LV_COVER_RES_NOT_COVER && _lv_area_is_in(info->area, &o->coords, 0))
+      info->res = LV_COVER_RES_COVER;
   } else if (lv_event_get_code(e) == LV_EVENT_DRAW_MAIN && ours) {
     lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
     lv_area_t c;
@@ -537,7 +526,7 @@ lv_obj_t *pic_show(lv_obj_t *parent) {
   lv_obj_t *o = shown = lv_obj_create(parent);
   lv_obj_remove_style_all(o);
   lv_obj_set_size(o, pic.w, pic.h);
-  if (pic.format == PIC_JPEG)  // its top on a multiple of 8 lines, so LVGL's strips start on its MCU rows
+  if (pic.format == PIC_JPEG)  // its MCU rows between the lines LVGL's strips end on
     lv_obj_align(o, LV_ALIGN_TOP_MID, 0, (PIC_MAX_H - pic.h) / 2 & ~7);
   else
     lv_obj_center(o);

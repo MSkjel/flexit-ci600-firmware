@@ -12,7 +12,6 @@
     X(SAVER_TOP,       0x0A3, M.saver_top,          0, 1,    VF_SAVED | VF_LAYOUT, 0) \
     X(GO_HOME,         0x0A4, M.go_home,            0, 1,    VF_SAVED, 0) \
     X(TEMP_DEC,        0x0A5, M.temp_dec,           0, 1,    VF_SAVED, 0) \
-    X(FAST_DISPLAY,    0x0A6, M.fast_display,       0, 1,    VF_SAVED, 0) \
     X(CPU_SPEED,       0x0A7, M.cpu_speed,          0, N_CPU_SPEEDS - 1, VF_SAVED, 0) /* takes a restart, see cpu_clock_choice() */ \
     /* home views */ \
     X(SHOW_FLOW,       0x0B0, M.view_on[VIEW_FLOW], 0, 1,    VF_SAVED | VF_LAYOUT, 0) \
@@ -154,10 +153,11 @@ uint16_t val_cx60_reg(val_t v);   // CX60 register for v, offset by our bus addr
 val_t val_by_key(uint16_t key);   // V_NONE if no value has that key
 val_t val_by_cx60(uint16_t reg);  // value a CX60 register holds, not VF_BY_HAND ones. V_NONE if none
 int32_t val_get(val_t v);
-// A setting on trial, see ui_trial(). Flash and the ESP's copy of the settings get 0 for it, 72 MHz or off, until
-// it's kept. V_NONE when the trial ends.
-void val_trial(val_t v);
-int32_t val_saved(val_t v);                   // val_get(), but 0 for the one on trial
+// Processor speed is on trial, see ui_trial(). Flash and the ESP's copy of the settings get 72 MHz for it until it's
+// kept.
+void val_trial(bool on);
+bool val_on_trial(void);
+int32_t val_saved(val_t v);                   // val_get(), but 72 MHz for a speed on trial
 void val_set(val_t v, int32_t value);         // set by the user
 void val_set_remote(val_t v, int32_t value);  // set by the ESP
 void val_update(val_t v, int32_t value);      // read from the CX60, or changed by itself. Not written anywhere
@@ -177,5 +177,6 @@ const item_t *item_by_id(int id);  // NULL if no item has that id
 // Change notifications besides plat.h's
 void ui_value_changed(val_t v);
 void ui_layout_changed(void);      // rows or tiles came or went, rebuild the screen
+void ui_items_changed(void);       // the same for the ESP's items, which the screensaver has none of
 void ui_alarms_changed(void);      // the alarms or their history
 void link_value_changed(val_t v);  // tells the ESP

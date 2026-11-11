@@ -1,7 +1,7 @@
 // Damaged and random input for pinflate(), both ends of the link and the panel's picture and animation messages.
 // No crash, no write past a buffer (SAN=1), output as promised. Each test starts from seed 1, FUZZ_SEED=n for another.
 //   build/fuzz_test [-l | -v] [TEST...]
-#include "overlay.h"
+#include "overlay_int.h"
 #include "model.h"
 #include "pbulk.h"
 #include "pdeflate.h"
@@ -10,6 +10,7 @@
 #include "plink.h"
 #include "check.h"
 #include "sim.h"
+#include "enc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,11 +195,10 @@ static void esp_queue(pbulk_esp_t *e) {
 
 // What the panel's main loop does with what came in, and now and then a message of its own
 static void panel_loop(pbulk_panel_t *p) {
-  uint8_t out[PBULK_MAX];
-  int n;
-  while ((n = pbulk_panel_take(p, out)) > 0) {
-    CHECK(n <= PBULK_MAX);
-    pbulk_parse(out, n, got_msg, &n);
+  const uint8_t *in;
+  for (int n; (in = pbulk_panel_take(p, &n)) != NULL; pbulk_panel_taken(p)) {
+    CHECK(n > 0 && n <= PBULK_MAX && in > p->buf && in + n <= p->buf + PBULK_RX_BUF);
+    pbulk_parse(in, n, got_msg, &n);
   }
   if (pbulk_panel_free(p) && !below(4)) {  // a message or two, DATA in 4s like a screenshot's
     uint8_t m[PBULK_ANSWER_MAX];
@@ -437,18 +437,30 @@ static void test_pictures(void) {
   pic_msg(K_PIC_CLEAR, NULL, 0);
 }
 
-// An overlay of 4 random frames, or a still of the first, its records damaged or not, into slot, its width odd or
-// even. Its colours have any opacity, any of them glow.
+// An overlay of 4 random frames, a still of the first or a field, its records damaged or not, into slot, its width
+// odd or even. Its colours have any opacity, any of them glow or cycle.
 static void send_overlay(int slot) {
-  int still = below(2), w = 1 + below(still ? 128 : 32), h = 1 + below(still ? 48 : 16), bytes = (w + 1) / 2 * h;
+  int kind = below(4), still = kind != OVERLAY_ANIMATED, w = 1 + below(still ? 128 : 32),
+      h = 1 + below(still ? 48 : 16), bytes = (w + 1) / 2 * h;
   static uint8_t frames[4][64 * 48], d[5 * (OVERLAY_RECORD_HEAD + PDEFLATE_BOUND(64 * 48)) + 16];
   for (int f = 0; f < 4; f++)
     for (int i = 0; i < bytes; i++)
       frames[f][i] = (uint8_t) (i % 5 < 2 ? 0xFF : rnd());
   unsigned n = 0;
-  if (still)
+  if (kind == OVERLAY_STILL)
     n = plink_overlay_pieces(frames[0], (unsigned) w, (unsigned) h, (uint16_t) rnd(), (uint8_t) rnd(), d, sizeof d);
-  else
+  else if (kind == OVERLAY_SHEET)  // its frames, now and then one made longer
+    for (int f = 0; f < 4; f++) {
+      n +=
+          plink_overlay_head(d + n, (uint8_t) rnd(), below(6) ? OVERLAY_RECORD_FRAME : OVERLAY_RECORD_MORE, 0, 0, 0, 0);
+      n += plink_overlay_pieces(frames[f], (unsigned) w, (unsigned) h, (uint16_t) rnd(), 0, d + n, sizeof d - n);
+    }
+  else if (kind == OVERLAY_FIELD) {  // one of them, mostly as it can be
+    d[OVERLAY_FIELD_KIND] = (uint8_t) below(OVERLAY_FIELDS + (below(8) ? 0 : 2));
+    d[OVERLAY_FIELD_A] = (uint8_t) (below(4) ? 1 + below(OVERLAY_NOISE_LAYERS) : (int) rnd());
+    plink_put16(d + OVERLAY_FIELD_B, (uint16_t) (below(8) ? OVERLAY_NOISE_MIN + below(60) : (int) rnd()));
+    n = OVERLAY_FIELD_LEN;
+  } else
     for (int f = 0; f <= 4; f++)
       n += plink_overlay_record(f ? frames[f - 1] : NULL, frames[f % 4], (unsigned) w, (unsigned) h, (uint8_t) rnd(),
                                 d + n);
@@ -459,83 +471,182 @@ static void send_overlay(int slot) {
     pal[i] = palette()[i] | (below(2) ? 0xFF000000 : rnd() << 24);
   uint8_t b[OVERLAY_BEGIN_LEN + 16];
   int bn =
-      plink_overlay_begin(b, ++id, (uint8_t) slot, (uint8_t) (still ? OVERLAY_STILL : OVERLAY_ANIMATED), (uint16_t) w,
-                          (uint16_t) h, (uint8_t) (1 + below(2)), n, pal, (uint16_t) rnd(), rnd() & 0xFFFFFF);
+      plink_overlay_begin(b, ++id, (uint8_t) slot, (uint8_t) kind, (uint16_t) w, (uint16_t) h, (uint8_t) (1 + below(2)),
+                          n, pal, (uint16_t) rnd(), rnd() & 0xFFFFFF, (uint16_t) (below(2) ? rnd() : 0));
   if (!below(16))
     b[OVERLAY_BEGIN_KIND] = (uint8_t) rnd();
   send_head(K_OVERLAY_BEGIN, b, bn, (int) sizeof b);
   send_data(d, n, plink_crc32(0, d, n));
 }
 
-// The overlays, sent whole or damaged, placed and moved by messages of every kind and drawn as they go
-// A value in a script: a number of 2 or 4 bytes, or a register
-static int put_value(uint8_t *b) {
-  int k = below(3);
-  if (k == 2) {
+// A number in a value: 1, 2 or 4 bytes, or a register
+static int put_number(uint8_t *b) {
+  int k = below(4);
+  if (k == 3) {
     b[0] = (uint8_t) (OVERLAY_VREG + below(OVERLAY_REGS));
     return 1;
   }
-  int32_t v = below(4) ? below(600) - 100 : (int32_t) rnd();
-  b[0] = k ? OVERLAY_V32 : OVERLAY_V16;
-  int len = k ? 4 : 2;
+  static const int32_t EDGE[] = {INT32_MIN, INT32_MIN + 1, INT32_MAX, -1, 0, 1 << 30, -(1 << 30)};
+  int32_t v = below(4) ? below(600) - 100 : below(4) ? (int32_t) rnd() : EDGE[below(7)];  // the ends of a number too
+  b[0] = k == 2 ? OVERLAY_V32 : k ? OVERLAY_V16 : OVERLAY_V8;
+  int len = k == 2 ? 4 : k ? 2 : 1;
   for (int i = 0; i < len; i++)  // low byte first
     b[1 + i] = (uint8_t) ((uint32_t) v >> 8 * i);
   return 1 + len;
 }
 
+// A value in a script, 40 bytes at most: a number, or one worked out by OPs that mostly have what they take, now
+// and then with one that isn't one or without its end
+static int put_value(uint8_t *b) {
+  if (below(3))
+    return put_number(b);
+  int n = 0, left = 0;
+  b[n++] = OVERLAY_VEXPR;
+  for (int ops = 1 + below(10); (ops > 0 || left != 1) && n < 28; ops--) {
+    int op = OVERLAY_OP_END + 1 + below(OVERLAY_OPS - OVERLAY_OP_END - 1);
+    if (!below(40))
+      op = below(256);
+    if (op >= OVERLAY_OPS || OP_TAKES[op] > left || (ops <= 0 && OP_TAKES[op] < 2 && left > 1) || !below(3)) {
+      if (left < OVERLAY_EXPR_STACK - 1 || !below(8)) {
+        n += put_number(b + n);
+        left++;
+      }
+      if (op < OVERLAY_OPS && below(20))
+        continue;
+    }
+    b[n++] = (uint8_t) op;
+    left += op < OVERLAY_OPS ? 1 - OP_TAKES[op] : 0;
+    if (op == OVERLAY_OP_GET || op == OVERLAY_OP_OWN)
+      b[n++] = (uint8_t) below(OVERLAY_GETS + (below(20) ? 0 : 3));
+    if (op == OVERLAY_OP_GET || op == OVERLAY_OP_DIST || op == OVERLAY_OP_ANGLE)
+      b[n++] = (uint8_t) (below(4) ? below(OVERLAY_PLACES + (below(20) ? 0 : 2)) : OVERLAY_SELF);
+    if (op == OVERLAY_OP_DIST || op == OVERLAY_OP_ANGLE)
+      b[n++] = (uint8_t) (below(4) ? below(OVERLAY_PLACES) : OVERLAY_SELF);
+    if (op == OVERLAY_OP_PICK || op == OVERLAY_OP_CURVE) {  // now and then none, or more than there's room for
+      int k = below(8) ? 1 + below(4) : below(2) * 255;
+      b[n++] = (uint8_t) k;
+      noise(b + n, 2 * LV_MIN(k, 4));
+      n += 2 * LV_MIN(k, 4);
+    }
+  }
+  if (below(30))
+    b[n++] = OVERLAY_OP_END;
+  return n;
+}
+
+// What a bind binds, mostly something that can be
+static uint8_t bind_what(void) {
+  static const uint8_t OPS[] = {OVERLAY_BIND_SET, OVERLAY_BIND_ADD, OVERLAY_BIND_MUL, OVERLAY_BIND_FREE};
+  int to = below(6)   ? below(OVERLAY_CHANNELS)
+           : below(2) ? OVERLAY_BIND_FRAME + below(OVERLAY_BIND_TARGETS - OVERLAY_BIND_FRAME + 1)
+                      : OVERLAY_BIND_REG + below(OVERLAY_REGS + 1);
+  return (uint8_t) (to | (to < OVERLAY_CHANNELS || !below(8) ? OPS[below(4)]
+                          : below(6)                         ? OVERLAY_BIND_SET
+                                                             : OVERLAY_BIND_FREE));
+}
+
+// A GLIDE's or DRIFT's channels and values from at on, k of them, mostly ones it takes. Returns where they end.
+static int put_channels(uint8_t *m, int at, int k, bool drift) {
+  for (; k > 0; k--, at += OVERLAY_GLIDE_EACH) {
+    int c = below(drift ? OVERLAY_SIZE : OVERLAY_CHANNELS);
+    m[at] = (uint8_t) (below(30) ? c : (int) rnd());
+    plink_put16(m + at + 1, (uint16_t) (below(3) ? below(scales(c) ? 300 : 400) - (scales(c) ? 0 : 60) : (int) rnd()));
+  }
+  return at;
+}
+
+// What a place takes from the ESP or a SEND but for its script, mostly as it should be: its key, into m. Returns its
+// length.
+static int put_msg(uint16_t *key, uint8_t *m) {
+  static const uint16_t KEYS[] = {K_OVERLAY_AREA, K_OVERLAY_GLIDE, K_OVERLAY_DRIFT, K_OVERLAY_WANDER,
+                                  K_OVERLAY_FACE, K_OVERLAY_VIEW,  K_OVERLAY_BIND,  K_OVERLAY_TINT};
+  static const uint8_t LENS[] = {OVERLAY_AREA_LEN, 0, 0, OVERLAY_WANDER_LEN, OVERLAY_FACE_LEN, OVERLAY_VIEW_LEN, 0,
+                                 OVERLAY_TINT_LEN};
+  int i = below((int) LEN(KEYS)), n = LENS[i];
+  *key = KEYS[i];
+  noise(m, OVERLAY_SEND_MAX);
+  if (*key == K_OVERLAY_GLIDE) {
+    m[OVERLAY_GLIDE_EASE] = (uint8_t) below(below(20) ? 4 : 256);
+    if (below(3))
+      plink_put16(m + OVERLAY_GLIDE_MS, (uint16_t) (below(4) * 100));
+    n = put_channels(m, OVERLAY_GLIDE_HEAD, 1 + below(3), false);
+  } else if (*key == K_OVERLAY_DRIFT) {
+    n = put_channels(m, OVERLAY_DRIFT_HEAD, 1 + below(3), true);
+  } else if (*key == K_OVERLAY_BIND) {
+    m[OVERLAY_BIND_WHAT] = bind_what();
+    n = OVERLAY_BIND_VALUE +
+        ((m[OVERLAY_BIND_WHAT] & OVERLAY_BIND_OP) == OVERLAY_BIND_FREE ? 0 : put_value(m + OVERLAY_BIND_VALUE));
+  } else if (*key == K_OVERLAY_TINT) {
+    m[OVERLAY_TINT_ON] = (uint8_t) below(3);
+  } else if (*key == K_OVERLAY_AREA && below(8)) {
+    plink_put16(m + OVERLAY_AREA_X0, (uint16_t) (below(200) - 20));
+    plink_put16(m + OVERLAY_AREA_Y0, (uint16_t) (below(150) - 20));
+    plink_put16(m + OVERLAY_AREA_X1, (uint16_t) (150 + below(200)));
+    plink_put16(m + OVERLAY_AREA_Y1, (uint16_t) (100 + below(160)));
+    m[OVERLAY_AREA_EDGES] = (uint8_t) below(3);
+    m[OVERLAY_AREA_EDGES + 1] = (uint8_t) below(3);
+  } else if (*key == K_OVERLAY_FACE && below(8)) {
+    m[OVERLAY_FACE_FLAGS] = (uint8_t) below(4);
+    plink_put16(m + OVERLAY_FACE_TILT, (uint16_t) below(181));
+    plink_put16(m + OVERLAY_FACE_RATE, (uint16_t) below(400));
+  }
+  return below(12) ? n : below(OVERLAY_SEND_MAX + 1);
+}
+
 // A script of steps as the panel reads them, mostly good ones, to place p in the messages the ESP would send
 static void send_script(int p) {
-  static const char *const FORMS[OVERLAY_DOS] = {
-      [OVERLAY_DO_SET] = "rv",    [OVERLAY_DO_ADD] = "rv",     [OVERLAY_DO_SUB] = "rv",  [OVERLAY_DO_MUL] = "rv",
-      [OVERLAY_DO_DIV] = "rv",    [OVERLAY_DO_MOD] = "rv",     [OVERLAY_DO_MIN] = "rv",  [OVERLAY_DO_MAX] = "rv",
-      [OVERLAY_DO_ABS] = "rv",    [OVERLAY_DO_RAND] = "rvv",   [OVERLAY_DO_GET] = "rgp", [OVERLAY_DO_DIST] = "rpp",
-      [OVERLAY_DO_ANGLE] = "rpp", [OVERLAY_DO_SIN] = "rvv",    [OVERLAY_DO_COS] = "rvv", [OVERLAY_DO_PICK] = "rvl",
-      [OVERLAY_DO_GOTO] = "a",    [OVERLAY_DO_IF] = "vcva",    [OVERLAY_DO_WAIT] = "v",  [OVERLAY_DO_UNTIL] = "vcva",
-      [OVERLAY_DO_ROUNDS] = "v",  [OVERLAY_DO_CLIP] = "vvmzz", [OVERLAY_DO_FRAME] = "v", [OVERLAY_DO_RATE] = "v",
-      [OVERLAY_DO_MOVE] = "vvve", [OVERLAY_DO_SEND] = "",      [OVERLAY_DO_MARK] = "t",  [OVERLAY_DO_END] = "vt",
-  };
-  static const uint16_t SENDS[] = {K_OVERLAY_GLIDE, K_OVERLAY_DRIFT, K_OVERLAY_FLIP,
-                                   K_OVERLAY_WAVE,  K_OVERLAY_DEPTH, K_OVERLAY_TINT};
-  uint8_t b[OVERLAY_SCRIPT_MAX + 32];
-  uint16_t starts[128], jumps[128];  // where its steps start, and where its GOTOs, IFs and UNTILs say to go on
+  uint8_t b[OVERLAY_SCRIPT_MAX + 136];
+  uint16_t starts[128], jumps[128];  // where its steps start, and where its GOTOs and IFs say to go on
   int n = 0, steps = 0, nj = 0, more = below(4) ? 12 : 100;  // now and then a long one
-  while (n < OVERLAY_SCRIPT_MAX - 30 && steps < (int) LEN(starts) && below(more)) {
+  int regs = below(10) ? OVERLAY_OWN_REGS : below(OVERLAY_OWN_REGS + 2);
+  while (n < OVERLAY_SCRIPT_MAX - 130 && steps < (int) LEN(starts) && below(more)) {
     starts[steps++] = (uint16_t) n;
     int op = below(OVERLAY_DOS);
     b[n++] = (uint8_t) op;
-    if (op == OVERLAY_DO_SEND) {
-      uint16_t key = SENDS[below((int) LEN(SENDS))];
-      uint8_t m[OVERLAY_SEND_MAX];
-      noise(m, (int) sizeof m);
-      m[1] = key == K_OVERLAY_GLIDE   ? 1u << OVERLAY_X | 1u << (below(2) ? OVERLAY_OPACITY : OVERLAY_LIGHT)
-             : key == K_OVERLAY_DRIFT ? 1u << OVERLAY_X | 1u << OVERLAY_TURN
-             : key == K_OVERLAY_FLIP  ? (uint8_t) below(4)
-             : key == K_OVERLAY_WAVE  ? (uint8_t) below(OVERLAY_CHANNELS)
-             : key == K_OVERLAY_TINT  ? (uint8_t) below(3)
-                                      : m[1];
-      int k = key == K_OVERLAY_GLIDE   ? OVERLAY_GLIDE_HEAD + 4
-              : key == K_OVERLAY_DRIFT ? OVERLAY_DRIFT_HEAD + 4
-              : key == K_OVERLAY_FLIP  ? OVERLAY_FLIP_LEN
-              : key == K_OVERLAY_WAVE  ? OVERLAY_WAVE_LEN
-              : key == K_OVERLAY_TINT  ? OVERLAY_TINT_LEN
-                                       : OVERLAY_DEPTH_LEN;
+    if (op == OVERLAY_DO_SEND) {  // to a place, its own mostly
+      uint16_t key;
+      uint8_t m[OVERLAY_SEND_MAX + 48];
+      int k = put_msg(&key, m);
+      b[n++] = (uint8_t) (below(4) ? OVERLAY_SELF : below(OVERLAY_PLACES + 1));
       b[n++] = (uint8_t) (key - K_OVERLAY_FRAMES);
       b[n++] = (uint8_t) k;
       memcpy(b + n, m, (size_t) k);
       n += k;
-      b[n++] = 1;
-      b[n++] = (uint8_t) (2 + below(k - 2));
-      n += put_value(b + n);
+      b[n++] = (uint8_t) below(2);
+      if (b[n - 1]) {
+        b[n++] = (uint8_t) below(k + 1);
+        n += put_value(b + n);
+      }
       continue;
     }
-    for (const char *f = FORMS[op]; *f; f++)
+    if (op == OVERLAY_DO_GLIDE) {  // some channels, now and then none or too many, or no such one
+      int k = below(20) ? 1 + below(3) : below(64);
+      b[n++] = (uint8_t) (k | below(4) << 6);
+      n += put_value(b + n);
+      for (k = LV_MIN(k, 3); k > 0; k--) {
+        b[n++] = (uint8_t) below(OVERLAY_CHANNELS + (below(20) ? 0 : 2));
+        n += put_value(b + n);
+      }
+      continue;
+    }
+    for (const char *f = SCRIPT_FORMS[op]; *f; f++)
       if (*f == 'v')
         n += put_value(b + n);
-      else if (*f == 'l') {  // now and then none, or more than there's room for
-        int k = below(8) ? 1 + below(6) : below(2) * 255;
+      else if (*f == 'b') {
+        b[n++] = bind_what();
+        if ((b[n - 1] & OVERLAY_BIND_OP) != OVERLAY_BIND_FREE || !below(20))
+          n += put_value(b + n);
+      } else if (*f == 's') {  // runs of columns, now and then one too few or a bad one
+        int k = 3 * below(4) + (below(10) ? 0 : 1);
         b[n++] = (uint8_t) k;
-        noise(b + n, 2 * LV_MIN(k, 6));
-        n += 2 * LV_MIN(k, 6);
+        for (int i = 0; i < k; i++) {
+          int v = i % 3 ? below(80) - 10 : below(50) - (below(10) ? 0 : 5);
+          plink_put16(b + n, (uint16_t) (i % 3 == 2 ? v + plink_i16(b + n - 2) : v));
+          n += 2;
+        }
+      } else if (*f == 'f') {  // soft edges, mostly none or a few px, now and then more than a box
+        for (int i = 0; i < 4; i++, n += 2)
+          plink_put16(b + n, (uint16_t) (below(3) ? below(2) * below(30) : (int) (rnd() & 0x7FF)));
       } else if (*f == 'a') {  // filled in below
         jumps[nj++] = (uint16_t) n;
         n += 2;
@@ -546,10 +657,7 @@ static void send_script(int p) {
       } else
         b[n++] = (uint8_t) (*f == 'r'   ? below(OVERLAY_REGS)
                             : *f == 'p' ? (below(4) ? below(OVERLAY_PLACES) : OVERLAY_SELF)
-                            : *f == 'c' ? below(OVERLAY_IF_GT + 1)
-                            : *f == 'g' ? below(OVERLAY_GETS)
                             : *f == 'm' ? below(OVERLAY_CLIP_NEXT + 1)
-                            : *f == 'e' ? below(4)
                                         : below(256));
   }
   for (int i = 0; i < nj; i++) {  // a step, the end, or now and then nowhere
@@ -560,7 +668,8 @@ static void send_script(int p) {
   if (!below(10))
     noise(b + below(n + 1), below(4));
   for (int at = 0; at < n || !at;) {
-    uint8_t m[PBULK_MSG_MAX] = {(uint8_t) p, (uint8_t) at, (uint8_t) (at >> 8), (uint8_t) n, (uint8_t) (n >> 8)};
+    uint8_t m[PBULK_MSG_MAX] = {(uint8_t) p, (uint8_t) at,       (uint8_t) (at >> 8),
+                                (uint8_t) n, (uint8_t) (n >> 8), (uint8_t) (below(40) ? regs : below(10))};
     int k = LV_MIN(n - at, (int) sizeof m - OVERLAY_SCRIPT_BYTES);
     memcpy(m + OVERLAY_SCRIPT_BYTES, b + at, (size_t) k);
     overlay_msg(K_OVERLAY_SCRIPT, m, OVERLAY_SCRIPT_BYTES + k);
@@ -570,48 +679,30 @@ static void send_script(int p) {
   }
 }
 
+// The overlays, sent whole or damaged, placed, moved and bound by messages of every kind and drawn as they go
 static void test_overlays(void) {
   seed();
-  static const struct {
-    uint16_t key;
-    int len;  // 0 for a GLIDE or DRIFT, which have a value for each channel
-  } MSGS[] = {{K_OVERLAY_FRAMES, OVERLAY_FRAMES_LEN},
-              {K_OVERLAY_PLACE, OVERLAY_PLACE_LEN},
-              {K_OVERLAY_AREA, OVERLAY_AREA_LEN},
-              {K_OVERLAY_GLIDE, 0},
-              {K_OVERLAY_DRIFT, 0},
-              {K_OVERLAY_WANDER, OVERLAY_WANDER_LEN},
-              {K_OVERLAY_FACE, OVERLAY_FACE_LEN},
-              {K_OVERLAY_FLIP, OVERLAY_FLIP_LEN},
-              {K_OVERLAY_WAVE, OVERLAY_WAVE_LEN},
-              {K_OVERLAY_MAP, OVERLAY_MAP_LEN},
-              {K_OVERLAY_TINT, OVERLAY_TINT_LEN}};
   lv_obj_t *layer = overlay_show(lv_scr_act());
   for (int round = 0; round < 3000; round++) {
     if (!below(8))
       send_overlay(below(OVERLAY_SLOTS + 1));
     for (int k = below(6); k > 0; k--) {
-      int i = below((int) LEN(MSGS));
-      uint8_t m[32];
-      noise(m, (int) sizeof m);
-      m[OVERLAY_MSG_PLACE] = (uint8_t) below(OVERLAY_PLACES + 1);
-      if (MSGS[i].key == K_OVERLAY_FRAMES)
-        m[OVERLAY_FRAMES_SLOT] = (uint8_t) below(OVERLAY_SLOTS + 1);
-      if (MSGS[i].key == K_OVERLAY_PLACE) {  // most on the screen
+      uint8_t m[OVERLAY_SEND_MAX + 48];
+      uint16_t key;
+      int n;
+      if (below(4)) {
+        n = put_msg(&key, m);
+      } else {  // a slot's rate, or a place, most on the screen
+        noise(m, OVERLAY_PLACE_LEN);
+        key = below(3) ? K_OVERLAY_PLACE : K_OVERLAY_FRAMES;
+        n = key == K_OVERLAY_PLACE ? OVERLAY_PLACE_LEN : OVERLAY_FRAMES_LEN;
         m[OVERLAY_PLACE_SLOT] = (uint8_t) below(OVERLAY_SLOTS + 1);
         plink_put16(m + OVERLAY_PLACE_X, (uint16_t) (below(400) - 40));
         plink_put16(m + OVERLAY_PLACE_Y, (uint16_t) (below(300) - 30));
       }
-      int n = MSGS[i].len;
-      if (!n) {
-        m[1] &= (1u << OVERLAY_CHANNELS) - 1;
-        n = MSGS[i].key == K_OVERLAY_GLIDE ? OVERLAY_GLIDE_HEAD : OVERLAY_DRIFT_HEAD;
-        n += 2 * __builtin_popcount(m[1]);
-      }
-      if (!below(8))
-        n = below((int) sizeof m);
+      m[OVERLAY_MSG_PLACE] = (uint8_t) below((key == K_OVERLAY_FRAMES ? OVERLAY_SLOTS : OVERLAY_PLACES) + 1);
       uint8_t *b = heap(m, n);
-      overlay_msg(MSGS[i].key, b, n);
+      overlay_msg(key, b, n);
       free(b);
     }
     if (!below(10)) {  // a slot, all of them or a place, now or over a while
@@ -645,6 +736,7 @@ static void test_overlays(void) {
   uint8_t all[4];
   plink_put32(all, OVERLAY_ALL);
   pic_msg(K_OVERLAY_CLEAR, all, 4);
+  CHECK_EQ(overlay_used(), 0);
 }
 
 static const check_test_t TESTS[] = {

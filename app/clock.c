@@ -87,7 +87,7 @@ void clock_follow(uint32_t t, uint32_t from) {
 // Summer time is 02:00 last Sunday of March to 03:00 last Sunday of October. Sets the CX60's clock too. Only
 // moves the clock in the hour after a switch, so a stale dst_now can't move it at any other time.
 void clock_second(void) {
-  if (!M.auto_dst || HAS(FEAT_ESP))
+  if (!M.auto_dst || M.esp_online)
     return;
   uint32_t w = clock_to_unix(), spring, autumn;
   dst_bounds(w, &spring, &autumn);

@@ -22,4 +22,4 @@ int link_bulk_frame(const uint8_t *f, int n, uint32_t idle_us, uint32_t now_ms, 
 // for the Bus page
 const pbulk_panel_t *link_bulk_state(void);
 const pbus_panel_t *link_bus_state(void);
-const plink_t *link_queue(void);
+const plink_t *link_queue(void);  // for the sim's tests

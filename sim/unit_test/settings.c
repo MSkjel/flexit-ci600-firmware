@@ -161,6 +161,26 @@ static void test_runtime(void) {
   stub_ms += 6000;
   settings_poll();
   CHECK_EQ(stub_flash_erases, erases + 3);
+  // nothing a start loads is news to save: the counters' low words move on, and no page goes on it
+  stub_ms += 6000;
+  settings_poll();
+  model_defaults();
+  unit_init();
+  settings_load();
+  unit_start();
+  CHECK_EQ(M.h_stop, 18);
+  CHECK_EQ(M.h_total, 109);
+  erases = stub_flash_erases;
+  rt[16] = 6;  // as the CX60 has the total now
+  rt[17] = 9;
+  for (int s = 0; s < 8; s++) {
+    rt[17]++;
+    block(0x14C, rt, 20);
+    unit_poll();
+    stub_ms += 1000;
+    settings_poll();
+  }
+  CHECK_EQ(stub_flash_erases, erases);
 }
 
 // The de-icing settings sit among the counters, 0x158..0x15B, but they're saved like the other settings

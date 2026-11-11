@@ -1,4 +1,5 @@
-// Value editor and action confirm box over a row list (SCR_EDIT), and the box for a setting on trial (SCR_TRIAL).
+// Value editor and action confirm box over a row list (SCR_EDIT), and the box for Processor speed on trial
+// (SCR_TRIAL).
 #include "ui_menu.h"
 #include <string.h>
 
@@ -24,12 +25,15 @@ static struct {
 
 static int opt_rows(void) { return ed.n < OPT_ROWS ? ed.n : OPT_ROWS; }  // options shown
 
-// Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle.
+// Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle. One
+// built again without the option it was on closes, as when the ESP restarts and the item picked for a tile is gone:
+// OK would save another.
 static void offer_options(const mitem_t *it, bool rebuild) {
   int now = opt_used(it, ed.v);
   uint16_t opts[MAX_OPTS];
   int n = 0;
-  if (it->fn && it->fn->list)
+  bool there = false;
+  if (opt_fn(it) && it->fn->list)
     n = it->fn->list(opts);
   else
     for (int o = ed.min; o <= ed.max && n < MAX_OPTS; o++)
@@ -37,10 +41,14 @@ static void offer_options(const mitem_t *it, bool rebuild) {
   ed.n = ed.pos = 0;
   for (int i = 0; i < n; i++)
     if (opt_used(it, opts[i]) == opts[i]) {
-      if (opts[i] == now)
+      if (opts[i] == now) {
         ed.pos = ed.n;
+        there = true;
+      }
       ed.offer[ed.n++] = opts[i];
     }
+  if (rebuild && !there)
+    ui_close_after(0);
   ed.v = ed.offer[ed.pos];
   int rows = opt_rows(), first = rebuild ? ed.first : ed.pos - rows / 2;
   ed.first = (int16_t) (first < 0 ? 0 : first > ed.n - rows ? ed.n - rows : first);
@@ -222,11 +230,10 @@ int ui_backlight_preview(void) {
   return (int) ed.v;  // at night 0 means off, but it previews as 0 %, not with the light off
 }
 
-// ---------------------------------------------------------------- a setting on trial
+// ---------------------------------------------------------------- Processor speed on trial
 // The countdown runs on under other screens, and after HOME closed the box.
 #define TRIAL_MS 20000
 static struct {
-  val_t v;            // on trial, V_NONE if none
   uint32_t end;       // lv_tick_get() when it goes off
   lv_timer_t *timer;  // every second until then
   lv_obj_t *left;     // the time left
@@ -234,21 +241,15 @@ static struct {
 
 static void trial_left(char *buf, size_t n) {
   int32_t ms = (int32_t) (trial.end - lv_tick_get());
-  int s = ms > 0 ? (int) ((ms + 999) / 1000) : 0;
-  if (trial.v == V_CPU_SPEED)
-    sprint(buf, n, _(S_BACK_TO_72_IN), s);
-  else
-    sprint(buf, n, _(S_FAST_OFF_IN), s);
+  sprint(buf, n, _(S_BACK_TO_72_IN), ms > 0 ? (int) ((ms + 999) / 1000) : 0);
 }
 
 static void trial_answer(bool keep) {
-  val_t v = trial.v;
   lv_timer_del(trial.timer);
-  trial.v = V_NONE;
   ui_remove_overlay(&SCR_TRIAL);
   plat_trial_end(keep);
   if (!keep)
-    val_set(v, 0);
+    val_set(V_CPU_SPEED, 0);
   ui_toast(keep ? IC_CHECK : IC_TOGGLE_OFF, keep ? S_SAVED : S_OFF);
 }
 
@@ -260,8 +261,7 @@ static void trial_tick(lv_timer_t *t) {
     ui_refresh();  // the countdown, on the second
 }
 
-void ui_trial(int v) {
-  trial.v = (val_t) v;
+void ui_trial(void) {
   trial.end = lv_tick_get() + TRIAL_MS;
   trial.timer = lv_timer_create(trial_tick, 1000, NULL);
   input_activity();
@@ -270,15 +270,13 @@ void ui_trial(int v) {
 
 static void trial_build(lv_obj_t *b, intptr_t arg) {
   (void) arg;
-  bool cpu = trial.v == V_CPU_SPEED;
   char left[48], title[32];
   trial_left(left, sizeof left);
   sprint(title, sizeof title, _(S_KEEP_MHZ), CPU_MHZ[M.cpu_speed]);  // the speed on trial, see hw/main.c
   int warning_y, h = confirm_height(_(S_KEEP_QUESTION), left, &warning_y);
-  lv_obj_t *card = edit_card(b, h, cpu ? IC_CHIP : IC_MONITOR, cpu ? title : _(S_KEEP_FAST_DISPLAY));
-  trial.left = confirm_texts(card, _(S_KEEP_QUESTION), left, warning_y);
+  trial.left = confirm_texts(edit_card(b, h, IC_CHIP, title), _(S_KEEP_QUESTION), left, warning_y);
   ui_hints(S_NONE, S_KEEP, S_CANCEL, S_HELP);
-  ui_help(cpu ? S_PROCESSOR_SPEED_HELP : S_FAST_DISPLAY_HELP);
+  ui_help(S_PROCESSOR_SPEED_HELP);
 }
 
 static void trial_update(void) {

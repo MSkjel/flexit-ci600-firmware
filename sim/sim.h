@@ -11,7 +11,8 @@ extern "C" {
 // simlib.c
 void sim_display_init(void);                       // lv_init() and a 320x240 display in memory
 void sim_run(int ms);                              // advance LVGL's tick and run its timers, in 5 ms steps
-extern unsigned long sim_px;                       // pixels drawn so far
+extern unsigned long sim_px, sim_sent;             // pixels drawn so far, and those of them sent to the LCD
+extern bool sim_whole;                             // strips go to the LCD without comparing their tiles
 bool sim_shot(const char *dir, const char *name);  // save the screen as DIR/NAME.ppm, false if LVGL's heap ran low
 uint32_t sim_pixel(int x, int y);                  // on the screen as drawn now, 0xRRGGBB
 int sim_stale(void);                               // redraw the whole screen and count the pixels that changed
@@ -30,8 +31,14 @@ int sim_pic_patch(uint8_t *b, uint8_t id, int y, int count, uint32_t len, const 
 int sim_overlay_begin(uint8_t *b, uint8_t id, int slot, int kind, int w, int h, int scale, uint32_t len,
                       const uint32_t *pal, unsigned glows, uint32_t shade);  // pal 0xAARRGGBB, shade 0xRRGGBB
 int sim_overlay_place(uint8_t *b, int place, int slot, int x, int y, int own, int fade);
-int sim_overlay_glide(uint8_t *b, int place, unsigned channels, int ms, int ease, const int *to);  // a value a channel
-int sim_overlay_drift(uint8_t *b, int place, unsigned channels, const int *v);  // px or degrees a second
+// channels: a bit for each, in whose order to and v have a value each
+// A GLIDE or DRIFT of n channels, v a channel and its value for each: a GLIDE's as it takes them, a DRIFT's px or
+// degrees a second
+int sim_overlay_glide(uint8_t *b, int place, int ms, int ease, const int *v, int n);
+int sim_overlay_drift(uint8_t *b, int place, const int *v, int n);
+int sim_overlay_view(uint8_t *b, int place, unsigned mask, unsigned flags);  // OVERLAY_VIEW_*
+// what: an OVERLAY_BIND_* op | what it binds, to the n bytes of value
+int sim_overlay_bind(uint8_t *b, int place, unsigned what, const uint8_t *value, int n);
 
 // ppm.c, doesn't need LVGL
 void sim_ppm(const char *path, int w, int h, const uint32_t *rgb);  // pixels are 0xRRGGBB, exits on error
@@ -42,7 +49,8 @@ extern int sim_trial_answer;  // plat_trial_end()'s keep, -1 until the next one
 // sim_model.c
 struct item;
 void sim_model_init(void);
-extern bool sim_fresh;  // plat_fresh(), the panel started without settings
+extern bool sim_fresh;      // plat_fresh(), the panel started without settings
+extern bool sim_slow_unit;  // a new speed doesn't run until the test says so, see sim_model.c
 // An item of the fake ESP. Texts are "English|Norsk". The first SIM_N_COMFORT are on the panel from the start.
 typedef struct {
   const char *name;

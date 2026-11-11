@@ -5,6 +5,7 @@
 #include <string.h>
 
 uint32_t stub_ms, stub_rtc;
+uint16_t stub_room_adc = 1990;                          // 26.4 C
 uint8_t stub_flash[FLASH_SETTINGS_PAGES * FLASH_PAGE];  // the settings pages
 int stub_flash_writes_left = -1;                        // power fails after this many more writes, -1 = never
 int stub_flash_erases;
@@ -24,7 +25,7 @@ void board_leds(bool alarm, bool filter, bool ok) {
   (void) ok;
 }
 void board_backlight(int pct) { (void) pct; }
-uint16_t board_room_adc(void) { return 1990; }
+uint16_t board_room_adc(void) { return stub_room_adc; }
 uint32_t board_rtc_get(void) { return stub_rtc; }
 void board_rtc_set(uint32_t t) { stub_rtc = t; }
 void board_rtc_poll(void) {}

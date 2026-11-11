@@ -1,7 +1,8 @@
 // Screensaver overlays from the ESP (K_OVERLAY_BEGIN), drawn over the picture. RAM only. A slot holds an overlay, a
 // place shows one somewhere on the screen. An animated one's records are the deflated rectangles that changed since
 // the last frame, so we only redraw those, and the places of a slot show the same frame unless one has a frame of its
-// own. A still one is kept packed in pieces, unpacked as they're drawn.
+// own. A still one is kept packed in pieces, unpacked as they're drawn. A field has neither, what it shows is worked
+// out as it's drawn.
 #pragma once
 #include "lvgl.h"
 #include <stdbool.h>
@@ -15,7 +16,7 @@ bool overlay_close(void);                                       // all bytes are
 void overlay_abort(void);                                       // the transfer failed, drop the slot
 bool overlay_clear(const uint8_t *b, int n);                    // K_OVERLAY_CLEAR. true if it dropped the one coming in
 void overlay_clear_all(void);
-void overlay_msg(uint16_t key, const uint8_t *b, int n);  // K_OVERLAY_FRAMES to K_OVERLAY_TINT
+void overlay_msg(uint16_t key, const uint8_t *b, int n);  // K_OVERLAY_FRAMES to K_OVERLAY_SCRIPT
 void overlay_part(const uint8_t *b, int n);               // K_PIC_PART
 void overlay_parts_clear(void);                           // the picture went, and its parts with it
 int32_t overlay_gone(void);                               // the next K_OVERLAY_GONE to send, -1 for none
@@ -27,12 +28,15 @@ lv_obj_t *overlay_show(lv_obj_t *parent);
 // A place as it is now, for the tests
 typedef struct {
   int16_t x, y;             // where it is
+  int16_t pan[2], w, h;     // where its frame is in its box, and the box, px at full size
   int16_t deg, size, opa;   // its turn, and size and opacity in 1/1000
+  int16_t size_xy[2];       // size_x and size_y, in 1/1000
   int16_t light;            // in 1/1000
-  uint8_t flip;             // OVERLAY_FLIP_*
+  uint16_t pivot[2];        // in 1/1000 of its box
+  uint8_t view;             // OVERLAY_VIEW_*
   uint8_t tiles;            // bit 0 drawn, then over the right edge, the bottom one, and both
   uint8_t order;            // drawn after order others
-  uint8_t depth;            // K_OVERLAY_DEPTH's
+  uint8_t depth;            // its OVERLAY_DEPTH
   lv_area_t box;            // what it's drawn in, from the top left of overlay_show()'s object
   bool still;               // OVERLAY_STILL
   lv_color_t pal[16];       // its colours as it shows them
