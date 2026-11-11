@@ -232,10 +232,11 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
 
 - **`.fxup`:** `tools/mkupdate.py hw/build/ci600.bin ci600.fxup`. It needs the bootloader's key, which isn't in
   this repo. Give it a stock flash dump with `--stock`, or set `CI600_FXUP_KEY` (64 hex digits). CI has it as a
-  secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`. The newest `vX.Y.Z`
-  tag is the version the panel reports, 0.0.0 without one. A build from a later commit gets the next patch level,
-  so the ESP can tell it from the release. The next release has that number too, so after flashing such a build,
-  turn Panel Firmware Force on to get that release.
+  secret, and pushing a tag like `v1.2.3` makes a release with `ci600.fxup` and `ci600.bin`, a pre-release when
+  the tag is on dev, for the ESP's Panel Firmware Pre-releases. The newest `vX.Y.Z` tag is the version the panel
+  reports, 0.0.0 without one. A build from a later commit gets the next patch level, so the ESP can tell it from
+  the release. The next release has that number too, so after flashing such a build, turn Panel Firmware Force
+  on to get that release.
 - **SWD:** see [docs/hardware.md](docs/hardware.md#swd).
 - **Where the time goes:** `make -C hw PROF=1` builds `hw/build/prof/ci600.bin`, which looks about 1000 times a
   second at the function the processor is in, and every 10 s logs the 24 busiest in the ESP's log, like

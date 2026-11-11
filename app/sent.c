@@ -31,6 +31,7 @@ static uint32_t bits(unsigned n) { return n < 32 ? (1u << n) - 1 : ~0u; }
 static uint32_t sum(const lv_color_t *px, unsigned pitch) {
   uint32_t h = 0;
   for (int y = 0; y < SENT_TILE_H; y++, px += pitch)
+#pragma GCC unroll 8  // a tile row's 8 pairs without a loop
     for (int x = 0; x < SENT_TILE_W; x += 2) {
       uint32_t k;
       memcpy(&k, px + x, sizeof k);

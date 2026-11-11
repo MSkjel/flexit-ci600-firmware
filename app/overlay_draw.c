@@ -30,7 +30,9 @@ static int pivot2(const place_t *p, int axis) {
   return (2 * shown(p, axis) * p->now.pivot[axis] + OVERLAY_PIVOT_MAX / 2) / OVERLAY_PIVOT_MAX;
 }
 static int64_t ceil_div(int64_t a, int64_t b) { return a >= 0 ? (a + b - 1) / b : -(-a / b); }  // b > 0
-static int32_t fixed(int px) { return px * 65536; }                                             // to 1/65536 px
+// a * m / d for d > 0, without the 64-bit division when m is d: a place at its own size, or all of a share
+static int64_t muldiv(int64_t a, int32_t m, int32_t d) { return m == d ? a : a * m / d; }
+static int32_t fixed(int px) { return px * 65536; }  // to 1/65536 px
 
 // The box it's drawn in, from x, y: the px whose middles are in its box at its sizes, flipped and turned
 // round its pivot, and with OVERLAY_VIEW_SMOOTH the ones next to them, which get some of it
@@ -39,8 +41,8 @@ lv_area_t box(const place_t *p) {
   for (int a = 0; a < 2; a++) {
     int f = shown(p, a), z = zoomed(&p->now, a), p2 = pivot2(p, a);
     int before = flipped(&p->now, a) ? 2 * f - p2 : p2;  // half px of it before the pivot
-    lo[a] = f ? -(int64_t) before * 32768 * z / f : 0;
-    hi[a] = f ? (int64_t) (2 * f - before) * 32768 * z / f : 0;
+    lo[a] = f ? muldiv(-(int64_t) before * 32768, z, f) : 0;
+    hi[a] = f ? muldiv((int64_t) (2 * f - before) * 32768, z, f) : 0;
     c[a] = (int64_t) p2 * 32768;
   }
   if (p->now.deg) {  // the box round its turned corners
@@ -286,11 +288,12 @@ bool overlay_look(int place, overlay_look_t *l) {
 
 // ---------------------------------------------------------------- the pixels
 
-// A profiling build keeps the parts of fragment() as functions of their own, so its report tells them apart
+// A profiling build keeps the parts of fragment() as functions of their own, so its report tells them apart.
+// Others always have them in it, which GCC wouldn't do for shaded() on its own.
 #ifdef PROF
 #define APART __attribute__((noinline))
 #else
-#define APART
+#define APART __attribute__((always_inline)) inline
 #endif
 
 // a / b for a >= 0 and b > 0, a shift when b is a px in 1/65536, as it is for a place at its own size
@@ -452,6 +455,29 @@ typedef struct {
 
 static int slow(int f) { return f * f * (3 * 256 - 2 * f) >> 16; }  // 0..256 of the way, slow at both ends
 
+// A NOISE field at x, y, in 1/256 px from where it starts: each layer between the bumps of its squares,
+// half as much of each as of the one before. On its own, so what it works out with isn't on fragment()'s stack.
+__attribute__((noinline)) static int noise_at(field_t *f, int32_t x, int32_t y) {
+  int sum = 0;
+  for (int k = 0; k < f->a; k++) {
+    int32_t side = LV_MAX((f->b << 8) >> k, 256), xi = floor_div(x, side), yi = floor_div(y, side);
+    if (xi != f->in[k].x || yi != f->in[k].y) {
+      f->in[k].x = xi;
+      f->in[k].y = yi;
+      for (int c = 0, round = f->cells << k; c < 4; c++)
+        f->in[k].at[c] =
+            (uint8_t) (hash32((f->seed + (uint32_t) k) ^ ((uint32_t) wrap(xi + (c & 1), round) * 0x9E3779B1u) ^
+                              ((uint32_t) wrap(yi + (c >> 1), round) * 0x85EBCA77u)) >>
+                       24);
+    }
+    const uint8_t *at = f->in[k].at;
+    int fx = slow((x - xi * side) * 256 / side), fy = slow((y - yi * side) * 256 / side);
+    int top = at[0] + ((at[1] - at[0]) * fx >> 8), bottom = at[2] + ((at[3] - at[2]) * fx >> 8);
+    sum += (top + ((bottom - top) * fy >> 8)) >> (k + 1);
+  }
+  return sum * 256 / (256 - (256 >> f->a));
+}
+
 // How much of a field there is at u, v of its box, in 1/65536 px, 0..255
 static int field_at(field_t *f, int32_t u, int32_t v) {
   int32_t s = u / f->w, t = v / f->h;  // 0..65535 across and down
@@ -470,25 +496,7 @@ static int field_at(field_t *f, int32_t u, int32_t v) {
       return off >= wide ? 0 : 255 - off * 255 / wide;
     }
   }
-  int sum = 0;  // NOISE: each layer between the bumps of its squares, half as much of each as of the one before
-  int32_t x = (u >> 8) - f->pan[0], y = (v >> 8) - f->pan[1];
-  for (int k = 0; k < f->a; k++) {
-    int32_t side = LV_MAX((f->b << 8) >> k, 256), xi = floor_div(x, side), yi = floor_div(y, side);
-    if (xi != f->in[k].x || yi != f->in[k].y) {
-      f->in[k].x = xi;
-      f->in[k].y = yi;
-      for (int c = 0, round = f->cells << k; c < 4; c++)
-        f->in[k].at[c] =
-            (uint8_t) (hash32((f->seed + (uint32_t) k) ^ ((uint32_t) wrap(xi + (c & 1), round) * 0x9E3779B1u) ^
-                              ((uint32_t) wrap(yi + (c >> 1), round) * 0x85EBCA77u)) >>
-                       24);
-    }
-    const uint8_t *at = f->in[k].at;
-    int fx = slow((x - xi * side) * 256 / side), fy = slow((y - yi * side) * 256 / side);
-    int top = at[0] + ((at[1] - at[0]) * fx >> 8), bottom = at[2] + ((at[3] - at[2]) * fx >> 8);
-    sum += (top + ((bottom - top) * fy >> 8)) >> (k + 1);
-  }
-  return sum * 256 / (256 - (256 >> f->a));
+  return noise_at(f, (u >> 8) - f->pan[0], (v >> 8) - f->pan[1]);
 }
 
 // The colour k of 255 along a field's 16 is, at its level and with its phase, and in *a how opaque
@@ -666,10 +674,11 @@ typedef struct {
 // On its own: what it works them out with is off the stack again before the pixels
 __attribute__((noinline)) static void brush(brush_t *b, const place_t *p, const lv_area_t *a, const lv_area_t *c) {
   const slot_t *s = &slots[p->slot];
-  lv_area_t at = box(p);  // a from the box's top left at full size
+  // a from the box's top left at full size: the box refresh() drew it in, where update() put it
+  int ax = p->drawn.x1 - p->x, ay = p->drawn.y1 - p->y;
   *b = (brush_t) {.c = *c,
                   .sh = s->field ? 16 : 15 + s->scale,
-                  .oy = a->y1 - at.y1,
+                  .oy = a->y1 - ay,
                   .zh = zoomed(&p->now, 1),
                   .pv = {pivot2(p, 0), pivot2(p, 1)},
                   .fw = shown(p, 0),
@@ -678,14 +687,14 @@ __attribute__((noinline)) static void brush(brush_t *b, const place_t *p, const 
                   .fx = flipped(&p->now, 0),
                   .fy = flipped(&p->now, 1),
                   .turned = p->now.deg != 0};
-  b->dx = (int64_t) (2 * (c->x1 - a->x1 + at.x1) + 1 - b->pv[0]) * 32768 - b->sub[0];
+  b->dx = (int64_t) (2 * (c->x1 - a->x1 + ax) + 1 - b->pv[0]) * 32768 - b->sub[0];
   int zw = zoomed(&p->now, 0);
   if (!b->turned) {
     b->qy = (b->fh << 15) / b->zh;
     b->ry = (b->fh << 15) % b->zh;
-    b->sv = (int32_t) ((int64_t) b->sub[1] * b->fh / b->zh);
+    b->sv = (int32_t) muldiv(b->sub[1], b->fh, b->zh);
     b->du = (65536 * b->fw) / zw;
-    b->u = (int32_t) (b->dx * b->fw / zw);
+    b->u = (int32_t) muldiv(b->dx, b->fw, zw);
     if (b->fx) {
       b->u = -b->u;
       b->du = -b->du;
@@ -764,7 +773,7 @@ typedef struct {
 
 // How opaque p is of 255, with a row's share of it
 static int opacity(const place_t *p, int32_t share) {
-  return LV_MIN(to255((int) ((int64_t) p->now.opa * share / FULL)), 255);
+  return LV_MIN(to255((int) muldiv(p->now.opa, share, FULL)), 255);
 }
 
 // Rectangle r of the frame at f, rb bytes a row: what the box shows of it where d's brush puts it. The frame's top
@@ -797,15 +806,24 @@ __attribute__((optimize("O3"))) static void fragment(const paint_t *d, const uin
                                    (tiled || above ? SIDE_TOP : 0) | (tiled || below ? SIDE_BOTTOM : 0)),
                 .tw = (int16_t) lv_area_get_width(r),
                 .th = (int16_t) lv_area_get_height(r)};
-  for (int y = b->c.y1; y <= b->c.y2; y++, row += stride) {
+  // a row's v is v0 + bv, or v0 - bv down: where it is down r instead of the box
+  int32_t v0 = (down ? ((int32_t) s->h << sh) - 1 + ov : -ov) - (r->y1 << sh);
+  for (int y = b->c.y1, ye; y <= b->c.y2; y = ye + 1) {
     int32_t bu, bv, du = b->du;
     back(b, y, &bu, &bv);
-    int32_t along_it = bu, v = bv - ov;  // along_it: where the row's first pixel is along its frames
-    if (down)
-      v = ((int32_t) s->h << sh) - 1 - v;
-    v -= r->y1 << sh;
-    if (!b->turned && (v + half < 0 || v + half >= h + 2 * half))
-      continue;  // upright the whole row is past it
+    int32_t along_it = bu, v = down ? v0 - bv : v0 + bv;  // along_it: where the row's first pixel is along its frames
+    ye = y;
+    if (!b->turned) {
+      if (v + half < 0 || v + half >= h + 2 * half)
+        continue;  // upright the whole row is past it
+      // and the rows after it in r go back to the same columns, unless they're bound: those are worked out once
+      for (int32_t nu, nv; !at && ye < b->c.y2; ye++) {
+        back(b, ye + 1, &nu, &nv);
+        nv = down ? v0 - nv : v0 + nv;
+        if (nv + half < 0 || nv + half >= h + 2 * half)
+          break;
+      }
+    }
     if (at) {
       along_it = pivot + (int32_t) (((int64_t) bu - pivot - (int64_t) at->shift * 65536 / MILLI) * FULL / at->size);
       du = (int32_t) ((int64_t) du * FULL / at->size);
@@ -825,10 +843,8 @@ __attribute__((optimize("O3"))) static void fragment(const paint_t *d, const uin
       int bottom = run ? LV_CLAMP(top, plink_i16(run + 4), OVERLAY_BOX_MAX) : shown(p, 1);
       int e0 = i0, e1 = i1;
       span(bu - fixed(left), b->du, fixed(x - left), &e0, &e1);
-      span(bv - fixed(top), b->dv, fixed(bottom - top), &e0, &e1);
       if (e0 > e1)
         continue;
-      sd.soft = b->dv ? d->soft : soft_by(d->soft, bv, top, bottom);
       sd.top = top;
       sd.bottom = bottom;
       // the repeats those pixels are in, and with smooth the ones next to them too, which they get some of
@@ -845,26 +861,35 @@ __attribute__((optimize("O3"))) static void fragment(const paint_t *d, const uin
           dt = -dt;
         }
         u -= r->x1 << sh;
-        int s0 = e0, s1 = e1;
-        span(u + half, dt, w + 2 * half, &s0, &s1);
-        if (s0 > s1)
-          continue;
-        const uint32_t *cv = d->over ? covered(d->over, y, b->c.x1 + s0, s1 - s0 + 1, cover) : NULL;
-        const lv_color_t *pal = d->pal;
-        const lv_opa_t *opa = d->opa;
-        uint16_t clear = d->clear;
-        if (d->shades) {
-          sd.bu = bu + s0 * b->du;
-          sd.bv = bv + s0 * b->dv;
-          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, opa, clear, &sd);
-        } else if (dv && opa) {
-          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, opa, clear, NULL);
-        } else if (dv) {
-          runs(row, s0, s1, cv, f, rb, u, v, dt, dv, sh, pal, NULL, clear, NULL);
-        } else if (opa) {  // one row of f, the one v is in
-          runs(row, s0, s1, cv, f + (v >> sh) * rb, 0, u, 0, dt, 0, sh, pal, opa, clear, NULL);
-        } else {
-          runs(row, s0, s1, cv, f + (v >> sh) * rb, 0, u, 0, dt, 0, sh, pal, NULL, clear, NULL);
+        int c0 = e0, c1 = e1;
+        span(u + half, dt, w + 2 * half, &c0, &c1);
+        for (int k = y; k <= ye && c0 <= c1; k++) {  // each row, those of its pixels in the run's rows
+          int32_t ku, kv;
+          back(b, k, &ku, &kv);
+          int s0 = c0, s1 = c1;
+          span(kv - fixed(top), b->dv, fixed(bottom - top), &s0, &s1);
+          if (s0 > s1)
+            continue;
+          int32_t vk = down ? v0 - kv : v0 + kv;
+          lv_color_t *out = row + (k - b->c.y1) * stride;
+          const uint32_t *cv = d->over ? covered(d->over, k, b->c.x1 + s0, s1 - s0 + 1, cover) : NULL;
+          const lv_color_t *pal = d->pal;
+          const lv_opa_t *opa = d->opa;
+          uint16_t clear = d->clear;
+          if (d->shades) {
+            sd.soft = b->dv ? d->soft : soft_by(d->soft, kv, top, bottom);
+            sd.bu = bu + s0 * b->du;
+            sd.bv = kv + s0 * b->dv;
+            runs(out, s0, s1, cv, f, rb, u, vk, dt, dv, sh, pal, opa, clear, &sd);
+          } else if (dv && opa) {
+            runs(out, s0, s1, cv, f, rb, u, vk, dt, dv, sh, pal, opa, clear, NULL);
+          } else if (dv) {
+            runs(out, s0, s1, cv, f, rb, u, vk, dt, dv, sh, pal, NULL, clear, NULL);
+          } else if (opa) {  // one row of f, the one v is in
+            runs(out, s0, s1, cv, f + (vk >> sh) * rb, 0, u, 0, dt, 0, sh, pal, opa, clear, NULL);
+          } else {
+            runs(out, s0, s1, cv, f + (vk >> sh) * rb, 0, u, 0, dt, 0, sh, pal, NULL, clear, NULL);
+          }
         }
       }
     }
@@ -1013,8 +1038,8 @@ static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint
   bool rows = p->rows && !b.turned;  // upright only
   d.shades = d.blend != OVERLAY_BLEND_MIX || d.soft || s->field || v & OVERLAY_VIEW_SMOOTH;
   bool plain = !d.shades && !rows;  // every colour drawn as it is, or not at all
-  for (int i = 0; i < 16; i++)
-    plain &= opa[i] == LV_OPA_TRANSP || opa[i] > LV_OPA_MAX;
+  for (int i = 0; plain && i < 16; i++)
+    plain = opa[i] == LV_OPA_TRANSP || opa[i] > LV_OPA_MAX;
   if (plain)
     d.opa = NULL;
   d.mirror = v & OVERLAY_VIEW_MIRROR ? (v & OVERLAY_VIEW_REPEAT_X ? 1 : 0) | (v & OVERLAY_VIEW_REPEAT_Y ? 2 : 0) : 0;
@@ -1024,8 +1049,15 @@ static void paint(const place_t *p, lv_draw_ctx_t *ctx, const lv_area_t *a, uint
     tiles(&d, piece);
 }
 
-// Draws every place where it is, the nearest last
-static void layer_event(lv_event_t *e) {
+// Draws every place where it is, the nearest last. A class of its own, see pic_event().
+static void layer_event(const lv_obj_class_t *c, lv_event_t *e);
+static const lv_obj_class_t layer_class = {
+    .base_class = &lv_obj_class, .event_cb = layer_event, .instance_size = sizeof(lv_obj_t)};
+
+static void layer_event(const lv_obj_class_t *c, lv_event_t *e) {
+  (void) c;
+  if (lv_obj_event_base(&layer_class, e) != LV_RES_OK)
+    return;
   if (lv_event_get_code(e) == LV_EVENT_DELETE) {
     layer = NULL;
     for (int k = 0; k < OVERLAY_PLACES; k++)
@@ -1034,11 +1066,10 @@ static void layer_event(lv_event_t *e) {
     uint8_t *piece = NULL;
     for (int i = 0; i < OVERLAY_PLACES; i++) {
       const place_t *p = &places[z[i]];
-      for (int k = 0; k < 4; k++)
-        if (p->tiles >> k & 1) {
-          lv_area_t a = tile(&p->drawn, k);
-          paint(p, lv_event_get_draw_ctx(e), &a, &piece);
-        }
+      for (unsigned t = p->tiles; t; t &= t - 1) {
+        lv_area_t a = tile(&p->drawn, __builtin_ctz(t));
+        paint(p, lv_event_get_draw_ctx(e), &a, &piece);
+      }
     }
     lv_mem_free(piece);
   }
@@ -1047,11 +1078,11 @@ static void layer_event(lv_event_t *e) {
 lv_obj_t *overlay_show(lv_obj_t *parent) {
   if (layer)
     lv_obj_del(layer);
-  layer = lv_obj_create(parent);
+  layer = lv_obj_class_create_obj(&layer_class, parent);
+  lv_obj_class_init_obj(layer);
   lv_obj_remove_style_all(layer);
   lv_obj_set_size(layer, PIC_MAX_W, PIC_MAX_H);
   lv_obj_clear_flag(layer, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(layer, layer_event, LV_EVENT_ALL, NULL);
   lv_obj_update_layout(layer);
   bool moves = false;
   for (int k = 0; k < OVERLAY_PLACES; k++)

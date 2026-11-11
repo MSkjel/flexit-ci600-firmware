@@ -32,10 +32,12 @@ know about, but I doubt it. If something's off, open an issue.
 5. Restart the ventilation unit (power off and on).
 6. From stock, do the [first setup](../README.md#first-setup).
 
-The ESP fetches the latest release by itself. To flash another file, put its URL in Panel Firmware URL, like
+The ESP fetches the latest release by itself, and with Panel Firmware Pre-releases on the newest pre-release
+too, which are made from dev. To flash another file, put its URL in Panel Firmware URL, like
 `http://homeassistant.local:8123/local/ci600.fxup` for a file in `/config/www`, or run
 `python3 tools/fxserve.py ci600.fxup` and use the URL it prints. When the ESP restarts the box goes back to
-update.yaml's `url` var, which is the latest release unless you set it.
+update.yaml's `url` var, which is the latest release unless you set it. Panel Firmware URL, Force and Pre-releases
+start off disabled in Home Assistant, turn them on among the device's entities first.
 
 Before anything is flashed the ESP asks the panel what it runs. It flashes a stock panel on 7.x, and this
 firmware if the file is another version. Anything else gets refused, and Panel Firmware Update says why. Panel

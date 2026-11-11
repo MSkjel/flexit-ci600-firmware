@@ -80,6 +80,15 @@ int32_t ch_at(const place_t *p, int c) {
   return base(p, c) - (m && m->ms ? to_go(m) : 0);
 }
 
+// ch_at() of all its channels into v, with one look through the moves. A channel has one at most.
+static void chs_at(const place_t *p, int32_t *v) {
+  for (int c = 0; c <= FADE; c++)
+    v[c] = base(p, c);
+  for (int i = 0; i < MOVES; i++)
+    if (moves[i].place == p - places && moves[i].ms)
+      v[moves[i].ch] -= to_go(&moves[i]);
+}
+
 void ch_set(place_t *p, int c, int32_t v) {
   move_t *m = move_of(p, c);
   if (m)
@@ -226,8 +235,7 @@ static lv_area_t show(place_t *p, const int32_t *at) {
 void update(place_t *p) {
   look_t was = p->now;
   int32_t v[FADE + 1];
-  for (int c = 0; c <= FADE; c++)
-    v[c] = ch_at(p, c);
+  chs_at(p, v);
   if (p->bound)
     script_bound(p, v, OVERLAY_X, OVERLAY_Y);
   lv_area_t b = show(p, v);
