@@ -16,10 +16,15 @@ static int16_t convert(uint16_t raw) {
   return (int16_t) (TABLE[i] + (TABLE[i + 1] - TABLE[i]) * (int) f / 128);
 }
 
+static int16_t eighth(int32_t v) { return (int16_t) ((v < 0 ? v - 4 : v + 4) / 8); }  // to the nearest
+
 void room_second(void) {
-  // smoothed, the thermistor is slow anyway and the ADC a bit noisy
+  // Smoothed, the thermistor is slow anyway and the ADC a bit noisy: an eighth of the way each second. Kept at 8
+  // times the temperature, so it gets all the way there. In whole tenths it stopped 0.4 short of it.
+  static int32_t smooth;
   int16_t t = (int16_t) (convert(board_room_adc()) + M.room_offset);
-  M.t_room = M.t_room == T_NONE ? t : (int16_t) ((M.t_room * 7 + t + 4) / 8);
+  smooth = M.t_room == T_NONE ? t * 8 : smooth + t - eighth(smooth);
+  M.t_room = eighth(smooth);
 }
 
 void room_offset_changed(void) { M.t_room = T_NONE; }  // start over with the new offset instead of smoothing toward it

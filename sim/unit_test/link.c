@@ -360,9 +360,36 @@ static void test_link_trial(void) {
   val_trial(V_NONE);
 }
 
+// A picture's parts go with it, also when another one's BEGIN comes while it was still coming in
+static void test_link_parts(void) {
+  link_up();
+  no_overlays();
+  dot_frames(false);
+  uint8_t d[512], g[OVERLAY_GLIDE_HEAD + OVERLAY_GLIDE_EACH], h[PIC_BEGIN_HEAD + PIC_PAL_LEN];
+  uint32_t n = overlay_records(d, 5);
+  CHECK_EQ(status(overlay_send(0, AW, n, d, plink_crc32(0, d, n))), PIC_DONE);
+  place(0, 0, 10, 10, 0, 0);
+  overlay_msg(K_OVERLAY_GLIDE, g, sim_overlay_glide(g, 0, 0, 0, EACH(OVERLAY_DEPTH, 10)));
+  show_overlays();
+  uint8_t part[PIC_PART_LEN] = {0};
+  plink_put16(part + PIC_PART_X1, 100);
+  plink_put16(part + PIC_PART_Y1, 100);
+  plink_put16(part + PIC_PART_COLOURS, PIC_ALL_COLOURS);
+  part[PIC_PART_DEPTH] = 200;
+  from_esp(K_PIC_BEGIN, h, plink_pic_begin(h, 1, PIC_PALETTE, 320, 240, 4000, palette()), true);
+  from_esp(K_PIC_PART, part, sizeof part, true);
+  CHECK(pic_state() == PIC_RECEIVING && overlay_covered(0, 12, 12));
+  from_esp(K_PIC_BEGIN, h, plink_pic_begin(h, 2, PIC_PALETTE, 320, 240, 4000, palette()), true);
+  CHECK(pic_state() == PIC_RECEIVING && !overlay_covered(0, 12, 12));
+  from_esp(K_PIC_CLEAR, part, 4, true);
+  lv_obj_clean(lv_scr_act());
+  overlay_clear_msg(OVERLAY_ALL);
+}
+
 const check_test_t LINK_TESTS[] = {
     {"link", test_link},
     {"link_picture", test_link_picture},
+    {"link_parts", test_link_parts},
     {"link_trial", test_link_trial},
     {0},
 };

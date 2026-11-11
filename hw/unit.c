@@ -418,7 +418,14 @@ static bool save_soon(uint16_t r) {
 // The CX60 only notices a new one after its next restart
 static void use_bus_addr(void) { MB.addr = M.bus_addr; }
 
-void unit_start(void) { use_bus_addr(); }  // the saved address, now that the settings are loaded
+// The saved address, now that the settings are loaded, and the registers that came with them into the model. None
+// of those is news to save: a counter's high word among them would cost each start a page of flash.
+void unit_start(void) {
+  use_bus_addr();
+  uint16_t r;
+  while (mb_take_changed(&r))
+    reg_changed(r);
+}
 
 void unit_poll(void) {
   uint16_t r;

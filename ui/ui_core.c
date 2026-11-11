@@ -242,10 +242,6 @@ void ui_rebuild(void) {
   apply_theme();  // the bars keep their objects and follow through the shared styles, but for the hint bar's line
   lv_obj_set_style_border_color(hintbar, T.line, 0);
   memset(shown_hints, 0xFF, sizeof shown_hints);  // force a redraw
-  if (toast) {                                    // it isn't an overlay, so it would keep the old colours
-    lv_obj_del(toast);
-    toast = NULL;
-  }
   rebuild_visible();
 }
 
@@ -410,11 +406,16 @@ void ui_wake(void) {
     ui_pop();
 }
 
-void ui_idle(void) {
-  bool unread = false;  // an open message, alarm pop-up or trial, going home would drop it
+// An open message, alarm pop-up or trial: going home would drop it
+static bool unread(void) {
   for (int i = 0; i < depth; i++)
-    unread |= stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP || stack[i].s == &SCR_TRIAL;
-  if (M.go_home && !unread)  // Display > Home screen > Back to start view
+    if (stack[i].s == &SCR_NOTE || stack[i].s == &SCR_ALARM_POPUP || stack[i].s == &SCR_TRIAL)
+      return true;
+  return false;
+}
+
+void ui_idle(void) {
+  if (M.go_home && !unread())  // Display > Home screen > Back to start view
     ui_show_view(M.home_view);
   if (M.screensaver)
     ui_push(&SCR_SAVER, 0);
@@ -473,7 +474,7 @@ void ui_second(void) {
     M.note_new = false;
     ui_remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
     input_activity();
-    ui_push(&SCR_NOTE, 0);
+    ui_push(&SCR_NOTE, M.hh * 60 + M.mi);
   }
   ui_refresh();
 }
@@ -510,9 +511,13 @@ void ui_alarms_changed(void) {
       rebuild_due = true;
 }
 
+// With something unread open the view only changes under it
 void ui_show_view(int view) {
   stack[0] = (frame_t) {.s = &SCR_HOME, .arg = view};
-  ui_go_home();
+  if (unread())
+    rebuild_due = true;
+  else
+    ui_go_home();
 }
 
 // IC_* glyph for each ESP link icon id

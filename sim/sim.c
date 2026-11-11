@@ -906,6 +906,19 @@ static void check_messages(void) {
   note("Front door left open");
   check(shows(lv_layer_top(), "Front door left open") && !shows(lv_layer_top(), "Washing machine done"),
         "the second message isn't shown");
+  char came[48], hm[12];  // when it came, also once the screen is built again later
+  uint8_t hh = M.hh;
+  snprintf(came, sizeof came, tr(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, M.hh * 60 + M.mi));
+  M.hh = (uint8_t) ((M.hh + 3) % 24);
+  ui_layout_changed();
+  run(30);
+  check(shows(lv_layer_top(), came), "the message says another time than it came at");
+  M.hh = hh;
+  ui_show_view(VIEW_COUNT - 1);  // the ESP asks for another view: the message is still there to read, over it
+  run(30);
+  check(ui_top() == &SCR_NOTE && shows(lv_layer_top(), "Front door left open"), "another view closed the message");
+  ui_show_view(M.home_view);
+  run(30);
   key(KEY_OK);
   check(ui_top() == &SCR_HOME, "one OK didn't close the message");
   note("Washing machine done");
@@ -942,6 +955,8 @@ static void check_rebuild(void) {
   check(!strcmp(ui_selected(), tr(THEME_NAMES[1])), "a rebuild reset the editor");
   key(KEY_OK);
   check(M.theme == 1, "OK after a rebuild saved the old value");
+  run(30);  // the theme is a layout value: what it shows is built again, and Saved is still said
+  check(lv_obj_get_child_cnt(lv_layer_top()) == 1, "the toast went when the screen was built again");
 }
 
 // The alarm list and the alarm pop-up as alarms come and go

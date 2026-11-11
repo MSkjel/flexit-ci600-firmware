@@ -118,8 +118,9 @@ void panel_leds(bool out[N_LIGHTS], uint32_t ms) {
   bool ok = !other && !filter && (M.led_ok == LED_OK_ALWAYS || (M.led_ok == LED_OK_NOT_NIGHT && !night_active()));
   bool want[N_LIGHTS] = {
       [LIGHT_ALARM] = other && M.led_alarm, [LIGHT_FILTER] = filter && M.led_filter, [LIGHT_OK] = ok};
+  uint16_t leds = M.esp_online ? M.leds : 0;  // the ESP's LED_*, while it's there to change its mind
   for (int i = 0; i < N_LIGHTS; i++) {
-    switch ((M.leds >> (2 * i)) & 3) {  // the ESP's LED_*
+    switch ((leds >> (2 * i)) & 3) {
       case LED_OFF:
         want[i] = false;
         break;

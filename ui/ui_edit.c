@@ -24,11 +24,14 @@ static struct {
 
 static int opt_rows(void) { return ed.n < OPT_ROWS ? ed.n : OPT_ROWS; }  // options shown
 
-// Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle.
+// Fills ed.offer with the usable options and finds ed.v among them. A new editor scrolls it to the middle. One
+// built again without the option it was on closes, as when the ESP restarts and the item picked for a tile is gone:
+// OK would save another.
 static void offer_options(const mitem_t *it, bool rebuild) {
   int now = opt_used(it, ed.v);
   uint16_t opts[MAX_OPTS];
   int n = 0;
+  bool there = false;
   if (it->fn && it->fn->list)
     n = it->fn->list(opts);
   else
@@ -37,10 +40,14 @@ static void offer_options(const mitem_t *it, bool rebuild) {
   ed.n = ed.pos = 0;
   for (int i = 0; i < n; i++)
     if (opt_used(it, opts[i]) == opts[i]) {
-      if (opts[i] == now)
+      if (opts[i] == now) {
         ed.pos = ed.n;
+        there = true;
+      }
       ed.offer[ed.n++] = opts[i];
     }
+  if (rebuild && !there)
+    ui_close_after(0);
   ed.v = ed.offer[ed.pos];
   int rows = opt_rows(), first = rebuild ? ed.first : ed.pos - rows / 2;
   ed.first = (int16_t) (first < 0 ? 0 : first > ed.n - rows ? ed.n - rows : first);

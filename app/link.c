@@ -109,11 +109,11 @@ static void pic_answer(uint16_t key, const uint8_t *b, int n) {
   }
   if (was == PIC_READY && pic_state() == PIC_RECEIVING)
     ui_picture_coming();
-  if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR)
-    overlay_parts_clear();  // the picture they're parts of went
+  if ((pic_state() != was && pic_state() != PIC_READY) || key == K_PIC_CLEAR || key == K_PIC_BEGIN)
+    overlay_parts_clear();  // the picture they're parts of went, also one that was still coming in
   // Picture came or went, rebuild the screensaver. A new or failed picture drops the old. A patch redraws its own rows
   // and the overlays show and go on their own.
-  if (pic_state() != was || key == K_PIC_CLEAR)
+  if (pic_state() != was || key == K_PIC_CLEAR || key == K_PIC_BEGIN)
     ui_value_changed(V_SCREENSAVER);
   else if (key == K_PIC_BEGIN || key == K_PIC_PATCH)
     ui_value_changed(V_NONE);  // "Receiving ..."

@@ -152,15 +152,15 @@ static bool alarms_key(int k) { return alarms->list && sel_key(k, alarms->n); }
 const screen_t SCR_ALARMS = {.build = alarms_build, .update = alarms_update, .key = alarms_key};
 
 // ---------------------------------------------------------------- message from the ESP
+// arg: the minute of the day it came at, so it still says that when it's built again
 static void note_build(lv_obj_t *b, intptr_t arg) {
-  (void) arg;
   bool alarm = M.note_level == NOTE_ALARM, warning = M.note_level == NOTE_WARNING;
   lv_color_t c = alarm ? T.err : warning ? T.warn : T.accent;
   str_t kind = alarm ? S_ALARM_CAPS : warning ? S_WARNING_CAPS : S_MESSAGE_CAPS;
   lv_obj_t *card = alert_card(b, 22, NOTE_W, 152, c, 44, &icons_22, icon_glyph(M.note_icon), tr(kind));
   lv_obj_t *w = mk_label(card, &font_f12, T.dim, "");
   char hm[12];
-  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, M.hh * 60 + M.mi));
+  set_text(w, _(S_NOTE_FROM_HA), fmt_hm(hm, sizeof hm, (int) arg));
   lv_obj_set_pos(w, BESIDE(44), 30);
   mk_wrap(card, &font_f16, T.text, M.note, CARD_PAD, 70, NOTE_W - 2 * CARD_PAD);
   ui_hints(S_NONE, S_CLOSE, S_CLOSE, S_NONE);

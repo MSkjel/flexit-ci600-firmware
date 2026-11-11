@@ -3,8 +3,9 @@
 #   make full STOCK=dump  build/ci600_full.bin, a whole 512 KiB image with the stock bootloader
 #   make flash STOCK=dump writes that image over SWD, needs pyocd
 #   make PROF=1           build/prof/ci600.bin, a debug build that logs on the ESP where its time goes, see prof.c
+#   make stack            how deep the stack goes, see tools/stack.py
 ROOT    := ..
-BUILD   := build$(if $(PROF),/prof)
+BUILD   := build$(if $(PROF),/prof)$(if $(STACK),/stack)
 OBJ_DIR := $(BUILD)
 COMPILE  = $(CC) $(CFLAGS)
 .DEFAULT_GOAL := all
@@ -17,6 +18,8 @@ OBJCOPY := arm-none-eabi-objcopy
 SIZE    := arm-none-eabi-size
 ARCH    := -mcpu=cortex-m3 -mthumb
 CFLAGS  := $(ARCH) -O2 -g -std=gnu11 $(WARN) -ffunction-sections -fdata-sections -MMD -MP -I. $(INCLUDES) $(DEFS)
+comma   := ,
+CFLAGS  += $(if $(STACK),-fcallgraph-info=su$(comma)da)
 LDFLAGS := $(ARCH) -T $(BUILD)/ci600.ld -nostartfiles -Wl,--gc-sections -Wl,-Map=$(BUILD)/ci600.map --specs=nano.specs \
            -Wl,--no-warn-rwx-segments
 
@@ -59,8 +62,12 @@ $(BUILD)/hw/mem.o: CFLAGS += -fno-tree-loop-distribute-patterns
 flash: $(BUILD)/ci600_full.bin
 	python3 $(ROOT)/tools/flash.py $<
 
+stack:
+	$(MAKE) STACK=1 build/stack/ci600.elf
+	python3 $(ROOT)/tools/stack.py build/stack
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all full flash clean
+.PHONY: all full flash stack clean
 -include $(OBJ:.o=.d)

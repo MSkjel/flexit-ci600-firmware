@@ -242,6 +242,11 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
   `prof  15.0 % paint`. Asleep is the time it waits for an interrupt. Make an `.fxup` of it as above and flash it
   with Panel Firmware Force on, since it has the same version as the build without it, and the same for going back.
   The function names take about 28 KB of flash, the counts 136 bytes of RAM.
+- **How deep the stack goes:** `make -C hw stack` builds `hw/build/stack` with the compiler's call graph and lists
+  main, the interrupts and every callback with the deepest chain of calls below it, in bytes
+  (`tools/stack.py`). The linker keeps `_min_stack` of the RAM for it (`hw/ci600.ld`) and fails the build without
+  that much left: 3 KB, for the 2.3 KB of a script that comes in over the link and decodes its place's frame, under
+  the bus interrupt and the two it nests with, 0.5 KB. Diagnostics shows how much of it was never used.
 
 ### The ESP link
 

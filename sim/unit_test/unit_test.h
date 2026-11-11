@@ -24,6 +24,7 @@ extern const check_test_t PICTURE_TESTS[], OVERLAY_TESTS[], OVERLAY_MOTION_TESTS
 
 // board_stub.c
 extern uint32_t stub_ms, stub_rtc;
+extern uint16_t stub_room_adc;
 extern uint8_t stub_flash[];
 extern int stub_flash_writes_left, stub_flash_erases, stub_resets;
 extern uint32_t stub_flash_bad;

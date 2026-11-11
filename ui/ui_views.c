@@ -342,8 +342,10 @@ typedef struct {
 } comfort_t;
 SCREEN_STATE(comfort_t, comfort);
 
+// The sensors and toggles flagged for it, what it has gauges and chips for
 static bool on_comfort_view(const item_t *it) {
-  return it->type && (it->flags & (ITEMF_COMFORT | ITEMF_VIEW)) == (ITEMF_COMFORT | ITEMF_VIEW);
+  return (it->type == ITEM_SENSOR || it->type == ITEM_TOGGLE) &&
+         (it->flags & (ITEMF_COMFORT | ITEMF_VIEW)) == (ITEMF_COMFORT | ITEMF_VIEW);
 }
 
 static int comfort_count(void) { return count_items(on_comfort_view); }

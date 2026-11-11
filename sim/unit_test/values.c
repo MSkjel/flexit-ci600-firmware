@@ -157,13 +157,24 @@ static void test_leds(void) {
   panel_leds(l, 0);
   CHECK(!l[2]);
   // a blink set by the ESP actually blinks
+  M.esp_online = true;
   M.leds = 3 << 4;  // the OK LED
   panel_leds(l, 100);
   bool a = l[2];
   panel_leds(l, 600);
   CHECK(a != l[2]);
-  M.leds = 0;
+  // an alarm light the ESP turned off is the panel's own again once the ESP is gone
   M.night = false;
+  M.alarms[0] = (alarm_t) {.code = 9, .active = true};
+  M.n_alarms = 1;
+  M.leds = LED_OFF;
+  panel_leds(l, 0);
+  CHECK(!l[0]);
+  M.esp_online = false;
+  panel_leds(l, 0);
+  CHECK(l[0]);
+  M.leds = 0;
+  M.n_alarms = 0;
 }
 
 const check_test_t VALUES_TESTS[] = {

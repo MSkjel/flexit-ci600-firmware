@@ -43,6 +43,19 @@ static void test_clock(void) {
   CHECK_EQ(M.hh, 3);
   CHECK_EQ(M.mi, 0);
   CHECK_EQ(stub_rtc, 1774749600u + 3600);
+  // an ESP that's there sends the time, so the panel leaves it. One that's only switched on doesn't.
+  M.features = FBIT(FEAT_ESP);
+  M.esp_online = true;
+  M.dst_now = false;
+  clock_from_unix(1774749600u);
+  clock_second();
+  CHECK(!M.dst_now);
+  CHECK_EQ(M.hh, 2);
+  M.esp_online = false;
+  clock_second();
+  CHECK(M.dst_now);
+  CHECK_EQ(M.hh, 3);
+  M.features = 0;
   // a stale flag never moves the clock outside the hour of a switch: the settings wiped in summer
   M.dst_now = false;
   t = 1784124000u;  // 2026-07-15 14:00
