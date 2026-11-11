@@ -1,6 +1,7 @@
 # Runs on a tag like v1.2.3, or by hand. Runs ci.yml, whose firmware job builds ci600.fxup and ci600.bin and
-# uploads them as a workflow artifact. A tag publishes them as release assets. The ESP's update.yaml downloads the
-# .fxup from releases/latest.
+# uploads them as a workflow artifact. A tag publishes them as release assets: a tag on main as a release, one on
+# dev as a pre-release. The ESP's update.yaml downloads the .fxup from releases/latest, with Panel Firmware
+# Pre-releases on from the newest release, a pre-release too.
 name: release
 on:
   push:
@@ -44,9 +45,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          pre=--prerelease
+          git merge-base --is-ancestor HEAD origin/main && pre=
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" ci600.fxup ci600.bin --clobber
           else
-            gh release create "$TAG" ci600.fxup ci600.bin --title "$TAG" --notes-file notes.md --verify-tag
+            gh release create "$TAG" ci600.fxup ci600.bin --title "$TAG" --notes-file notes.md --verify-tag $pre
           fi
