@@ -39,7 +39,8 @@ def main():
     data = image.read_bytes()
     if layout.APP + len(data) != end:
         sys.exit("%s isn't the image of %s by itself" % (image, elf))
-    funcs = [s for s in syms if s[2] in "tTwW" and s[1] and layout.APP <= s[0] < end]
+    # those without a size too, like libgcc's __aeabi_ldivmod: its time would go to the function before it
+    funcs = [s for s in syms if s[2] in "tTwW" and layout.APP <= s[0] < end]
     twice = Counter(s[3] for s in funcs)
     names = [s[3] + (" (%s)" % s[4] if twice[s[3]] > 1 and s[4] else "") for s in funcs]
     text, offsets = b"", []

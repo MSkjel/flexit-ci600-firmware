@@ -286,11 +286,18 @@ bool overlay_look(int place, overlay_look_t *l) {
 
 // ---------------------------------------------------------------- the pixels
 
+// A profiling build keeps the parts of fragment() as functions of their own, so its report tells them apart
+#ifdef PROF
+#define APART __attribute__((noinline))
+#else
+#define APART
+#endif
+
 // a / b for a >= 0 and b > 0, a shift when b is a px in 1/65536, as it is for a place at its own size
 static int32_t over(int32_t a, int32_t b) { return b == 65536 ? a >> 16 : a / b; }
 
 // Narrows i0..i1 to the i where 0 <= u + i * du < n
-static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
+APART static void span(int32_t u, int32_t du, int32_t n, int *i0, int *i1) {
   int lo = 0, hi = -1;
   if (du > 0) {
     lo = u < 0 ? (int) over(du - 1 - u, du) : 0;
@@ -415,7 +422,7 @@ static inline unsigned channel(unsigned mode, unsigned c, unsigned e, unsigned a
 }
 
 // s over d at opacity a, as OVERLAY_BLEND_* mode says
-static lv_color_t blend(unsigned mode, lv_color_t s, lv_color_t d, lv_opa_t a) {
+APART static lv_color_t blend(unsigned mode, lv_color_t s, lv_color_t d, lv_opa_t a) {
   if (mode == OVERLAY_BLEND_MIX)
     return a > LV_OPA_MAX ? s : lv_color_mix(s, d, a);
   unsigned r = channel(mode, LV_COLOR_GET_R(s), LV_COLOR_GET_R(d), a, 31),
@@ -515,7 +522,7 @@ static void edge(int *a, int32_t in, int px) {
 }
 
 // How much shows of the pixel at bu, bv of its box, 0 to 256, by its soft edges
-static int soft_at(const shade_t *s, int32_t bu, int32_t bv) {
+APART static int soft_at(const shade_t *s, int32_t bu, int32_t bv) {
   int a = 256;
   edge(&a, bu, plink_get16(s->soft));
   edge(&a, fixed(s->w) - bu, plink_get16(s->soft + 2));
@@ -582,8 +589,8 @@ static lv_color_t smooth_at(const shade_t *s, const uint8_t *f, int rb, int32_t 
 }
 
 // pixels() as s says, the first of them pixel i of those s has
-static void shaded(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u, int32_t v, int32_t du, int32_t dv, int sh,
-                   const lv_color_t *pal, const lv_opa_t *opa, uint16_t clear, const shade_t *s, int i) {
+APART static void shaded(lv_color_t *d, int n, const uint8_t *f, int rb, int32_t u, int32_t v, int32_t du, int32_t dv,
+                         int sh, const lv_color_t *pal, const lv_opa_t *opa, uint16_t clear, const shade_t *s, int i) {
   int32_t bu = s->bu + i * s->du, bv = s->bv + i * s->dv;
   int step = s->field || s->smooth ? 0 : along(du, dv, sh);
   for (; n > 0; n--, d++, u += du, v += dv, bu += s->du, bv += s->dv) {

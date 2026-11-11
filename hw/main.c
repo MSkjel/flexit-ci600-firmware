@@ -37,8 +37,8 @@ volatile struct {
   uint32_t busy_pm;                 // awake time over the last second, per mille
   uint32_t stack_free;              // bytes of stack never used so far
 } PERF;
-volatile uint8_t dbg_key;  // write a KEY_x here over SWD to press that key
-static uint32_t drawn_px, sent_px;
+volatile uint8_t dbg_key;           // write a KEY_x here over SWD to press that key
+static uint32_t drawn_px, sent_px;  // pixels LVGL has drawn since the start, and those of them sent to the LCD
 
 bool plat_const(const void *p) { return (uintptr_t) p >= FLASH_BASE_ADDR && (uintptr_t) p < FLASH_SETTINGS; }
 uint32_t plat_entropy(void) { return board_entropy(); }
@@ -91,26 +91,27 @@ extern size_t _lv_tlsf_free, _lv_tlsf_free_least;
 static uint32_t full_us, full_send_us;  // the last big redraw scaled to the whole screen, for Diagnostics
 
 static void draw(void) {
-  drawn_px = sent_px = 0;
+  uint32_t drawn = drawn_px, sent = sent_px;
   lcd_send_us = 0;
   uint32_t t = board_us();
   lv_timer_handler();
-  if (!drawn_px)
+  drawn = drawn_px - drawn;
+  if (!drawn)
     return;
-  bool big = drawn_px >= (uint32_t) SCR_W * SCR_H / 2;  // a new page, the status bar stays
+  bool big = drawn >= (uint32_t) SCR_W * SCR_H / 2;  // a new page, the status bar stays
   if (big)
     lcd_wait();  // so the last strip counts
   uint32_t us = board_us() - t;
   if (big) {
-    full_us = (uint32_t) ((uint64_t) us * SCR_W * SCR_H / drawn_px);
-    full_send_us = (uint32_t) ((uint64_t) lcd_send_us * SCR_W * SCR_H / drawn_px);
+    full_us = (uint32_t) ((uint64_t) us * SCR_W * SCR_H / drawn);
+    full_send_us = (uint32_t) ((uint64_t) lcd_send_us * SCR_W * SCR_H / drawn);
   }
   PERF.frames++;
   PERF.last_us = us;
   if (us > PERF.max_us)
     PERF.max_us = us;
   PERF.last_flush_us = lcd_send_us;  // DMA time, mostly overlapping LVGL drawing the next strip
-  PERF.last_px = sent_px;
+  PERF.last_px = sent_px - sent;
 }
 
 static void keys(uint32_t ms) {
@@ -248,7 +249,7 @@ static void second(void) {
   ui_second();
   PERF.busy_pm = board_busy_pm();
   PERF.stack_free = board_stack_free();
-  prof_second();
+  prof_second(drawn_px, sent_px);
 }
 
 // A crash at a speed over 72 MHz put it back to 72. Kept out of main(), whose frame is under every call there is.

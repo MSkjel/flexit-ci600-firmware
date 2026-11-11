@@ -1,6 +1,7 @@
 // ILI932x TFT on SPI1. The reset and both init sequences are copied from stock's lcd_init and lcd_write_reg.
 #include "lcd.h"
 #include "board.h"
+#include "prof.h"
 #include "stm32f1.h"
 #include <string.h>
 
@@ -226,6 +227,8 @@ void DMA1_Channel3_IRQHandler(void) {
 uint32_t lcd_us(uint32_t px) { return px * pixel_ns / 1000; }
 
 void lcd_wait(void) {
+  bool was = prof_waits(true);  // the interrupt that ends a send comes here too, while main waits
   while (sending)
     board_sleep();  // woken by the DMA interrupt
+  prof_waits(was);
 }

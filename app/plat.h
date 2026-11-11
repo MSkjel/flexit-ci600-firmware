@@ -14,8 +14,8 @@ int plat_week(int day, period_t *out);            // the day's periods as the un
 void plat_cx60_reg(uint16_t reg, int16_t value);  // a CX60 register from the ESP, take it as if the CX60 sent it
 bool plat_const(const void *p);  // p is in memory nothing writes, like flash, so a label can use it without a copy
 uint32_t plat_entropy(void);     // different on every start, for the ESP link session
-// A debug build's next line for the ESP's log, as a K_LOG message in out if it fits in room. Returns its length, 0
-// for none.
+// A debug build's next line for the ESP's log, as a K_LOG message in out if it fits in room: PBULK_MSG_MAX of text
+// at the most, so it goes in an ordinary window. Returns its length, 0 for none.
 int plat_log(uint8_t *out, int room);
 
 // Counters for System > Diagnostics

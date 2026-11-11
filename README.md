@@ -238,10 +238,12 @@ runs the ESP's panel packages against this repo's link code. Every screen the te
   turn Panel Firmware Force on to get that release.
 - **SWD:** see [docs/hardware.md](docs/hardware.md#swd).
 - **Where the time goes:** `make -C hw PROF=1` builds `hw/build/prof/ci600.bin`, which looks about 1000 times a
-  second at the function the processor is in, and every 10 s logs the busiest in the ESP's log, like
-  `prof  15.0 % paint`. Asleep is the time it waits for an interrupt. Make an `.fxup` of it as above and flash it
-  with Panel Firmware Force on, since it has the same version as the build without it, and the same for going back.
-  The function names take about 28 KB of flash, the counts 136 bytes of RAM.
+  second at the function the processor is in, and every 10 s logs the 24 busiest in the ESP's log, like
+  `prof  15.0 % paint`, and what the others took together. Its first lines say how much of the time it was asleep,
+  waiting for an interrupt, how much it waited for the LCD to take a strip, and how many of the pixels it drew went
+  to the LCD. Make an `.fxup` of it as above and flash it with Panel Firmware Force on, since it has the same version
+  as the build without it, and the same for going back. The function names take about 28 KB of flash, the counts 264
+  bytes of RAM.
 - **How deep the stack goes:** `make -C hw stack` builds `hw/build/stack` with the compiler's call graph and lists
   main, the interrupts and every callback with the deepest chain of calls below it, in bytes
   (`tools/stack.py`). The linker keeps `_min_stack` of the RAM for it (`hw/ci600.ld`) and fails the build without
