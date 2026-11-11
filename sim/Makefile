@@ -78,7 +78,8 @@ $(BUILD)/esp_yaml/gen_panel.cpp: esp_yaml/gen.py esp_yaml/esp_sync.py $(ESP_YAML
 	python3 esp_yaml/gen.py $(ESP_REPO) $@
 $(OBJ_DIR)/sim/esp_yaml/harness.o: $(BUILD)/esp_yaml/gen_panel.cpp
 $(OBJ_DIR)/sim/esp_yaml/harness.o: CPPFLAGS += -I$(BUILD)/esp_yaml -Iesp_yaml -DSAMPLES='"$(abspath esp_yaml)/"' \
-                                     -DPICTURES='"$(abspath $(BUILD)/esp_yaml)/"'
+                                     -DPICTURES='"$(abspath $(BUILD)/esp_yaml)/"' \
+                                     -DDOCS='"$(abspath $(ESP_REPO))/docs/"'
 # The photos it shows, from the samples, as PPMs
 ESP_PICTURES := $(addprefix $(BUILD)/esp_yaml/,mars_sample.ppm epic_sample.ppm)
 TO_PPM := python3 -c "import sys; from PIL import Image; Image.open(sys.argv[1]).convert('RGB').save(sys.argv[2])"

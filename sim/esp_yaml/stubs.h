@@ -423,10 +423,12 @@ struct Web {
     if (down)
       return nullptr;
     auto c = std::make_shared<HttpContainer>();
-    if (moves > 0) {
+    if (moves > 0) {  // with a page for a browser, as many servers send
       moves--;
       c->status_code = 301;
       c->location = location;
+      c->body = "<html>Moved</html>";
+      c->content_length = c->body.size();
       return c;
     }
     c->status_code = status;

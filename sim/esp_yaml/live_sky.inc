@@ -1,4 +1,4 @@
-// The sky shows, see met_live_sky.h
+// The sky's acts, see met_live_sky.h
 // A scene for the weather at t, its colours placed, in a buffer of its own
 static const met::Scene &scene_at(const met::Weather &weather, uint32_t t, met::Options o, double lat = OSLO_LAT,
                                   double lon = OSLO_LON) {
@@ -31,7 +31,7 @@ static void forecast_over(const char *what) {
   CHECK_MSG(animations && behind == animations, "%s: %d of %d animations behind the forecast", what, behind,
             animations);
   size_t bytes = overlay::find(k)->data.size();
-  CHECK_MSG(bytes <= (size_t) live::FORECAST_BYTES, "%s: the forecast takes %u bytes, the shows leave it %d", what,
+  CHECK_MSG(bytes <= (size_t) live::FORECAST_BYTES, "%s: the forecast takes %u bytes, the acts leave it %d", what,
             (unsigned) bytes, live::FORECAST_BYTES);
   static marks::Sharp band;
   const marks::Layer &l = marks::all["weather"].layer;
@@ -88,7 +88,11 @@ static void live_sky() {
       if (!a || a->state != overlay::SENT || a->copies.empty() || !a->copies[0].placed)
         continue;
       Look l = look(a->copies[0].place);
-      const std::vector<uint8_t> &sh = a->copies[0].script.bytes;  // its SHAPE alone
+      const std::vector<uint8_t> &all = a->copies[0].script.bytes;  // its SOFT, fading in under the clouds, and SHAPE
+      const size_t soft = 1 + 4 * 2;
+      if (all.size() < soft || all[0] != OVERLAY_DO_SOFT || plink_get16(&all[1 + 2 * 2]) != 10)
+        continue;
+      std::vector<uint8_t> sh(all.begin() + soft, all.end());
       if (!l.shown || sh.size() < 2 || sh[0] != OVERLAY_DO_SHAPE || sh.size() != 2u + 2 * sh[1])
         continue;
       layers++;
@@ -174,6 +178,18 @@ static void live_sky() {
   CHECK_MSG(lit, "thunder: no bolt");
   play(16, 1, "thunderstorm_after");
   CHECK_MSG(!overlay::find("w_bolt"), "thunder: the bolt stayed");
+  // in the mountains the clouds hang in front of the peaks, and the bolt strikes out of them down to the fjord
+  show({"Thunderstorm", "rainandthunder", 0, 80, 90, 3, 8, 18, 0, utc(2026, 7, 10, 15), met::G_MOUNTAINS, 0, 40, 2},
+       "mountains");
+  under("thunder in the mountains");
+  int struck = 0;
+  for (int i = 0; i < 6; i++)
+    for (int y = live::SKY.bolt_y[i]; y < live::SKY.bolt_y[i + 1]; y++)
+      struck += y < live::SKY.top[std::clamp(met::bolt_at(live::SKY.bolt_x, live::SKY.bolt_y, i, y), 0, met::W - 1)];
+  CHECK_MSG(struck >= 15, "thunder in the mountains: %d rows of the bolt in front of them", struck);
+  live::flash();
+  tick(9);
+  play(1, 9, "thunderstorm_mountains_flash");
   show({"Light rain", "heavyrain", 0, 60, 100, 5, 12, 8, 0, utc(2026, 10, 20, 12), met::G_COAST, 0, 40, 2}, "heavy");
   under("heavy rain");
   show({"Thunderstorm", "heavyrainandthunder", 0, 90, 100, 6, 10, 20, 0, utc(2026, 7, 10, 15), met::G_CITY, 0, 40, 2},
@@ -201,30 +217,51 @@ static void live_sky() {
 
   // fog, thick and thin, and on a flag day
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 60, 2}, "thick");
+  const overlay::Overlay *bank = overlay::find(live::key("fog0"));
+  CHECK_MSG(bank && bank->field && overlay::find(live::key("fog1")) && pn_overlay_used() < 300 && same_pool(),
+            "the fog's two banks are fields the panel works out: %u bytes there", pn_overlay_used());
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
   show({"Fog in the valley", "cloudy", 0, 0, 30, 0, 1, 6, 40, utc(2026, 10, 20, 10), met::G_MOUNTAINS, 0, 60, 2},
        "thin");
   show({"Light rain", "lightrain", 0, 30, 50, 0.3f, 2, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 30, 10, 0});
-  show({"Fog in the valley", "fog", 0, 0, 0, 0, 2, 14, 70, utc(2026, 7, 4, 10), met::G_HILLS, 0, 60, 2}, "flag");
-  CHECK_MSG(live::R.flag, "fog on a flag day: no flag");
+  show({"Fog in the valley + The flag", "fog", 0, 0, 0, 0, 2, 14, 70, utc(2026, 7, 4, 10), met::G_HILLS, 0, 60, 2},
+       "flag");
 
-  // the aurora on nights up north, still in the picture and changing with it, under the ground's own night show; the
-  // town's antenna blinking over it
+  // the aurora on nights up north, still in the picture and changing with it, under the ground's own night acts: its
+  // wide ribbon glows, a field behind the land. The town's antenna blinks over it.
   auto aurora = [](const Live &c, const char *tag) {
     show(c, tag);
     CHECK_MSG(scene_at(met::weather, c.t, met::options, c.lat, c.lon).aurora, "%s with the aurora: no aurora", c.want);
+    const overlay::Overlay *l = overlay::find(live::key("lights"));
+    CHECK_MSG(l && l->field && l->state == overlay::SENT && l->copies[0].placed && l->copies[0].depth == met::D_SKY &&
+                  look(l->copies[0].place).shown && same_pool(),
+              "%s with the aurora: its glow %s", c.want, l ? "isn't as it should be" : "isn't there");
   };
-  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10), met::G_HILLS, 0, 30,
-          2, 69.65, 18.96},
+  aurora({"The stars + The northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10),
+          met::G_HILLS, 0, 30, 2, 69.65, 18.96},
          "aurora");
-  aurora({"Lighthouse and the coastal express", "clearsky_night", 0, 0, 0, 0, 3, -12, 0, utc(2026, 12, 5, 19),
-          met::G_COAST, 0, 30, 2, 69.65, 18.96},
+  aurora({"The lighthouse + Light on the water + The stars + The northern lights", "clearsky_night", 0, 0, 0, 0, 3, -12,
+          0, utc(2026, 12, 5, 19), met::G_COAST, 0, 30, 2, 69.65, 18.96},
          "aurora");
-  aurora({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20), met::G_MOUNTAINS, 0, 30,
-          2, 67.28, 14.4},
+  aurora({"The stars + The northern lights", "clearsky_night", 0, 0, 0, 0, 2, -6, 0, utc(2026, 2, 3, 20),
+          met::G_MOUNTAINS, 0, 30, 2, 67.28, 14.4},
          "aurora_bodo");
-  const Live town = {"Evening in town",        "clearsky_night", 0, 0,  0, 0,     2,    -8, 0,
-                     utc(2026, 1, 15, 21, 10), met::G_CITY,      0, 30, 2, 69.65, 18.96};
+  const Live town = {"Evening in town + The antenna's light + The northern lights",
+                     "clearsky_night",
+                     0,
+                     0,
+                     0,
+                     0,
+                     2,
+                     -8,
+                     0,
+                     utc(2026, 1, 15, 21, 10),
+                     met::G_CITY,
+                     0,
+                     30,
+                     2,
+                     69.65,
+                     18.96};
   aurora(town, "aurora");
   const met::Scene &sky = scene_at(met::weather, town.t, met::options, town.lat, town.lon);
   int red = 0, dark = 0;
@@ -235,19 +272,22 @@ static void live_sky() {
   CHECK_MSG(red && dark, "the town with the aurora: the antenna doesn't blink, %d red and %d dark", red, dark);
 
   // stars with the moon up, and a shooting star that keeps clear of it; on a flag day in the polar night
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS, 0, 60, 2},
+  show({"The stars + By the cabin at night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS,
+        0, 60, 2},
        "moon");
-  live::shoot();
+  CHECK_MSG(!overlay::find(live::key("lights")), "no aurora, and its glow is still there");
+  show_later();
+  CHECK_MSG(visit("The stars", 1), "no clear sky for a shooting star");
   auto *star = overlay::find("w_shooting");
   for (int k = 0; k < 60 && star && !star->copies[0].placed; k++)
     tick(1);
   CHECK_MSG(star && star->copies[0].placed, "no shooting star");
   play(1, 9, "starry_winter_night_shooting");
-  visits("starry", 3);  // a satellite, a fox
-  show({"Starry winter night", "clearsky_night", 0, 0, 0, 0, 2, -14, 0, utc(2026, 1, 21, 10), met::G_HILLS, 0, 30, 2,
+  visits("The stars", "starry", 3);  // a satellite, shooting stars
+  visits("By the cabin at night", "starry_fox", 3, {"fox"});
+  show({"The stars + The flag", "clearsky_night", 0, 0, 0, 0, 2, -14, 0, utc(2026, 1, 21, 10), met::G_HILLS, 0, 30, 2,
         78.22, 15.65},
        "svalbard");
-  CHECK_MSG(live::R.flag, "stars on a flag day: no flag");
 
   // high clouds, and on a flag day
   show({"High clouds", "fair_day", 60, 0, 0, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 60, 2}, "calm");
@@ -258,20 +298,25 @@ static void live_sky() {
   play(4, 1, "high_clouds_next_hour");
   CHECK_MSG(logged("Animation w_cloud0:", was), "high clouds the next hour: not made again");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
-  show({"High clouds", "fair_day", 40, 0, 0, 0, 7, 16, 0, utc(2026, 6, 7, 11), met::G_HILLS, 0, 60, 2}, "flag");
-  CHECK_MSG(live::R.flag, "high clouds on a flag day: no flag");
+  show({"High clouds + The flag", "fair_day", 40, 0, 0, 0, 7, 16, 0, utc(2026, 6, 7, 11), met::G_HILLS, 0, 60, 2},
+       "flag");
 
-  // drifting clouds, and on a flag day; too many clouds for the pool is another show
+  // drifting clouds, and on a flag day; with too many clouds for the panel they stay the picture's
   show({"Drifting clouds", "fair_day", 0, 30, 0, 0, 4, 8, 0, utc(2026, 5, 5, 8), met::G_HILLS, 0, 90, 3}, "mid");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
   show({"Drifting clouds", "fair_day", 0, 10, 15, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 60, 2}, "low");
   show({"Fog in the valley", "fog", 0, 0, 0, 0, 1, 6, 80, utc(2026, 10, 20, 10), met::G_HILLS, 0, 10, 0});
-  show({"Drifting clouds", "fair_day", 0, 30, 0, 0, 7, 16, 0, utc(2026, 6, 7, 11), met::G_HILLS, 0, 60, 2}, "flag");
-  CHECK_MSG(live::R.flag, "drifting clouds on a flag day: no flag");
-  show({"Gulls over the cabin", "cloudy", 0, 60, 80, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 10, 0});
+  show({"Drifting clouds + The flag", "fair_day", 0, 30, 0, 0, 7, 16, 0, utc(2026, 6, 7, 11), met::G_HILLS, 0, 60, 2},
+       "flag");
+  weather_of({"Drifting clouds + Crows", "cloudy", 0, 60, 80, 0, 4, 8, 0, utc(2026, 5, 5, 10), met::G_HILLS, 0, 10, 0});
+  bool drawn = picture("too many clouds", 6000) >= 0;
+  live::Room clouds = live::clouds_cost(panel_scene(), false);
+  CHECK_MSG(
+      drawn && !(live::whole(panel_scene()) - live::VISIT).has(clouds) && is_on("Crows") && !is_on("Drifting clouds"),
+      "an overcast sky's %d clouds of %d bytes: %s on", clouds.slots, clouds.bytes, cast_on().c_str());
 }
 
-// After the other shows, so their chance events stay as they were: what the shows keep (the rain's frame, the
+// After the other acts' tests, so their chance events stay as they were: what the acts keep (the rain's frame, the
 // flag's light) and the heater's smoke
 static void live_kept() {
   step("the weather animations: the rain's frame, the flag's light and the heater (packages/code/met/met_live.h)");
@@ -290,10 +335,11 @@ static void live_kept() {
               "the rain without %u bytes for its frame", (unsigned) need);
     live::free_px();
   }
-  // the flag follows the light on the panel, neither it nor the show made again: up at 9 on the King's birthday,
+  // the flag follows the light on the panel, neither it nor another act made again: up at 9 on the King's birthday,
   // brighter by noon
   tz_offset_s = 3600;
-  show({"Gulls over the cabin", "clearsky_day", 0, 0, 0, 0, 3, 5, 0, utc(2026, 2, 21, 8), met::G_HILLS, 0, 10, 0});
+  show({"Crows + About the cabin + The flag", "clearsky_day", 0, 0, 0, 0, 3, 5, 0, utc(2026, 2, 21, 8), met::G_HILLS, 0,
+        10, 0});
   overlay::Overlay *flag = overlay::find(live::key("flag"));
   int at = flag ? flag->copies[0].place : 0, morning = look(at).light;
   size_t was = log_all.size();
@@ -301,7 +347,7 @@ static void live_kept() {
   met::redraw();
   CHECK_MSG(picture("the flag at noon", 6000) >= 0, "the flag at noon: not drawn again");
   play(4, 0, "");
-  CHECK_MSG(flag && live::R.flag && morning > 0 && morning < 1000 && look(at).light == 1000 &&
+  CHECK_MSG(flag && is_on("The flag") && morning > 0 && morning < 1000 && look(at).light == 1000 &&
                 !logged("Animation w_flag:", was) && !logged("Weather animation:", was),
             "the flag at 9 and at noon: lit %d and %d of 1000, made again %d", morning, look(at).light,
             logged("Animation w_flag:", was));
@@ -380,8 +426,8 @@ struct Costs {
   }
 };
 
-// What the sky shows plan to take of the pool, met_live_sky.h's TILE_COST and the rest, against the panel's own
-// encoder. A change to pdeflate or the records shows up here, not as a show that's too big.
+// What the sky's acts plan to take of the pool, met_live_sky.h's FALL_COST and the rest, against the panel's own
+// encoder. A change to pdeflate or the records shows up here, not as an act that's too big.
 static void live_costs() {
   step("the weather animations' sizes, measured (packages/code/met/met_live_sky.h)");
   run(30);
@@ -400,7 +446,7 @@ static void live_costs() {
           continue;  // only snow is blown more
         live::SKY.kind = k;
         live::SKY.slant = slant;
-        live::layers(s, k, d, false);
+        live::layers(s, k, d, false, live::SKY.layer);
         for (int i = 0; i < 2; i++) {
           const live::Layer &l = live::SKY.layer[i];
           float rows = 0, m = (float) pool_bytes(live::fall_still(i));
@@ -420,7 +466,7 @@ static void live_costs() {
   for (int k = 1; k < 3; k++)
     for (float d : {0.0005f, 0.002f, 0.004f, 0.008f, 0.012f}) {
       live::SKY.kind = k;
-      live::layers(s, k, d, true);
+      live::layers(s, k, d, true, live::SKY.layer);
       for (int i = 0; i < 2; i++) {
         const live::Layer &l = live::SKY.layer[i];
         if (!l.frames)

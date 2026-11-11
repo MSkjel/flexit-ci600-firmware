@@ -143,10 +143,12 @@ int pn_anim(int place, pn_look_t *out) {
   overlay_look_t l;
   if (!overlay_look(place, &l))
     return 0;
-  *out = (pn_look_t) {l.x,     l.y,      l.deg,    l.view & (OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y),
-                      l.size,  l.opa,    l.depth,  l.still,
-                      l.light, l.pan[0], l.pan[1], l.w,
-                      l.h,     l.view};
+  *out = (pn_look_t) {l.x,        l.y,        l.deg,        l.view & (OVERLAY_VIEW_FLIP_X | OVERLAY_VIEW_FLIP_Y),
+                      l.size,     l.opa,      l.depth,      l.still,
+                      l.light,    l.pan[0],   l.pan[1],     l.w,
+                      l.h,        l.view,     l.size_xy[0], l.size_xy[1],
+                      l.pivot[0], l.pivot[1], l.box.x1,     l.box.y1,
+                      l.box.x2,   l.box.y2};
   return 1;
 }
 int pn_overlay_covered(int place, int x, int y) { return overlay_covered(place, x, y); }
@@ -207,6 +209,8 @@ void pn_draw(int ms) {
   lv_tick_inc((uint32_t) ms);
   lv_timer_handler();
 }
+
+uint32_t pn_pixel(int x, int y) { return sim_pixel(x, y); }
 
 void pn_shot(const char *dir, const char *name) {
   pn_saver(1);

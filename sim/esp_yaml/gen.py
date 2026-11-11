@@ -110,6 +110,19 @@ FILES = [
     ("packages/panel/animation.yaml", {"name": "ball", "file": "x.gif", "x": 250, "y": 20}),
     ("packages/panel/animation.yaml", {"name": "noise", "file": "y.gif", "resize": "64x64", "drift_x": -10}),
     (
+        "packages/panel/field.yaml",
+        {
+            "name": "glow",
+            "kind": "radial",
+            "w": 60,
+            "h": 40,
+            "x": 200,
+            "y": 20,
+            "colours": "00FFF4D8, FFFFF4D8",
+            "script": "blend add\nopacity *= 60 + sin(ms / 5, 40)",
+        },
+    ),
+    (
         "packages/panel/animation.yaml",
         {
             "name": "kite",
