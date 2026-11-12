@@ -16,7 +16,8 @@ know about, but I doubt it. If something's off, open an issue.
   (PIN 1000) > Service (PIN 8888) > System information, at SW ADVANCED PANEL. The panel shows the version as a
   letter, A for 1 up to G for 7, so 7.0 is G. SW MOTHERBOARD is the unit's own, the same way.
 - Going back to stock isn't easy, see [Going back to stock](../README.md#going-back-to-stock).
-- Nothing else can be at address 1 while you flash, the [bootloader](hardware.md#the-bootloader) answers there.
+- Nothing else can be at address 1 while you flash, the [bootloader](hardware.md#the-bootloader) answers there. The
+  ESP that does the flashing is fine at 1.
 
 ## From Home Assistant
 
