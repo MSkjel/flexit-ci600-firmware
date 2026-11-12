@@ -379,11 +379,17 @@ void sim_esp_fill(void) {
   }
 }
 
-void sim_esp_notify(const char *text, int icon, int level) {
-  uint8_t b[2 + PLINK_TEXT_MAX] = {(uint8_t) icon, (uint8_t) level};
+void sim_esp_notify(const char *text, int icon, int level, int stay) {
+  uint8_t b[2 + PLINK_TEXT_MAX + 3] = {(uint8_t) icon, (uint8_t) level};
   int n = (int) strlen(text);
   memcpy(b + 2, text, n);
-  send(K_NOTIFY, b, 2 + n);
+  n += 2;
+  if (stay) {  // see NOTE_STAY
+    b[n + 1] = (uint8_t) stay;
+    b[n + 2] = (uint8_t) (stay >> 8);
+    n += 3;
+  }
+  send(K_NOTIFY, b, n);
 }
 
 void sim_esp_set(uint16_t key, uint32_t value) { send_number(key, value); }

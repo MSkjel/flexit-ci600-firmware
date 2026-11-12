@@ -21,10 +21,11 @@ enum { KEY_UP = 1, KEY_DOWN, KEY_OK, KEY_BACK, KEY_HELP, KEY_HOME, KEY_OK_LONG }
 
 void ui_init(void);
 void ui_key(int key);
-void ui_idle(void);     // no keys for a while, back to the start view and the screensaver if they're on
-void ui_wake(void);     // leaving idle, closes the screensaver
-void ui_refresh(void);  // model changed
-void ui_second(void);   // 1 Hz: night theme, new alarms and messages, redraw
+void ui_idle(void);       // no keys for a while, back to the start view and the screensaver if they're on
+void ui_wake(void);       // leaving idle, closes the screensaver
+bool ui_note_open(void);  // the ESP's message, anywhere on the stack
+void ui_refresh(void);    // model changed
+void ui_second(void);     // 1 Hz: night theme, new alarms and messages, redraw
 // The OK light as the top screen wants it, -1 for its usual meaning
 int ui_ok_led(uint32_t ms);
 // A whole new picture is coming in over the one shown

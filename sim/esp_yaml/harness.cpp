@@ -1452,6 +1452,27 @@ static void actions_and_notes() {
             panel_action.last.c_str());
 }
 
+// Last, as its time would move the weather's draws in the steps after it
+static void notes_that_stay() {
+  step("notes that keep the panel awake: the stay after the text, and closing one is an event");
+  for (int stay : {600, -1}) {
+    panel::notify("Washer done", "washer", "info", stay);
+    panel::loop();
+    run_until(settled, 300);
+    run(3);
+    int got = pn_note_stay(), icon, level, fresh;
+    pn_close_note();
+    run_until(settled, 100);
+    run(5);
+    const char *note = pn_note(&icon, &level, &fresh);
+    CHECK_MSG(!strcmp(note, "Washer done") && got == (stay < 0 ? NOTE_STAY : stay), "note '%s' to stay %d s: %d", note,
+              stay, got);
+    CHECK_MSG(panel_action.last == "message_closed", "a note closed on the panel is event '%s' in Home Assistant",
+              panel_action.last.c_str());
+    panel_action.last.clear();
+  }
+}
+
 static void cx60_restarts() {
   step("the CX60 restarts: no quiet for the link for a while");
   link_windows = false;
@@ -4999,6 +5020,7 @@ int main(int argc, char **argv) {
   screen_camera();
   saver_lines();
   overlay_coloured();
+  notes_that_stay();
   printf("\n%d checks, %d failed\n", check_count, check_fails);
   return check_fails ? 1 : 0;
 }

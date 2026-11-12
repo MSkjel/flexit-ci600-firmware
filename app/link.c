@@ -310,14 +310,17 @@ static void got_msg(void *u, uint16_t key, const uint8_t *b, int n) {
     return;
   }
   switch (key) {
-    case K_NOTIFY:
+    case K_NOTIFY: {
       if (n < 2)
         return;
+      const uint8_t *end = memchr(b + 2, 0, (size_t) (n - 2));  // and the stay after it, see NOTE_STAY
       M.note_icon = b[0];
       M.note_level = b[1] <= NOTE_ALARM ? b[1] : NOTE_INFO;
-      copy_text(M.note, NOTE_LEN, b + 2, n - 2);
+      M.note_stay = end && b + n - end >= 3 ? (uint16_t) (end[1] | end[2] << 8) : 0;
+      copy_text(M.note, NOTE_LEN, b + 2, end ? (int) (end - b) - 2 : n - 2);
       M.note_new = true;
       return;
+    }
     case K_ITEM_HELP:
       if (n >= 1 && b[0] < N_ITEMS) {
         forget_helps(b[0]);

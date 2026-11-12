@@ -448,6 +448,8 @@ static bool unread(void) {
   return false;
 }
 
+bool ui_note_open(void) { return frame_of(&SCR_NOTE) != NULL; }
+
 void ui_idle(void) {
   if (M.go_home && !unread())  // Display > Home screen > Back to start view
     ui_show_view(M.home_view);
@@ -504,12 +506,16 @@ void ui_second(void) {
     input_activity();
     ui_push(&SCR_ALARM_POPUP, code);
   }
+  static bool note_open;
   if (M.note_new) {
     M.note_new = false;
     ui_remove_overlay(&SCR_NOTE);  // the new message replaces the one shown
-    input_activity();
+    input_stay(M.note_stay);
     ui_push(&SCR_NOTE, M.hh * 60 + M.mi);
   }
+  if (note_open && !ui_note_open())
+    link_action(A_MESSAGE_CLOSED);  // with OK, BACK or HOME
+  note_open = ui_note_open();
   ui_refresh();
 }
 
