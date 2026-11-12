@@ -555,7 +555,7 @@ static void esp_link(void) {
   shot("52c_item_edit");
   key(KEY_BACK);
   ui_go_home();
-  sim_esp_notify("The washing machine is done.", ICN_WASHER, 0);
+  sim_esp_notify("The washing machine is done.", ICN_WASHER, 0, 0);
   settle();
   ui_second();
   shot("53_notification");
@@ -1127,6 +1127,44 @@ static void check_idle(void) {
   M.n_alarms = 0;
   ui_alarms_changed();
   M.go_home = false;
+}
+
+// The ESP's message with a stay keeps the panel awake: for its seconds, or until it's closed. The ESP hears when it is.
+static void check_note_stay(void) {
+  fresh();
+  uint8_t idle_after = M.idle_after;
+  M.idle_after = 0;                                                  // 15 s
+  sim_esp_set(K_HELLO, (uint32_t) PLINK_VERSION << 16 | HELLO_ASK);  // the model forgot the ESP
+  settle();
+  sim_esp_notify("Washing machine done", ICN_WASHER, NOTE_INFO, 30);
+  settle();
+  ui_second();
+  seconds(25);
+  check(ui_top() == &SCR_NOTE && !input_idle(), "a message staying 30 s went idle before that");
+  seconds(6);
+  check(input_idle() && ui_top() == &SCR_SAVER && ui_note_open(), "a message stayed past its 30 s, or went");
+  key(KEY_OK);
+  sim_esp_notify("Front door open", ICN_DOOR, NOTE_WARNING, NOTE_STAY);
+  settle();
+  ui_second();
+  seconds(120);
+  check(ui_top() == &SCR_NOTE && !input_idle(), "a message staying until it's closed went idle");
+  sim_esp_watch(K_ACTION);
+  key(KEY_OK);
+  ui_second();
+  settle();
+  check(sim_esp_seen() && !ui_note_open(), "the ESP didn't hear the message was closed");
+  seconds(16);
+  check(input_idle(), "not idle 15 s after the message was closed");
+  key(KEY_OK);
+  sim_esp_notify("Mail", ICN_BELL, NOTE_INFO, 0);  // without a stay, as before
+  settle();
+  ui_second();
+  seconds(16);
+  check(input_idle() && ui_top() == &SCR_SAVER, "a message without a stay kept the panel awake");
+  key(KEY_OK);
+  key(KEY_OK);
+  M.idle_after = idle_after;
 }
 
 // ESP numbers in the editor, and the ESP going away
@@ -1741,6 +1779,7 @@ int main(int argc, char **argv) {
   check_trial();
   check_fan_hud();
   screenshots();
+  check_note_stay();  // last, its minutes would move the screens after it
   if (sim_esp_late) {
     printf("%d answers to the ESP ended after the CX60's quiet time\n", sim_esp_late);
     failed++;

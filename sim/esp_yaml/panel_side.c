@@ -68,6 +68,12 @@ const char *pn_note(int *icon, int *level, int *fresh) {
   M.note_new = false;
   return M.note;
 }
+int pn_note_stay(void) { return M.note_stay; }
+void pn_close_note(void) {
+  ui_second();  // shows it
+  ui_key(KEY_OK);
+  ui_second();  // and tells the ESP
+}
 const char *pn_saver_line(int i, int *size) {
   *size = M.saver_size[i];
   return M.saver_line[i];

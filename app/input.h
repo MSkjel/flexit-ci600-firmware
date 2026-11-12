@@ -10,6 +10,7 @@ enum { IN_UP, IN_DOWN, IN_OK, IN_BACK, IN_HELP, IN_COUNT };  // key bits, 1 << I
 void input_keys(uint8_t down, uint8_t up, uint8_t held, uint32_t ms);
 void input_tick(uint32_t ms);  // every pass of the main loop, checks for idle
 void input_activity(void);     // something new to look at, like an alarm. Wakes up
+void input_stay(uint16_t s);   // the ESP's message, which wakes it and keeps it awake while it's open, see NOTE_STAY
 bool input_idle(void);
 int input_backlight(void);     // %, -1 = off
 uint32_t input_held_ms(void);  // how long the repeating key has been held, up to a minute

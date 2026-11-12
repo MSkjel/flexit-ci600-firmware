@@ -20,6 +20,8 @@ void pn_set(uint16_t key, int v);
 void pn_action(int a);
 int pn_idle(void);
 const char *pn_note(int *icon, int *level, int *fresh);
+int pn_note_stay(void);                       // how long the last note keeps the panel awake, see NOTE_STAY
+void pn_close_note(void);                     // the last note shown on the panel and closed with OK
 const char *pn_saver_line(int i, int *size);  // the screensaver's line i from the ESP, and its size in px
 void pn_clock(int *y, int *mo, int *d, int *h, int *mi);
 int pn_item(int i, int *flags, int *icon, int *dec, int *step, int *id, int *min, int *max, int *value,

@@ -17,6 +17,8 @@
 static uint16_t hold_ms;    // how long the repeating key has been held
 static uint32_t now, last;  // now, and the last key press or news
 static bool idle;
+static uint32_t stay_from;  // when the ESP's message came
+static uint16_t stay;       // and how long it keeps the panel awake, see NOTE_STAY
 
 void input_activity(void) {
   last = now;
@@ -26,6 +28,17 @@ void input_activity(void) {
   }
 }
 
+void input_stay(uint16_t s) {
+  input_activity();
+  stay_from = now;
+  stay = s;
+}
+
+// The ESP's message keeps it awake while it's open, for its stay
+static bool staying(uint32_t ms) {
+  return stay && ui_note_open() && (stay == NOTE_STAY || ms - stay_from < stay * 1000u);
+}
+
 bool input_idle(void) { return idle; }
 
 uint32_t input_held_ms(void) { return hold_ms; }
@@ -33,7 +46,7 @@ uint32_t input_held_ms(void) { return hold_ms; }
 void input_tick(uint32_t ms) {
   now = ms;
   uint16_t after = idle_seconds();
-  if (idle || !after || ms - last < after * 1000u)
+  if (idle || !after || ms - last < after * 1000u || staying(ms))
     return;
   idle = true;
   if (M.auto_lock && !M.key_lock)
