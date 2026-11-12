@@ -1,7 +1,8 @@
 # Runs on a tag like v1.2.3, or by hand. Runs ci.yml, whose firmware job builds ci600.fxup and ci600.bin and
 # uploads them as a workflow artifact. A tag publishes them as release assets: a tag on main as a release, one on
-# dev as a pre-release. The ESP's update.yaml downloads the .fxup from releases/latest, with Panel Firmware
-# Pre-releases on from the newest release, a pre-release too.
+# dev as a pre-release. Its notes are GitHub's, from the pull requests since the last version, with an annotated
+# tag's message above them, for what a user has to change. The ESP's update.yaml downloads the .fxup from
+# releases/latest, with Panel Firmware Pre-releases on from the newest release, a pre-release too.
 name: release
 on:
   push:
@@ -30,26 +31,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # all of history and the tags, for the changelog
+          fetch-depth: 0  # main and the tags, for a pre-release and where the notes start
       - uses: actions/download-artifact@v8
         with:
           name: ci600-firmware
-      - name: Changelog, the commits since the last version tag
-        run: |
-          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' HEAD^ 2>/dev/null || true)
-          git log --no-merges --format='- %s' ${prev:+$prev..}HEAD > notes.md
-          cat notes.md
-      # gh fails on a missing file, so there's no release without the .fxup. A re-run replaces the release's files.
+      # gh fails on a missing file, so there's no release without the .fxup. A re-run replaces the release's files
+      # and keeps its notes.
       - name: The release, with the files CI built
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          git fetch -q --force origin "refs/tags/$TAG:refs/tags/$TAG"  # as pushed, with its message
+          msg=
+          [ "$(git cat-file -t "$TAG")" = tag ] && msg=$(git tag -l --format='%(contents)' "$TAG")
+          prev=$(git tag --merged HEAD^ --sort=-v:refname -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -vm1 '[^v0-9.]' || true)
           pre=--prerelease
           git merge-base --is-ancestor HEAD origin/main && pre=
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" ci600.fxup ci600.bin --clobber
           else
-            gh release create "$TAG" ci600.fxup ci600.bin --title "$TAG" --notes-file notes.md --verify-tag $pre
+            gh release create "$TAG" ci600.fxup ci600.bin --generate-notes ${prev:+--notes-start-tag "$prev"} \
+              ${msg:+--notes "$msg"} $pre
           fi
