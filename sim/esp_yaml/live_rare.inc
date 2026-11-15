@@ -262,6 +262,134 @@ static void live_rare() {
   CHECK_MSG(live::RARE[16].fits(live::SEEN), "a snowy day on the hills: no ski jumper, landing at %d",
             live::SEEN.jump_x);
   rare(16, "skijumper", "skijumper", 12, 8);
+  // and the next one, who jumps after Wirkola: the jumper twice, the second head over heels down the hill
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[27].fits(e), "a snowy day on the hills: nobody jumps after Wirkola");
+  p = rare(27, "skijumper", "wirkola", 22, 10);
+  int turned = 0, starts = 0;
+  for (size_t i = 0; i < p.size(); i++) {
+    turned += p[i].deg != 0;
+    starts += i && p[i].x > p[i - 1].x + 100;
+  }
+  CHECK_MSG(starts == 1 && turned > 10, "after Wirkola: %d more jumps, %d cycles turned", starts, turned);
+  // what people say. Trollkjerringer come down in a downpour on the land, onto the near hill, on their feet, but not in
+  // rain that's lighter, nor in town
+  show({"", "heavyrain", 0, 70, 90, 6, 5, 12, 0, utc(2026, 9, 8, 12), met::G_HILLS, 0, 10, 0}, "pouring");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[17].fits(e), "a downpour: no trollkjerringer, pouring %d", e.at.pouring);
+  p = rare(17, "hag", "hag", 17, 8);
+  int stood = 0, fell = 0;
+  for (const Look &l : p) {
+    stood += l.opa && !l.deg && l.y == e.hill.at(l.x + 5) - 11;
+    fell += l.opa && l.deg != 0;
+  }
+  CHECK_MSG(stood >= 20 && fell >= 40, "it rains trollkjerringer: %d cycles on their feet on the hill, %d falling",
+            stood, fell);
+  town = e;
+  town.town = true;
+  e.at.pouring = false;
+  CHECK_MSG(!live::RARE[17].fits(e) && !live::RARE[17].fits(town), "trollkjerringer in lighter rain or in town");
+  show({"", "rain", 0, 70, 90, 4, 5, 12, 0, utc(2026, 9, 8, 12), met::G_HILLS, 0, 10, 0}, "rain_4mm");
+  CHECK_MSG(!live::SEEN.at.pouring, "4 mm an hour is a downpour");
+  // Tor and his goats across the sky in thunder
+  show({"", "heavyrainandthunder", 0, 90, 100, 6, 5, 20, 0, utc(2026, 7, 10, 15), met::G_HILLS, 0, 10, 0}, "thunder");
+  CHECK_MSG(live::RARE[18].fits(live::SEEN), "a thunderstorm: no Tor");
+  p = rare(18, "tor", "tor", 11, 6);
+  lo = met::W, hi = 0;
+  for (const Look &l : p) {
+    lo = std::min(lo, (int) l.x);
+    hi = std::max(hi, (int) l.x);
+  }
+  CHECK_MSG(lo < 0 && hi > met::W - 36, "Tor from %d to %d", lo, hi);
+  // a pig flies on 1 April and no other day
+  show({"", "clearsky_day", 0, 0, 0, 0, 3, 8, 0, utc(2026, 4, 1, 11), met::G_HILLS, 0, 10, 0}, "april");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[19].fits(e), "1 April: no pig flies");
+  rare(19, "pig", "pig", 18, 5);
+  e.at.day = 2;
+  CHECK_MSG(!live::RARE[19].fits(e), "a pig flies on 2 April");
+  // a black cat across the near hill on Friday the 13th, its feet on it
+  show({"", "clearsky_day", 0, 0, 0, 0, 3, 14, 0, utc(2026, 11, 13, 11), met::G_HILLS, 0, 10, 0}, "friday13");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[20].fits(e), "Friday the 13th: no black cat, weekday %d", e.at.weekday);
+  p = rare(20, "blackcat", "blackcat", 21, 5);
+  off = 0, lo = met::W, hi = 0;
+  for (const Look &l : p) {
+    if (l.x >= 0 && l.x + 13 < met::W)
+      off = std::max(off, abs(l.y + 7 - e.hill.at(l.x + 6)));
+    lo = std::min(lo, (int) l.x);
+    hi = std::max(hi, (int) l.x);
+  }
+  CHECK_MSG(off <= 2 && lo < 0 && hi > met::W - 13, "the black cat %d px off the hill, from %d to %d", off, lo, hi);
+  e.at.day = 14;
+  CHECK_MSG(!live::RARE[20].fits(e), "a black cat on Saturday the 14th");
+  // owls in the moss in fog, by the forest's edge
+  show({"", "fog", 0, 0, 90, 0, 2, 8, 80, utc(2026, 10, 5, 9), met::G_HILLS, 0, 10, 0}, "foggy");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[22].fits(e), "fog: no owls in the moss, the forest's edge at %d", e.edge.x);
+  p = rare(22, "owlperch", "owl_moss", 24, 4);
+  CHECK_MSG(!p.empty() && p[0].x == e.edge.x + 4 && p[0].depth == met::D_NEAR_ON, "the owl in the moss at %d",
+            p.empty() ? -1 : p[0].x);
+  e.at.fog = 0;
+  CHECK_MSG(!live::RARE[22].fits(e), "owls in the moss without fog");
+  // the cow over the moon on a moonlit night: over its top, from the skyline and back to it
+  show({"The stars + By the cabin at night", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 2, 21), met::G_HILLS,
+        0, 10, 0},
+       "moonlit");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[21].fits(e), "a moonlit night: no cow over the moon at %d,%d", e.moon_x, e.moon_y);
+  p = rare(21, "cow", "cow_moon", 7, 7);
+  int high = met::H;
+  for (const Look &l : p)
+    if (abs(l.x + 10 - e.moon_x) <= 6)
+      high = std::min(high, (int) l.y);
+  CHECK_MSG(high + 12 <= e.moon_y - met::MOON_R && high >= e.top, "the cow over the moon at row %d, the moon at %d",
+            high, e.moon_y);
+  // a meteor shower on the Perseids' night, nine of them, and none the week after
+  show({"", "clearsky_night", 0, 0, 0, 0, 2, 12, 0, utc(2026, 8, 12, 23), met::G_HILLS, 0, 10, 0}, "perseids");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[24].fits(e), "the Perseids: no meteor shower, %d.%d, dark %d", e.at.day, e.at.month, e.at.dark);
+  p = rare(24, "shooting", "meteors", 36, 8);
+  int stars = !p.empty();  // each from where it likes, burning down along its 40 px
+  for (size_t i = 1; i < p.size(); i++)
+    stars += abs(p[i].y - p[i - 1].y) > 16 || abs(p[i].x - p[i - 1].x) > 44;
+  CHECK_MSG(stars >= live::METEORS - 2 && stars <= live::METEORS, "the meteor shower: %d falling stars", stars);
+  e.at.day = 20;
+  CHECK_MSG(!live::RARE[24].fits(e), "a meteor shower on 20 August");
+  // the fox along the ridge under the northern lights
+  show({"The stars + The northern lights", "clearsky_night", 0, 0, 0, 0, 2, -8, 0, utc(2026, 1, 15, 21, 10),
+        met::G_HILLS, 0, 10, 0, 69.65, 18.96},
+       "fox_fires");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[23].fits(e), "the northern lights: no fox, aurora %d, the ridge %d to %d", e.aurora, e.ridge_l,
+            e.ridge_r);
+  p = rare(23, "foxtrot", "fox_fires", 12, 5);
+  off = 0;
+  for (const Look &l : p)
+    off = std::max(off, abs(l.y + 7 - e.ridge.at(l.x + 8)));
+  CHECK_MSG(off <= 2, "the fox %d px off the ridge", off);
+  e.aurora = false;
+  CHECK_MSG(!live::RARE[23].fits(e), "the fox without the northern lights");
+  // one swallow over the snow that still lies in May
+  met::snow_cover = {10, utc(2026, 5, 3, 11)};
+  show({"", "clearsky_day", 0, 0, 0, 0, 3, 6, 0, utc(2026, 5, 3, 11), met::G_HILLS, 0, 10, 0}, "late_snow");
+  e = live::SEEN;
+  CHECK_MSG(live::RARE[25].fits(e), "snow in May: no swallow, white %d, fair %d", e.at.white, e.at.fair);
+  rare(25, "swallow", "swallow", 9, 4);
+  met::snow_cover = {};
+  e.at.white = false;
+  CHECK_MSG(!live::RARE[25].fits(e), "one swallow with the snow gone");
+  // a pot of gold where the rainbow comes down on the land, in front of the far hills
+  show({"", "rainshowers_day", 0, 30, 60, 1, 4, 10, 0, utc(2026, 10, 20, 8), met::G_HILLS, 0, 10, 0}, "rainbow");
+  e = live::SEEN;
+  CHECK_MSG(panel_scene().rainbow && live::RARE[26].fits(e), "a rainbow %d: no pot of gold, at %d",
+            panel_scene().rainbow, e.gold_x);
+  p = rare(26, "gold", "gold", 25, 3);
+  CHECK_MSG(
+      !p.empty() && abs(abs(p[0].x + 4 - panel_scene().rb_x) - (met::RB_RX - 6)) <= 12 &&
+          p[0].y + 7 == std::min(panel_scene().land->hill[1][p[0].x + 4], panel_scene().land->hill[2][p[0].x + 4]),
+      "the pot of gold at %d,%d, the rainbow's middle at %d", p.empty() ? -1 : p[0].x, p.empty() ? -1 : p[0].y,
+      panel_scene().rb_x);
   // the rolls: in a gale something blows by before long, on a calm day nothing ever does
   show({"Light rain", "rain", 0, 70, 90, 1.5f, 19, 8, 0, utc(2026, 10, 20, 12), met::G_HILLS, 0, 10, 0}, "gale_rolls");
   show_later();
@@ -300,8 +428,9 @@ static void live_rare() {
   int level = log_level;
   log_level = 0;
   float most = 0;
-  for (const char *n : {"trampoline", "umbrella", "shirt", "cow", "serpent", "ufo", "longship", "troll", "wolf",
-                        "witch", "huldra", "nisse", "draugen", "orcas", "lynx", "seaeaglecatch", "skijumper"}) {
+  for (const char *n : {"trampoline", "umbrella", "shirt",  "cow",   "serpent", "ufo",     "longship", "troll",
+                        "wolf",       "witch",    "huldra", "nisse", "draugen", "orcas",   "lynx",     "seaeaglecatch",
+                        "skijumper",  "hag",      "tor",    "pig",   "gold",    "blackcat"}) {
     live::Frames sp;
     live::make_sprite(n, sp);
     float m = (float) pool_bytes(sp);
