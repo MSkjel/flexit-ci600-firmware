@@ -831,7 +831,7 @@ __attribute__((optimize("O3"))) static void fragment(const paint_t *d, const uin
     int i0 = 0, i1 = n - 1;
     span(v + half, dv, h + 2 * half, &i0, &i1);
     // where in the box its first and last pixels are across, the lesser first
-    int32_t ua = bu + i0 * b->du, ub = bu + i1 * b->du, lo = LV_MIN(ua, ub), hi = LV_MAX(ua, ub);
+    int64_t ua = bu + (int64_t) i0 * b->du, ub = bu + (int64_t) i1 * b->du, lo = LV_MIN(ua, ub), hi = LV_MAX(ua, ub);
     for (int j = 0, x = 0; j < d->runs && i0 <= i1; j++) {
       // the run's columns from x on, its top and the row past its bottom, in px of the box and no further
       const uint8_t *run = d->shape ? d->shape + 6 * j : NULL;
